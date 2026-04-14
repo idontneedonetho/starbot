@@ -1,3 +1,5 @@
+import type { ConversationTurn } from "../agent.js";
+
 export function buildSystemPrompt(botName: string): string {
   return `\
 You are ${botName}, an expert assistant for the StarPilot project — a custom fork of comma.ai's openpilot
@@ -11,8 +13,6 @@ The StarPilot codebase is available in your working directory. When answering qu
 - Do not modify any files — you are in read-only mode.
 `;
 }
-
-import type { ConversationTurn } from "../agent.js";
 
 export function formatHistory(history: ConversationTurn[]): string {
   if (!history.length) return "";
