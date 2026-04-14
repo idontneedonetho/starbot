@@ -113,6 +113,7 @@ async function buildConversationHistory(message: Message): Promise<ConversationT
 // Executes agent inference with timeout limits
 async function handleQuestion(
   message: Message,
+  botName: string,
   question: string,
   memoryContext: string,
   history: ConversationTurn[]
@@ -129,7 +130,7 @@ async function handleQuestion(
 
   try {
     const answer = await Promise.race([
-      askAboutRepo(question, getRepoCacheDir(), memoryContext, history, resetTimer),
+      askAboutRepo(botName, question, getRepoCacheDir(), memoryContext, history, resetTimer),
       timeout,
     ]);
     clearTimeout(timer!);
@@ -173,14 +174,15 @@ client.on(Events.MessageCreate, async (message: Message) => {
   ) return;
 
   const question = stripMentions(message.content);
+  const botName = message.guild?.members.me?.nickname || client.user.displayName || client.user.username || "StarBot";
 
   // Return usage help if just blindly tagged
   if (!question) {
     await message.reply(
-      "Hey! Ask me anything about the StarPilot codebase.\n" +
-      "Example: `@StarBot what GM vehicles are supported?`\n\n" +
-      "💡 Reply to one of my answers to continue the conversation in context.\n" +
-      "🧠 I'll also pick up on things you mention about your setup and remember them."
+      `Hey! Ask me anything about the StarPilot codebase.\n` +
+      `Example: \`@${botName} what GM vehicles are supported?\`\n\n` +
+      `💡 Reply to one of my answers to continue the conversation in context.\n` +
+      `🧠 I'll also pick up on things you mention about your setup and remember them.`
     );
     return;
   }
@@ -193,7 +195,7 @@ client.on(Events.MessageCreate, async (message: Message) => {
   }
 
   const memoryContext = buildMemoryContext(message.author.id, message.author.username);
-  const answer = await handleQuestion(message, question, memoryContext, history);
+  const answer = await handleQuestion(message, botName, question, memoryContext, history);
   
   if (answer) {
     extractAndUpdateMemory(message.author.id, question, answer).catch(console.error);

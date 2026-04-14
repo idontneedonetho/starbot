@@ -8,8 +8,8 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { config } from "./config.js";
 
-const SYSTEM_PROMPT = `\
-You are StarBot, an expert assistant for the StarPilot project — a custom fork of comma.ai's openpilot
+const buildSystemPrompt = (botName: string) => `\
+You are ${botName}, an expert assistant for the StarPilot project — a custom fork of comma.ai's openpilot
 driving assistance system with special support for GM vehicles.
 
 The StarPilot codebase is available in your working directory. When answering questions:
@@ -53,6 +53,7 @@ if (!mainModel) {
 }
 
 export async function askAboutRepo(
+  botName: string,
   question: string,
   repoCwd: string,
   memoryContext = "",
@@ -63,7 +64,7 @@ export async function askAboutRepo(
 
   const loader = new DefaultResourceLoader({
     cwd: repoCwd,
-    systemPromptOverride: () => SYSTEM_PROMPT,
+    systemPromptOverride: () => buildSystemPrompt(botName),
   });
   await loader.reload();
 
