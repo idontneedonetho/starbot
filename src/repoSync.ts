@@ -5,37 +5,64 @@ import { config } from "./config.js";
 
 let git: SimpleGit | null = null;
 let lastSuccessfulSync: Date | null = null;
+let initPromise: Promise<void> | null = null;
+let isInitialized = false;
 const STALE_THRESHOLD_MS = 2 * 60 * 60 * 1000;
+
+enum InitState {
+  NotStarted,
+  InProgress,
+  Done,
+}
+
+let initState = InitState.NotStarted;
 
 /** Clones or updates the shallow repository cache */
 export async function initRepo(): Promise<void> {
+  if (initPromise) return initPromise;
+  
   const dir = config.REPO_CACHE_DIR;
 
-  if (fs.existsSync(path.join(dir, ".git"))) {
-    console.log(`[repoSync] Repo already exists at ${dir}. Pulling latest...`);
-    await syncRepo();
-  } else {
-    console.log(
-      `[repoSync] Cloning ${config.STARPILOT_REPO_URL} (branch: ${config.STARPILOT_BRANCH}) → ${dir}`
-    );
-    fs.mkdirSync(dir, { recursive: true });
-    const baseGit = simpleGit();
-    await baseGit.clone(config.STARPILOT_REPO_URL, dir, [
-      "--branch",
-      config.STARPILOT_BRANCH,
-      "--depth",
-      "1",
-      "--single-branch",
-    ]);
-    console.log(`[repoSync] Clone complete.`);
-    lastSuccessfulSync = new Date();
-  }
+  const doInit = async () => {
+    initState = InitState.InProgress;
+    
+    if (fs.existsSync(path.join(dir, ".git"))) {
+      console.log(`[repoSync] Repo already exists at ${dir}. Pulling latest...`);
+      await syncRepo();
+    } else {
+      console.log(
+        `[repoSync] Cloning ${config.STARPILOT_REPO_URL} (branch: ${config.STARPILOT_BRANCH}) → ${dir}`
+      );
+      fs.mkdirSync(dir, { recursive: true });
+      const baseGit = simpleGit();
+      await baseGit.clone(config.STARPILOT_REPO_URL, dir, [
+        "--branch",
+        config.STARPILOT_BRANCH,
+        "--depth",
+        "1",
+        "--single-branch",
+      ]);
+      console.log(`[repoSync] Clone complete.`);
+      lastSuccessfulSync = new Date();
+    }
 
-  git = simpleGit(dir);
+    git = simpleGit(dir);
+    isInitialized = true;
+    initState = InitState.Done;
+  };
+
+  initPromise = doInit();
+  return initPromise;
+}
+
+/** Waits for repo initialization to complete */
+export async function waitForRepoInit(): Promise<void> {
+  if (initPromise) await initPromise;
 }
 
 /** Synchronizes repo state with remote origin */
 export async function syncRepo(): Promise<void> {
+  if (initPromise) await initPromise;
   if (!git) {
     git = simpleGit(config.REPO_CACHE_DIR);
   }
@@ -62,5 +89,13 @@ export async function syncRepo(): Promise<void> {
 
 export function getRepoCacheDir(): string {
   return config.REPO_CACHE_DIR;
+}
+
+export function isRepoReady(): boolean {
+  return isInitialized && lastSuccessfulSync !== null;
+}
+
+export function getLastSyncTime(): Date | null {
+  return lastSuccessfulSync;
 }
 

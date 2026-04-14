@@ -1,39 +1,59 @@
 import http from "http";
 import cron from "node-cron";
-import { initRepo, syncRepo } from "./repoSync.js";
+import { initRepo, syncRepo, isRepoReady, getLastSyncTime } from "./repoSync.js";
 import { startBot, stopBot, isBotReady } from "./bot.js";
-import { config } from "./config.js";
+import { config, validateConfig } from "./config.js";
+
+function getHealthStatus(): { ok: boolean; status: string } {
+  const botReady = isBotReady();
+  const repoReady = isRepoReady();
+  
+  if (!botReady) return { ok: false, status: "bot not ready" };
+  if (!repoReady) return { ok: false, status: "repo not ready" };
+  
+  return { ok: true, status: "healthy" };
+}
 
 async function main(): Promise<void> {
   console.log("=== StarBot starting up ===");
 
   try {
+    validateConfig();
     await initRepo();
   } catch (err) {
-    console.error("[main] Failed to initialise repo:", err);
+    console.error("[index] Failed to initialise:", err);
     process.exit(1);
   }
 
-  console.log(`[main] Scheduling repo sync: "${config.SYNC_CRON}"`);
+  console.log(`[index] Scheduling repo sync: "${config.SYNC_CRON}"`);
   const syncTask = cron.schedule(config.SYNC_CRON, async () => {
-    console.log("[cron] Running scheduled repo sync...");
+    console.log("[index] Running scheduled repo sync...");
     await syncRepo();
   });
 
-  console.log("[main] Starting Discord bot...");
+  console.log("[index] Starting Discord bot...");
   await startBot();
 
-  /** Terminal endpoint for health checks */
-  const healthServer = http.createServer((_, res) => {
-    const ok = isBotReady();
-    res.writeHead(ok ? 200 : 503);
-    res.end(ok ? "ok" : "not ready");
+  const healthServer = http.createServer((req, res) => {
+    const { ok, status } = getHealthStatus();
+    if (req.url === "/health") {
+      res.writeHead(ok ? 200 : 503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ 
+        ok, 
+        status,
+        botReady: isBotReady(),
+        repoReady: isRepoReady(),
+        lastSync: getLastSyncTime()?.toISOString() ?? null
+      }));
+    } else {
+      res.writeHead(404);
+      res.end("Not Found");
+    }
   });
-  healthServer.listen(3000, () => console.log("[main] Health endpoint on :3000"));
+  healthServer.listen(3000, () => console.log("[index] Health endpoint on :3000/health"));
 
-  /** Handle termination signals for clean process exit */
   const shutdown = async (signal: string) => {
-    console.log(`\n[main] Received ${signal}. Shutting down gracefully...`);
+    console.log(`\n[index] Received ${signal}. Shutting down gracefully...`);
     healthServer.close();
     syncTask.stop();
     await stopBot();
@@ -45,6 +65,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error("[main] Fatal error:", err);
+  console.error("[index] Fatal error:", err);
   process.exit(1);
 });

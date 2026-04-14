@@ -14,10 +14,23 @@ function optionalEnv(key: string, fallback: string): string {
   return process.env[key] ?? fallback;
 }
 
+function validateChannelIds(ids: string[]): string[] {
+  const valid: string[] = [];
+  const discordIdRegex = /^\d{17,19}$/;
+  for (const id of ids) {
+    if (!discordIdRegex.test(id)) {
+      console.warn(`[config] Invalid channel ID "${id}" - skipping`);
+    } else {
+      valid.push(id);
+    }
+  }
+  return valid;
+}
+
 /** Centralized configuration schema */
 export const config = {
   DISCORD_TOKEN: requireEnv("DISCORD_TOKEN"),
-  DISCORD_CLIENT_ID: optionalEnv("DISCORD_CLIENT_ID", ""),  // reserved for slash-command registration
+  DISCORD_CLIENT_ID: optionalEnv("DISCORD_CLIENT_ID", ""),
 
   LLM_PROVIDER: optionalEnv("LLM_PROVIDER", "anthropic"),
   LLM_API_KEY: requireEnv("LLM_API_KEY"),
@@ -39,8 +52,20 @@ export const config = {
     10
   ),
 
-  ALLOWED_CHANNEL_IDS: optionalEnv("ALLOWED_CHANNEL_IDS", "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean),
+  ALLOWED_CHANNEL_IDS: validateChannelIds(
+    optionalEnv("ALLOWED_CHANNEL_IDS", "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+  ),
 } as const;
+
+export function validateConfig(): void {
+  if (!config.LLM_MODEL) {
+    throw new Error("[config] LLM_MODEL cannot be empty");
+  }
+  if (config.ANSWER_TIMEOUT_SECONDS < 10 || config.ANSWER_TIMEOUT_SECONDS > 300) {
+    throw new Error("[config] ANSWER_TIMEOUT_SECONDS must be between 10 and 300");
+  }
+  console.log("[config] All configuration validated");
+}

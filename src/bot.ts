@@ -17,6 +17,42 @@ const EMOJI_ERROR = "❌";
 const MAX_HISTORY_DEPTH = 4;
 const MAX_CONCURRENT = 2;
 
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX = 3;
+
+class RateLimiter {
+  private timestamps = new Map<string, number[]>();
+
+  tryAcquire(userId: string): boolean {
+    const now = Date.now();
+    const timestamps = this.timestamps.get(userId) ?? [];
+    const recent = timestamps.filter(t => now - t < RATE_LIMIT_WINDOW_MS);
+    
+    if (recent.length >= RATE_LIMIT_MAX) {
+      return false;
+    }
+    
+    recent.push(now);
+    this.timestamps.set(userId, recent);
+    return true;
+  }
+
+  cleanup(): void {
+    const now = Date.now();
+    for (const [userId, timestamps] of this.timestamps) {
+      const recent = timestamps.filter(t => now - t < RATE_LIMIT_WINDOW_MS);
+      if (recent.length === 0) {
+        this.timestamps.delete(userId);
+      } else {
+        this.timestamps.set(userId, recent);
+      }
+    }
+  }
+}
+
+const rateLimiter = new RateLimiter();
+setInterval(() => rateLimiter.cleanup(), 60_000);
+
 /** Concurrency limiter for agent sessions */
 class Semaphore {
   private queue: (() => void)[] = [];
@@ -274,6 +310,13 @@ client.on(Events.MessageCreate, async (message: Message) => {
     return;
   }
 
+  if (!rateLimiter.tryAcquire(message.author.id)) {
+    await message.reply(
+      `⚠️ You're doing that too often. Please wait a minute before asking another question.`
+    );
+    return;
+  }
+
   await message.react(EMOJI_SEEN).catch(() => void 0);
 
   const history = await buildConversationHistory(message);
@@ -281,7 +324,7 @@ client.on(Events.MessageCreate, async (message: Message) => {
     console.log(`[bot] Resuming thread with ${history.length} prior turn(s) for ${message.author.username}`);
   }
 
-  const memoryContext = buildMemoryContext(message.author.id, message.author.username);
+  const memoryContext = await buildMemoryContext(message.author.id, message.author.username);
 
   await agentSemaphore.acquire();
   let answer: string | null;

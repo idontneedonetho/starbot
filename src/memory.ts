@@ -1,14 +1,14 @@
-import fs from "fs";
+import fs from "fs/promises";
+import fsSync from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { singleTurnLlm } from "./llm.js";
+import { singleTurnLlm } from "./agent.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MEMORIES_PATH = path.resolve(__dirname, "../data/memories.json");
 
 const MAX_FACTS = 10;
 
-/** Mutex to prevent data races during profile updates */
 class AsyncMutex {
   private locked = false;
   private queue: (() => void)[] = [];
@@ -42,28 +42,33 @@ type UserProfile = {
 
 type MemoryStore = Record<string, UserProfile>;
 
-function load(): MemoryStore {
+async function load(): Promise<MemoryStore> {
   try {
-    if (!fs.existsSync(MEMORIES_PATH)) return {};
-    return JSON.parse(fs.readFileSync(MEMORIES_PATH, "utf-8")) as MemoryStore;
+    if (!fsSync.existsSync(MEMORIES_PATH)) return {};
+    return JSON.parse(await fs.readFile(MEMORIES_PATH, "utf-8")) as MemoryStore;
   } catch {
     return {};
   }
 }
 
-function save(store: MemoryStore): void {
-  fs.mkdirSync(path.dirname(MEMORIES_PATH), { recursive: true });
-  fs.writeFileSync(MEMORIES_PATH, JSON.stringify(store, null, 2), "utf-8");
+async function save(store: MemoryStore): Promise<void> {
+  await fs.mkdir(path.dirname(MEMORIES_PATH), { recursive: true });
+  await fs.writeFile(MEMORIES_PATH, JSON.stringify(store, null, 2), "utf-8");
 }
 
 function getProfile(userId: string): UserProfile {
-  return load()[userId] ?? { facts: [], updatedAt: new Date().toISOString() };
+  return { facts: [], updatedAt: new Date().toISOString() };
 }
 
-function saveProfile(userId: string, profile: UserProfile): void {
-  const store = load();
+async function getProfileAsync(userId: string): Promise<UserProfile> {
+  const store = await load();
+  return store[userId] ?? { facts: [], updatedAt: new Date().toISOString() };
+}
+
+async function saveProfile(userId: string, profile: UserProfile): Promise<void> {
+  const store = await load();
   store[userId] = { ...profile, updatedAt: new Date().toISOString() };
-  save(store);
+  await save(store);
 }
 
 const EXTRACTOR_SYSTEM = `\
@@ -97,7 +102,7 @@ export async function extractAndUpdateMemory(
 ): Promise<void> {
   await memoryMutex.acquire();
   try {
-    const profile = getProfile(userId);
+    const profile = await getProfileAsync(userId);
 
     const prompt = `Question from user: ${question}\n\nBot's answer: ${answer}`;
     const raw = await singleTurnLlm(EXTRACTOR_SYSTEM, prompt);
@@ -125,7 +130,7 @@ export async function extractAndUpdateMemory(
       finalFacts = merged;
     }
 
-    saveProfile(userId, { ...profile, facts: finalFacts });
+    await saveProfile(userId, { ...profile, facts: finalFacts });
     console.log(`[memory] Updated ${newFacts.length} fact(s) for user ${userId}`);
   } catch (err) {
     console.warn("[memory] extractAndUpdateMemory failed:", err);
@@ -135,8 +140,8 @@ export async function extractAndUpdateMemory(
 }
 
 /** Formats user profile facts for injection into agent context */
-export function buildMemoryContext(userId: string, username: string): string {
-  const profile = getProfile(userId);
+export async function buildMemoryContext(userId: string, username: string): Promise<string> {
+  const profile = await getProfileAsync(userId);
   if (!profile.facts.length) return "";
 
   const factsText = profile.facts.length === 1

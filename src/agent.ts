@@ -1,10 +1,15 @@
 import {
   createAgentSession,
-  createReadOnlyTools,
   DefaultResourceLoader,
   SessionManager,
+  type AgentSession,
 } from "@mariozechner/pi-coding-agent";
 import { authStorage, modelRegistry, mainModel } from "./providers.js";
+
+export type ConversationTurn = {
+  question: string;
+  answer: string;
+};
 
 const buildSystemPrompt = (botName: string) => `\
 You are ${botName}, an expert assistant for the StarPilot project — a custom fork of comma.ai's openpilot
@@ -18,12 +23,6 @@ The StarPilot codebase is available in your working directory. When answering qu
 - Do not modify any files — you are in read-only mode.
 `;
 
-export type ConversationTurn = {
-  question: string;
-  answer: string;
-};
-
-/** Formats conversation history for the agent prompt */
 function formatHistory(history: ConversationTurn[]): string {
   if (!history.length) return "";
   const MAX_ANSWER_LEN = 800;
@@ -38,7 +37,55 @@ function formatHistory(history: ConversationTurn[]): string {
   return lines.join("\n") + "\n\n";
 }
 
-/** Initializes and executes a repository-aware agent session */
+async function createSession(
+  cwd: string,
+  systemPrompt: string,
+  useTools: boolean
+): Promise<AgentSession> {
+  const loader = new DefaultResourceLoader({
+    cwd,
+    systemPromptOverride: () => systemPrompt,
+  });
+  await loader.reload();
+
+  const { session } = await createAgentSession({
+    cwd,
+    model: mainModel,
+    sessionManager: SessionManager.inMemory(),
+    authStorage,
+    modelRegistry,
+    tools: useTools ? undefined : [],
+    resourceLoader: loader,
+  });
+
+  return session;
+}
+
+export async function singleTurnLlm(
+  systemPrompt: string,
+  userMessage: string
+): Promise<string> {
+  const session = await createSession(process.cwd(), systemPrompt, false);
+
+  let result = "";
+  session.subscribe((event) => {
+    if (
+      event.type === "message_update" &&
+      event.assistantMessageEvent.type === "text_delta"
+    ) {
+      result += event.assistantMessageEvent.delta;
+    }
+  });
+
+  try {
+    await session.prompt(userMessage);
+  } finally {
+    session.dispose();
+  }
+
+  return result.trim();
+}
+
 export async function askAboutRepo(
   botName: string,
   question: string,
@@ -47,23 +94,8 @@ export async function askAboutRepo(
   history: ConversationTurn[] = [],
   onProgress?: () => void
 ): Promise<string> {
-  const model = mainModel;
-
-  const loader = new DefaultResourceLoader({
-    cwd: repoCwd,
-    systemPromptOverride: () => buildSystemPrompt(botName),
-  });
-  await loader.reload();
-
-  const { session } = await createAgentSession({
-    cwd: repoCwd,
-    model,
-    sessionManager: SessionManager.inMemory(),
-    authStorage,
-    modelRegistry,
-    tools: createReadOnlyTools(repoCwd),
-    resourceLoader: loader,
-  });
+  const systemPrompt = buildSystemPrompt(botName);
+  const session = await createSession(repoCwd, systemPrompt, true);
 
   let answer = "";
   session.subscribe((event) => {
