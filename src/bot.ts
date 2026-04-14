@@ -3,6 +3,7 @@ import {
   GatewayIntentBits,
   Partials,
   type Message,
+  type ThreadChannel,
   Events,
   ActivityType,
 } from "discord.js";
@@ -51,7 +52,7 @@ class RateLimiter {
 }
 
 const rateLimiter = new RateLimiter();
-setInterval(() => rateLimiter.cleanup(), 60_000);
+const rateLimitCleanup = setInterval(() => rateLimiter.cleanup(), 60_000);
 
 /** Concurrency limiter for agent sessions */
 class Semaphore {
@@ -90,6 +91,14 @@ const client = new Client({
 });
 
 const stripMentions = (text: string) => text.replace(/<@!?\d+>/g, "").trim();
+
+const sanitizeThreadName = (text: string): string => {
+  const cleaned = text
+    .replace(/[^\w\s\-.,!?()[\]]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned.substring(0, 50) || "Codebase Question";
+};
 
 const isAllowedChannel = (id: string) =>
   config.ALLOWED_CHANNEL_IDS.length === 0 || config.ALLOWED_CHANNEL_IDS.includes(id);
@@ -228,7 +237,7 @@ async function handleQuestion(
   memoryContext: string,
   history: ConversationTurn[]
 ) {
-  let timer: NodeJS.Timeout;
+  let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(
       () => reject(new Error("timeout")),
@@ -236,22 +245,22 @@ async function handleQuestion(
     );
   });
 
-  const resetTimer = () => timer.refresh();
+  const resetTimer = () => timer?.refresh();
 
   try {
     const answer = await Promise.race([
       askAboutRepo(botName, question, getRepoCacheDir(), memoryContext, history, resetTimer),
       timeout,
     ]);
-    clearTimeout(timer!);
+    clearTimeout(timer);
 
     const chunks = chunkAnswer(answer);
 
-    let threadTarget: any = null;
+    let threadTarget: ThreadChannel | null = null;
 
     if (!message.channel.isThread()) {
       try {
-        const threadName = question.split('\n')[0].substring(0, 50) || "Codebase Question";
+        const threadName = sanitizeThreadName(question.split('\n')[0]);
         threadTarget = await message.startThread({
           name: threadName,
           autoArchiveDuration: 60,
@@ -273,7 +282,7 @@ async function handleQuestion(
     await message.react(EMOJI_DONE).catch(() => void 0);
     return answer;
   } catch (err) {
-    clearTimeout(timer!);
+    clearTimeout(timer);
     const isTimeout = err instanceof Error && err.message === "timeout";
     console.error("[bot] handleQuestion error:", err);
 
@@ -346,4 +355,7 @@ client.once(Events.ClientReady, (c) => {
 
 export const isBotReady = () => client.isReady();
 export const startBot = async () => client.login(config.DISCORD_TOKEN);
-export const stopBot = async () => client.destroy();
+export const stopBot = async () => {
+  clearInterval(rateLimitCleanup);
+  await client.destroy();
+};
