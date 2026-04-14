@@ -8,6 +8,8 @@ services:
     volumes:
       - ./data:/app/data
       - ./repo-cache:/app/repo-cache
+    environment:
+      - NODE_OPTIONS=--max-old-space-size=192
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
       interval: 30s
@@ -17,5 +19,5 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1g
-          cpus: "2"
+          memory: 256m
+          cpus: "0.25"
