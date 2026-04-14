@@ -208,3 +208,4 @@ client.once(Events.ClientReady, (c) => {
 });
 
 export const startBot = async () => client.login(config.DISCORD_TOKEN);
+export const stopBot = async () => client.destroy();
