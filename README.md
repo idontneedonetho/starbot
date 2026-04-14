@@ -10,7 +10,7 @@ StarBot keeps a local shallow clone of the StarPilot repository up to date and s
 
 - **Natural Mention Interface**: Simply ping the bot (e.g., `@BotName`) to ask a question. No slash commands required.
 - **Continuous Conversations**: StarBot analyzes Discord's native reply chains to seamlessly maintain thread context.
-- **Automatic User Memory**: An asynchronous LLM pipeline silently extracts and stores facts about your vehicle, hardware setup (like ZSS or pedal interceptors), and preferences in local JSON storage so you don't have to repeat yourself.
+- **Automatic User Memory**: An asynchronous LLM pipeline silently extracts and stores facts about your vehicle, hardware setup (like ZSS or pedal interceptors), and preferences in local SQLite storage so you don't have to repeat yourself.
 - **Automated Codebase Syncing**: Automatically clones and shallow-syncs the targeted StarPilot branch on an hourly cron schedule to save bandwidth and ensure accuracy.
 - **Robust Message Chunking**: Intelligent code-aware chunking effortlessly handles responses longer than Discord's 2,000 character limit without breaking code blocks.
 - **Zero-Trust Agent**: Agent sessions are isolated to specific questions and the repository is kept completely read-only.
@@ -95,7 +95,7 @@ _(The bot will instantly react with 👀 to let you know it's thinking, then seq
 Simply use Discord's native *Reply* feature to respond to one of the bot's messages, and it will automatically crawl up the reply chain to establish the conversation history and context.
 
 **Leveraging Memory:**
-If you ever mention *"I drive a 2017 Chevy Volt with a Comma 3X"*, StarBot will quietly extract and compress this detail in the background, automatically saving it to `./data/memories.json`. You can then comfortably ask *"where is the steering control logic for my car?"* entirely out of context down the line.
+If you ever mention *"I drive a 2017 Chevy Volt with a Comma 3X"*, StarBot will quietly extract and compress this detail in the background, automatically saving it to a local SQLite database (`./data/memories.db`). You can then comfortably ask *"where is the steering control logic for my car?"* entirely out of context down the line.
 
 ---
 
@@ -108,7 +108,7 @@ Discord User
 discord.js bot (src/bot.ts)
     │
     ├── Analyzes Message Thread History via Discord API
-    ├── Loads Stored User Context from memory.ts (./data/memories.json)
+    ├── Loads Stored User Context from memory.ts (SQLite)
     │
     ▼
 pi-coding-agent inference (src/agent.ts)
@@ -121,6 +121,27 @@ pi-coding-agent inference (src/agent.ts)
 Background Extraction               Discord Message
 (src/memory.ts via LLM)      ◄────  Intelligent text chunking (max 2000 chars)
 Extracted facts saved               Reaction status cleanly updated (👀 -> ✅)
+```
+
+### File Structure
+
+```
+src/
+├── index.ts          # Entry point, health server, cron jobs
+├── bot.ts            # Discord client, message handlers
+├── agent.ts          # pi-coding-agent session wrapper
+├── config.ts         # Environment configuration
+├── memory.ts         # SQLite user profiles & conversation history
+├── providers.ts      # LLM model registry
+├── repoSync.ts       # Git clone/sync with retry logic
+├── prompts/          # LLM system prompts
+│   ├── agent.ts      # System prompt & history formatting
+│   └── memory.ts     # Extraction/compression prompts
+└── utils/            # Shared utilities
+    ├── rateLimiter.ts
+    ├── semaphore.ts
+    ├── chunking.ts  # Discord-safe text chunking
+    └── llm.ts       # JSON parsing & prompt helpers
 ```
 
 ---
