@@ -1,0 +1,30 @@
+{
+  "name": "starbot",
+  "version": "1.0.0",
+  "description": "Discord Q&A bot for the StarPilot openpilot fork, powered by the pi coding agent SDK",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "register": "tsx scripts/register-commands.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mariozechner/pi-coding-agent": "^0.67.1",
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.7",
+    "node-cron": "^3.0.3",
+    "simple-git": "^3.27.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/node-cron": "^3.0.11",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=20.6.0"
+  }
+}
