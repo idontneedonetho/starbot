@@ -5,12 +5,9 @@ import { config } from "./config.js";
 
 let git: SimpleGit | null = null;
 let lastSuccessfulSync: Date | null = null;
-const STALE_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2 hours
+const STALE_THRESHOLD_MS = 2 * 60 * 60 * 1000;
 
-/**
- * Clones the StarPilot repo on first run, or pulls updates if already present.
- * Uses a shallow clone (--depth 1) to avoid fetching the full commit history.
- */
+/** Clones or updates the shallow repository cache */
 export async function initRepo(): Promise<void> {
   const dir = config.REPO_CACHE_DIR;
 
@@ -37,9 +34,7 @@ export async function initRepo(): Promise<void> {
   git = simpleGit(dir);
 }
 
-/**
- * Pulls the latest changes from the remote. Safe to call on a schedule.
- */
+/** Synchronizes repo state with remote origin */
 export async function syncRepo(): Promise<void> {
   if (!git) {
     git = simpleGit(config.REPO_CACHE_DIR);
@@ -47,7 +42,6 @@ export async function syncRepo(): Promise<void> {
 
   try {
     console.log(`[repoSync] Syncing latest from remote...`);
-    // Unshallow fetch is unnecessary — we just fetch the tip of the branch.
     await git.fetch(["origin", config.STARPILOT_BRANCH, "--depth", "1"]);
     await git.reset(["--hard", `origin/${config.STARPILOT_BRANCH}`]);
     const log = await git.log({ maxCount: 1 });
@@ -66,16 +60,11 @@ export async function syncRepo(): Promise<void> {
   }
 }
 
-/**
- * Returns the absolute path to the local repo cache.
- */
 export function getRepoCacheDir(): string {
   return config.REPO_CACHE_DIR;
 }
 
-/**
- * Returns true if the last successful repo sync was more than 2 hours ago.
- */
+/** Returns true if the last sync succeeded within the threshold */
 export function isRepoStale(): boolean {
   if (!lastSuccessfulSync) return false;
   return Date.now() - lastSuccessfulSync.getTime() > STALE_THRESHOLD_MS;

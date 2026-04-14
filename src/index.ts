@@ -8,7 +8,6 @@ import { config } from "./config.js";
 async function main(): Promise<void> {
   console.log("=== StarBot starting up ===");
 
-  // 1. Clone or update the StarPilot repo
   try {
     await initRepo();
   } catch (err) {
@@ -16,18 +15,16 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // 2. Schedule periodic git syncs
   console.log(`[main] Scheduling repo sync: "${config.SYNC_CRON}"`);
   const syncTask = cron.schedule(config.SYNC_CRON, async () => {
     console.log("[cron] Running scheduled repo sync...");
     await syncRepo();
   });
 
-  // 3. Start the Discord bot
   console.log("[main] Starting Discord bot...");
   await startBot();
 
-  // 4. Minimal health endpoint for Docker healthcheck
+  /** Terminal endpoint for health checks */
   const healthServer = http.createServer((_, res) => {
     const ok = isBotReady();
     res.writeHead(ok ? 200 : 503);
@@ -35,7 +32,7 @@ async function main(): Promise<void> {
   });
   healthServer.listen(3000, () => console.log("[main] Health endpoint on :3000"));
 
-  // 5. Graceful shutdown handler
+  /** Handle termination signals for clean process exit */
   const shutdown = async (signal: string) => {
     console.log(`\n[main] Received ${signal}. Shutting down gracefully...`);
     healthServer.close();

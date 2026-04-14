@@ -6,10 +6,9 @@ import { singleTurnLlm } from "./llm.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MEMORIES_PATH = path.resolve(__dirname, "../data/memories.json");
 
-// Max facts before we auto-compress to a summary paragraph
 const MAX_FACTS = 10;
 
-// Async mutex to prevent concurrent read-modify-write races on memories.json
+/** Mutex to prevent data races during profile updates */
 class AsyncMutex {
   private locked = false;
   private queue: (() => void)[] = [];
@@ -37,15 +36,11 @@ class AsyncMutex {
 const memoryMutex = new AsyncMutex();
 
 type UserProfile = {
-  facts: string[];      // Extracted atomic facts about the user
+  facts: string[];
   updatedAt: string;
 };
 
-type MemoryStore = Record<string, UserProfile>; // keyed by Discord user ID
-
-// ---------------------------------------------------------------------------
-// Storage helpers
-// ---------------------------------------------------------------------------
+type MemoryStore = Record<string, UserProfile>;
 
 function load(): MemoryStore {
   try {
@@ -71,10 +66,6 @@ function saveProfile(userId: string, profile: UserProfile): void {
   save(store);
 }
 
-// ---------------------------------------------------------------------------
-// LLM-assisted extraction
-// ---------------------------------------------------------------------------
-
 const EXTRACTOR_SYSTEM = `\
 You are a fact extractor for a Q&A Discord bot about StarPilot (an openpilot fork for GM vehicles).
 Given a user's question and the bot's answer, extract any facts about the USER that would be useful to remember.
@@ -98,11 +89,7 @@ You are a memory compressor for a Discord bot. Given a list of facts about a use
 - Write in third person ("The user has...", "They use...")
 Return ONLY the paragraph, no other text.`;
 
-/**
- * Extracts new facts from a Q&A exchange using a background LLM call.
- * Automatically merges them into the user's profile and compresses if needed.
- * Safe to fire-and-forget — errors are swallowed with a console warning.
- */
+/** Extracts user facts from a Q&A and updates their persistent profile */
 export async function extractAndUpdateMemory(
   userId: string,
   question: string,
@@ -112,32 +99,26 @@ export async function extractAndUpdateMemory(
   try {
     const profile = getProfile(userId);
 
-    // Step 1: Extract new facts from this Q&A
     const prompt = `Question from user: ${question}\n\nBot's answer: ${answer}`;
     const raw = await singleTurnLlm(EXTRACTOR_SYSTEM, prompt);
 
     let newFacts: string[] = [];
     try {
-      // Strip markdown code fences if the model wraps it
       const cleaned = raw.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
       const parsed = JSON.parse(cleaned);
       if (Array.isArray(parsed)) newFacts = parsed.filter((f) => typeof f === "string");
     } catch {
-      // Model didn't return valid JSON — skip this extraction
       return;
     }
 
-    if (newFacts.length === 0) return; // nothing to remember
+    if (newFacts.length === 0) return;
 
-    // Step 2: Merge into profile
     const merged = [...profile.facts, ...newFacts];
 
-    // Step 3: Auto-compress if we're getting long
     let finalFacts: string[];
     if (merged.length > MAX_FACTS) {
       const compressPrompt = `Facts:\n${merged.map((f, i) => `${i + 1}. ${f}`).join("\n")}`;
       const summary = await singleTurnLlm(COMPRESSOR_SYSTEM, compressPrompt);
-      // Store as a single "summary fact"
       finalFacts = [summary.trim()];
       console.log(`[memory] Compressed ${merged.length} facts for user ${userId}`);
     } else {
@@ -153,21 +134,14 @@ export async function extractAndUpdateMemory(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
-/**
- * Returns a formatted context string to inject into agent prompts.
- * Returns "" if the user has no stored facts.
- */
+/** Formats user profile facts for injection into agent context */
 export function buildMemoryContext(userId: string, username: string): string {
   const profile = getProfile(userId);
   if (!profile.facts.length) return "";
 
   const factsText = profile.facts.length === 1
-    ? profile.facts[0]                                    // compressed summary
-    : profile.facts.map((f) => `- ${f}`).join("\n");     // bullet list
+    ? profile.facts[0]
+    : profile.facts.map((f) => `- ${f}`).join("\n");
 
   return (
     `[What you know about ${username}]\n${factsText}\n\n` +

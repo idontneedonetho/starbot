@@ -18,13 +18,12 @@ The StarPilot codebase is available in your working directory. When answering qu
 - Do not modify any files — you are in read-only mode.
 `;
 
-// A single turn from a conversation thread
 export type ConversationTurn = {
   question: string;
   answer: string;
 };
 
-// Formats recent thread history into string for the prompt
+/** Formats conversation history for the agent prompt */
 function formatHistory(history: ConversationTurn[]): string {
   if (!history.length) return "";
   const MAX_ANSWER_LEN = 800;
@@ -39,8 +38,7 @@ function formatHistory(history: ConversationTurn[]): string {
   return lines.join("\n") + "\n\n";
 }
 
-
-
+/** Initializes and executes a repository-aware agent session */
 export async function askAboutRepo(
   botName: string,
   question: string,
@@ -78,13 +76,10 @@ export async function askAboutRepo(
     }
   });
 
-  // Assemble full prompt block
   const fullPrompt = [
     memoryContext,
     formatHistory(history),
-    history.length
-      ? `Current question: ${question}`
-      : question,
+    history.length ? `Current question: ${question}` : question,
   ]
     .filter(Boolean)
     .join("");

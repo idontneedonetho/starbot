@@ -5,18 +5,11 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { authStorage, modelRegistry, mainModel } from "./providers.js";
 
-/**
- * Creates a minimal, single-turn LLM session (no tools, in-memory).
- * System prompt is passed via DefaultResourceLoader override.
- * Used for memory extraction and compression — not for Q&A.
- */
+/** Executes a single-turn text completion without tools */
 export async function singleTurnLlm(
   systemPrompt: string,
   userMessage: string
 ): Promise<string> {
-
-
-  // System prompt injected via resource loader (the only supported path in pi SDK)
   const loader = new DefaultResourceLoader({
     systemPromptOverride: () => systemPrompt,
   });
@@ -27,7 +20,7 @@ export async function singleTurnLlm(
     authStorage,
     modelRegistry,
     model: mainModel,
-    tools: [],          // no tools — pure text generation
+    tools: [],
     resourceLoader: loader,
   });
 

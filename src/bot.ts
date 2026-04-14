@@ -17,7 +17,7 @@ const EMOJI_ERROR = "❌";
 const MAX_HISTORY_DEPTH = 4;
 const MAX_CONCURRENT = 2;
 
-// Simple promise-based semaphore to bound concurrent agent sessions
+/** Concurrency limiter for agent sessions */
 class Semaphore {
   private queue: (() => void)[] = [];
   private active = 0;
@@ -42,7 +42,6 @@ class Semaphore {
 
 const agentSemaphore = new Semaphore(MAX_CONCURRENT);
 
-// Initialize Discord client with necessary permissions
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -54,20 +53,18 @@ const client = new Client({
   partials: [Partials.Channel, Partials.Message, Partials.Reaction],
 });
 
-// Strips user mentions from message text
 const stripMentions = (text: string) => text.replace(/<@!?\d+>/g, "").trim();
 
-// Checks if bot is permitted to respond in the channel
 const isAllowedChannel = (id: string) => 
   config.ALLOWED_CHANNEL_IDS.length === 0 || config.ALLOWED_CHANNEL_IDS.includes(id);
 
-// Splits long messages while preserving codeblock contexts across discord's 2000 char threshold
+/** Splits text into Discord-safe chunks while preserving code blocks */
 function chunkAnswer(text: string, maxLen = 2000): string[] {
   const chunks: string[] = [];
   let remaining = text;
   
   while (remaining.length > maxLen) {
-    const chunkLimit = maxLen - 20; // buffer for appending closing ticks
+    const chunkLimit = maxLen - 20;
     let split = remaining.lastIndexOf("\n", chunkLimit);
     if (split < chunkLimit / 2) split = chunkLimit;
 
@@ -110,7 +107,7 @@ async function removeReaction(message: Message, emoji: string) {
   }
 }
 
-// Reconstructs reply history for context by crawling up the message chain
+/** Recursively gathers reply history up to MAX_HISTORY_DEPTH */
 async function buildConversationHistory(message: Message): Promise<ConversationTurn[]> {
   if (!client.user) return [];
 
@@ -121,7 +118,6 @@ async function buildConversationHistory(message: Message): Promise<ConversationT
     const botMsg: Message | null = await message.channel.messages.fetch(ref.messageId).catch(() => null);
     if (botMsg?.author.id !== client.user.id) break;
 
-    // Only read actual message content (ignore embeds entirely)
     const answer = botMsg.content;
     if (!answer || !botMsg.reference?.messageId) break;
 
@@ -136,7 +132,7 @@ async function buildConversationHistory(message: Message): Promise<ConversationT
   return turns;
 }
 
-// Executes agent inference with timeout limits
+/** Handles LLM interaction and response delivery */
 async function handleQuestion(
   message: Message,
   botName: string,
@@ -190,7 +186,6 @@ async function handleQuestion(
   }
 }
 
-// Primary entry point for questions directed at the bot
 client.on(Events.MessageCreate, async (message: Message) => {
   if (
     message.author.bot || 
@@ -202,7 +197,6 @@ client.on(Events.MessageCreate, async (message: Message) => {
   const question = stripMentions(message.content);
   const botName = message.guild?.members.me?.nickname || client.user.displayName || client.user.username || "StarBot";
 
-  // Return usage help if just blindly tagged
   if (!question) {
     await message.reply(
       `Hey! Ask me anything about the StarPilot codebase.\n` +

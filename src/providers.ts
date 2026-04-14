@@ -1,9 +1,7 @@
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { config } from "./config.js";
 
-// Shared singleton instances for LLM access.
-// Avoids redundant instantiation across agent.ts and llm.ts.
-
+/** Shared LLM auth and registry singletons */
 export const authStorage = AuthStorage.create();
 authStorage.setRuntimeApiKey(config.LLM_PROVIDER, config.LLM_API_KEY);
 
