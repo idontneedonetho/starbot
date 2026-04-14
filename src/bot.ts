@@ -11,6 +11,9 @@ import { config } from "./config.js";
 import { askAboutRepo, type ConversationTurn } from "./agent.js";
 import { getRepoCacheDir } from "./repoSync.js";
 import { buildMemoryContext, extractAndUpdateMemory } from "./memory.js";
+import { RateLimiter, createRateLimiterCleanup } from "./utils/rateLimiter.js";
+import { Semaphore } from "./utils/semaphore.js";
+import { chunkAnswer } from "./utils/chunking.js";
 
 const EMOJI_SEEN = "👀";
 const EMOJI_DONE = "✅";
@@ -18,65 +21,8 @@ const EMOJI_ERROR = "❌";
 const MAX_HISTORY_DEPTH = 4;
 const MAX_CONCURRENT = 2;
 
-const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_MAX = 3;
-
-class RateLimiter {
-  private timestamps = new Map<string, number[]>();
-
-  tryAcquire(userId: string): boolean {
-    const now = Date.now();
-    const timestamps = this.timestamps.get(userId) ?? [];
-    const recent = timestamps.filter(t => now - t < RATE_LIMIT_WINDOW_MS);
-    
-    if (recent.length >= RATE_LIMIT_MAX) {
-      return false;
-    }
-    
-    recent.push(now);
-    this.timestamps.set(userId, recent);
-    return true;
-  }
-
-  cleanup(): void {
-    const now = Date.now();
-    for (const [userId, timestamps] of this.timestamps) {
-      const recent = timestamps.filter(t => now - t < RATE_LIMIT_WINDOW_MS);
-      if (recent.length === 0) {
-        this.timestamps.delete(userId);
-      } else {
-        this.timestamps.set(userId, recent);
-      }
-    }
-  }
-}
-
 const rateLimiter = new RateLimiter();
-const rateLimitCleanup = setInterval(() => rateLimiter.cleanup(), 60_000);
-
-/** Concurrency limiter for agent sessions */
-class Semaphore {
-  private queue: (() => void)[] = [];
-  private active = 0;
-  constructor(private readonly max: number) { }
-
-  async acquire(): Promise<void> {
-    if (this.active < this.max) {
-      this.active++;
-      return;
-    }
-    return new Promise<void>((resolve) => {
-      this.queue.push(() => { this.active++; resolve(); });
-    });
-  }
-
-  release(): void {
-    this.active--;
-    const next = this.queue.shift();
-    if (next) next();
-  }
-}
-
+const rateLimitCleanup = createRateLimiterCleanup(rateLimiter);
 const agentSemaphore = new Semaphore(MAX_CONCURRENT);
 
 const client = new Client({
@@ -103,48 +49,7 @@ const sanitizeThreadName = (text: string): string => {
 const isAllowedChannel = (id: string) =>
   config.ALLOWED_CHANNEL_IDS.length === 0 || config.ALLOWED_CHANNEL_IDS.includes(id);
 
-/** Splits text into Discord-safe chunks while preserving code blocks */
-function chunkAnswer(text: string, maxLen = 2000): string[] {
-  const chunks: string[] = [];
-  let remaining = text;
 
-  while (remaining.length > maxLen) {
-    const chunkLimit = maxLen - 20;
-    let split = remaining.lastIndexOf("\n", chunkLimit);
-    if (split < chunkLimit / 2) split = chunkLimit;
-
-    let inCodeBlock = false;
-    let lang = "";
-
-    const lines = remaining.slice(0, split).split("\n");
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (trimmed.startsWith("```")) {
-        if (inCodeBlock) {
-          inCodeBlock = false;
-          lang = "";
-        } else {
-          inCodeBlock = true;
-          lang = trimmed.slice(3).trim();
-        }
-      }
-    }
-
-    let chunkText = remaining.slice(0, split);
-    let nextText = remaining.slice(split).trimStart();
-
-    if (inCodeBlock) {
-      chunkText += "\n```";
-      nextText = "```" + lang + "\n" + nextText;
-    }
-
-    chunks.push(chunkText);
-    remaining = nextText;
-  }
-
-  if (remaining.trim()) chunks.push(remaining);
-  return chunks;
-}
 
 async function removeReaction(message: Message, emoji: string) {
   if (client.user) {
@@ -199,7 +104,9 @@ async function buildConversationHistory(message: Message): Promise<ConversationT
                 answer: currentBotChunks.reverse().join('\n')
               });
             }
-          } catch (e) { }
+          } catch (e) {
+            console.warn("[bot] Failed to fetch starter message:", e);
+          }
         }
       }
 

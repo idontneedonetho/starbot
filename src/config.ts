@@ -36,6 +36,9 @@ export const config = {
   LLM_API_KEY: requireEnv("LLM_API_KEY"),
   LLM_MODEL: optionalEnv("LLM_MODEL", "claude-sonnet-4-5"),
 
+  CHEAP_LLM_PROVIDER: optionalEnv("CHEAP_LLM_PROVIDER", ""),
+  CHEAP_LLM_MODEL: optionalEnv("CHEAP_LLM_MODEL", ""),
+
   STARPILOT_REPO_URL: optionalEnv(
     "STARPILOT_REPO_URL",
     "https://github.com/firestar5683/starpilot"

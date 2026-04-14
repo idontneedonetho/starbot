@@ -47,6 +47,8 @@ Fill in the required values in your `.env` file:
 | `LLM_API_KEY` | ✅ | Your LLM provider API key |
 | `LLM_PROVIDER` | | Provider name (default: `anthropic`) |
 | `LLM_MODEL` | | Model ID (default: `claude-sonnet-4-5`) |
+| `CHEAP_LLM_PROVIDER` | | Optional cheaper provider for memory operations |
+| `CHEAP_LLM_MODEL` | | Optional cheaper model ID (e.g., `claude-haiku-3-5`) |
 | `STARPILOT_REPO_URL` | | Fork URL (default: `https://github.com/firestar5683/starpilot`) |
 | `STARPILOT_BRANCH` | | Branch to track (default: `StarPilot`) |
 | `ANSWER_TIMEOUT_SECONDS` | | Agent inference timeout (default: `90`) |

@@ -3,44 +3,32 @@ import {
   DefaultResourceLoader,
   SessionManager,
   type AgentSession,
+  type AgentSessionEventListener,
 } from "@mariozechner/pi-coding-agent";
-import { authStorage, modelRegistry, mainModel } from "./providers.js";
+import { authStorage, modelRegistry, mainModel, memoryModel } from "./providers.js";
+import { buildSystemPrompt, formatHistory } from "./prompts/agent.js";
 
 export type ConversationTurn = {
   question: string;
   answer: string;
 };
 
-const buildSystemPrompt = (botName: string) => `\
-You are ${botName}, an expert assistant for the StarPilot project — a custom fork of comma.ai's openpilot
-driving assistance system with special support for GM vehicles.
-
-The StarPilot codebase is available in your working directory. When answering questions:
-- Be concise and accurate.
-- Cite specific files and line numbers when relevant (e.g. "see selfdrive/controls/controlsd.py").
-- If asked about a feature, explain what it does, where the relevant code lives, and any key configuration.
-- If you cannot find something, say so clearly rather than guessing.
-- Do not modify any files — you are in read-only mode.
-`;
-
-function formatHistory(history: ConversationTurn[]): string {
-  if (!history.length) return "";
-  const MAX_ANSWER_LEN = 800;
-  const lines = ["[Prior conversation in this thread]"];
-  for (const turn of history) {
-    lines.push(`User: ${turn.question}`);
-    const ans = turn.answer.length > MAX_ANSWER_LEN
-      ? turn.answer.slice(0, MAX_ANSWER_LEN) + "…"
-      : turn.answer;
-    lines.push(`Assistant: ${ans}`);
-  }
-  return lines.join("\n") + "\n\n";
+function createTextCollector(onText: (text: string) => void): AgentSessionEventListener {
+  return (event) => {
+    if (
+      event.type === "message_update" &&
+      event.assistantMessageEvent.type === "text_delta"
+    ) {
+      onText(event.assistantMessageEvent.delta);
+    }
+  };
 }
 
 async function createSession(
   cwd: string,
   systemPrompt: string,
-  useTools: boolean
+  useTools: boolean,
+  model = mainModel
 ): Promise<AgentSession> {
   const loader = new DefaultResourceLoader({
     cwd,
@@ -50,7 +38,7 @@ async function createSession(
 
   const { session } = await createAgentSession({
     cwd,
-    model: mainModel,
+    model,
     sessionManager: SessionManager.inMemory(),
     authStorage,
     modelRegistry,
@@ -63,19 +51,16 @@ async function createSession(
 
 export async function singleTurnLlm(
   systemPrompt: string,
-  userMessage: string
+  userMessage: string,
+  model = memoryModel ?? mainModel
 ): Promise<string> {
-  const session = await createSession(process.cwd(), systemPrompt, false);
+  if (!model) {
+    throw new Error("No model configured for LLM operations");
+  }
+  const session = await createSession(process.cwd(), systemPrompt, false, model);
 
   let result = "";
-  session.subscribe((event) => {
-    if (
-      event.type === "message_update" &&
-      event.assistantMessageEvent.type === "text_delta"
-    ) {
-      result += event.assistantMessageEvent.delta;
-    }
-  });
+  session.subscribe(createTextCollector((text) => { result += text; }));
 
   try {
     await session.prompt(userMessage);
@@ -94,19 +79,17 @@ export async function askAboutRepo(
   history: ConversationTurn[] = [],
   onProgress?: () => void
 ): Promise<string> {
+  if (!mainModel) {
+    throw new Error("No main model configured");
+  }
   const systemPrompt = buildSystemPrompt(botName);
-  const session = await createSession(repoCwd, systemPrompt, true);
+  const session = await createSession(repoCwd, systemPrompt, true, mainModel);
 
   let answer = "";
-  session.subscribe((event) => {
-    if (
-      event.type === "message_update" &&
-      event.assistantMessageEvent.type === "text_delta"
-    ) {
-      answer += event.assistantMessageEvent.delta;
-      onProgress?.();
-    }
-  });
+  session.subscribe(createTextCollector((text) => {
+    answer += text;
+    onProgress?.();
+  }));
 
   const fullPrompt = [
     memoryContext,

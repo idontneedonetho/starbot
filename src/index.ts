@@ -42,14 +42,11 @@ async function main(): Promise<void> {
   await startBot();
 
   const healthServer = http.createServer((req, res) => {
-    const { ok, status } = getHealthStatus();
+    const health = getHealthStatus();
     if (req.url === "/health") {
-      res.writeHead(ok ? 200 : 503, { "Content-Type": "application/json" });
+      res.writeHead(health.ok ? 200 : 503, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ 
-        ok, 
-        status,
-        botReady: isBotReady(),
-        repoReady: isRepoReady(),
+        ...health,
         lastSync: getLastSyncTime()?.toISOString() ?? null
       }));
     } else {
