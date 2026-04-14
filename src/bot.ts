@@ -5,17 +5,18 @@ import {
   type Message,
   Events,
   ActivityType,
-  EmbedBuilder,
 } from "discord.js";
 import { config } from "./config.js";
 import { askAboutRepo, type ConversationTurn } from "./agent.js";
 import { getRepoCacheDir } from "./repoSync.js";
 import { buildMemoryContext, extractAndUpdateMemory } from "./memory.js";
 
-// ---------------------------------------------------------------------------
-// Discord client setup
-// ---------------------------------------------------------------------------
+const EMOJI_SEEN  = "👀";
+const EMOJI_DONE  = "✅";
+const EMOJI_ERROR = "❌";
+const MAX_HISTORY_DEPTH = 4;
 
+// Initialize Discord client with necessary permissions
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -27,168 +28,128 @@ const client = new Client({
   partials: [Partials.Channel, Partials.Message, Partials.Reaction],
 });
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+// Strips user mentions from message text
+const stripMentions = (text: string) => text.replace(/<@!?\d+>/g, "").trim();
 
-const EMOJI_SEEN  = "👀";
-const EMOJI_DONE  = "✅";
-const EMOJI_ERROR = "❌";
+// Checks if bot is permitted to respond in the channel
+const isAllowedChannel = (id: string) => 
+  config.ALLOWED_CHANNEL_IDS.length === 0 || config.ALLOWED_CHANNEL_IDS.includes(id);
 
-/** Maximum number of prior exchanges to include from a reply chain. */
-const MAX_HISTORY_DEPTH = 4;
-
-function chunkAnswer(text: string, maxLen = 4096): string[] {
+// Splits long messages while preserving codeblock contexts across discord's 2000 char threshold
+function chunkAnswer(text: string, maxLen = 2000): string[] {
   const chunks: string[] = [];
   let remaining = text;
+  
   while (remaining.length > maxLen) {
-    const idx = remaining.lastIndexOf("\n", maxLen);
-    const split = idx > maxLen / 2 ? idx : maxLen;
-    chunks.push(remaining.slice(0, split));
-    remaining = remaining.slice(split).trimStart();
+    const chunkLimit = maxLen - 20; // buffer for appending closing ticks
+    let split = remaining.lastIndexOf("\n", chunkLimit);
+    if (split < chunkLimit / 2) split = chunkLimit;
+
+    let inCodeBlock = false;
+    let lang = "";
+    
+    const lines = remaining.slice(0, split).split("\n");
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("```")) {
+        if (inCodeBlock) {
+          inCodeBlock = false;
+          lang = "";
+        } else {
+          inCodeBlock = true;
+          lang = trimmed.slice(3).trim();
+        }
+      }
+    }
+
+    let chunkText = remaining.slice(0, split);
+    let nextText = remaining.slice(split).trimStart();
+
+    if (inCodeBlock) {
+      chunkText += "\n```";
+      nextText = "```" + lang + "\n" + nextText;
+    }
+
+    chunks.push(chunkText);
+    remaining = nextText;
   }
-  if (remaining) chunks.push(remaining);
+  
+  if (remaining.trim()) chunks.push(remaining);
   return chunks;
 }
 
-function isAllowedChannel(channelId: string): boolean {
-  return (
-    config.ALLOWED_CHANNEL_IDS.length === 0 ||
-    config.ALLOWED_CHANNEL_IDS.includes(channelId)
-  );
+async function removeReaction(message: Message, emoji: string) {
+  if (client.user) {
+    await message.reactions.cache.get(emoji)?.users.remove(client.user.id).catch(() => void 0);
+  }
 }
 
-function buildAnswerEmbed(question: string, answer: string): EmbedBuilder {
-  return new EmbedBuilder()
-    .setColor(0x5865f2)
-    .setAuthor({ name: "StarBot — StarPilot Q&A" })
-    .setTitle(`❓ ${question.length > 200 ? question.slice(0, 197) + "…" : question}`)
-    .setDescription(answer.length > 4096 ? answer.slice(0, 4093) + "…" : answer)
-    .setFooter({ text: "Powered by pi coding agent + StarPilot source" })
-    .setTimestamp();
-}
-
-async function removeReaction(message: Message, emoji: string): Promise<void> {
-  if (!client.user) return;
-  await message.reactions.cache
-    .get(emoji)
-    ?.users.remove(client.user.id)
-    .catch(() => void 0);
-}
-
-// ---------------------------------------------------------------------------
-// Reply chain walker
-// ---------------------------------------------------------------------------
-
-/**
- * Walks up the Discord reply chain to build a conversation history array.
- *
- * Structure of a StarBot thread:
- *   User message M1   (the question, may or may not reference an earlier bot reply)
- *   Bot reply M2      (references M1 — contains the answer in an embed)
- *   User reply M3     (references M2 — the follow-up question)  ← current
- *
- * We walk: current → M2 (bot answer) → M1 (user question) → repeat up the chain.
- * Returns turns in chronological order (oldest first).
- */
-async function buildConversationHistory(
-  message: Message
-): Promise<ConversationTurn[]> {
+// Reconstructs reply history for context by crawling up the message chain
+async function buildConversationHistory(message: Message): Promise<ConversationTurn[]> {
   if (!client.user) return [];
 
   const turns: ConversationTurn[] = [];
-  let ref = message.reference;
+  let ref: typeof message.reference | undefined = message.reference;
 
   while (ref?.messageId && turns.length < MAX_HISTORY_DEPTH) {
-    // Step 1: Fetch the referenced message (should be the bot's answer)
-    let botMsg: Message;
-    try {
-      botMsg = await message.channel.messages.fetch(ref.messageId);
-    } catch {
-      break; // message deleted or inaccessible
-    }
+    const botMsg = await message.channel.messages.fetch(ref.messageId).catch(() => null);
+    if (botMsg?.author.id !== client.user.id) break;
 
-    if (botMsg.author.id !== client.user.id) break; // not our message
+    // Only read actual message content (ignore embeds entirely)
+    const answer = botMsg.content;
+    if (!answer || !botMsg.reference?.messageId) break;
 
-    // Extract the answer text from the embed
-    const answer = botMsg.embeds[0]?.description;
-    if (!answer) break; // not a proper answer embed (e.g. the "Thinking..." placeholder)
-
-    // Step 2: The bot's message should reference the user's question
-    if (!botMsg.reference?.messageId) break;
-
-    let userMsg: Message;
-    try {
-      userMsg = await message.channel.messages.fetch(botMsg.reference.messageId);
-    } catch {
-      break;
-    }
-
-    // Extract the question text (strip any @mentions)
-    const question = userMsg.content.replace(/<@!?\d+>/g, "").trim();
+    const userMsg = await message.channel.messages.fetch(botMsg.reference.messageId).catch(() => null);
+    const question = userMsg ? stripMentions(userMsg.content) : "";
     if (!question) break;
 
-    // Prepend so the array ends up oldest-first after the loop
     turns.unshift({ question, answer });
-
-    // Walk up: the user's message might itself have been a reply to an earlier bot answer
-    ref = userMsg.reference;
+    ref = userMsg?.reference;
   }
 
   return turns;
 }
 
-// ---------------------------------------------------------------------------
-// Core Q&A handler
-// ---------------------------------------------------------------------------
-
+// Executes agent inference with timeout limits
 async function handleQuestion(
   message: Message,
   question: string,
   memoryContext: string,
   history: ConversationTurn[]
-): Promise<string | null> {
-  const repoCwd = getRepoCacheDir();
-
-  const timeout = new Promise<never>((_, reject) =>
-    setTimeout(
+) {
+  let timer: NodeJS.Timeout;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
       () => reject(new Error("timeout")),
       config.ANSWER_TIMEOUT_SECONDS * 1000
-    )
-  );
-
-  const thinkingMsg = await message.reply("🤔 Thinking…");
-  let answer: string | null = null;
+    );
+  });
 
   try {
-    answer = await Promise.race([
-      askAboutRepo(question, repoCwd, memoryContext, history),
+    const answer = await Promise.race([
+      askAboutRepo(question, getRepoCacheDir(), memoryContext, history),
       timeout,
     ]);
+    clearTimeout(timer!);
 
     const chunks = chunkAnswer(answer);
-    await thinkingMsg.edit({ embeds: [buildAnswerEmbed(question, chunks[0])] });
+    let lastMsg = await message.reply(chunks[0]);
 
     for (let i = 1; i < chunks.length; i++) {
       if (message.channel.isSendable()) {
-        await message.channel.send({
-          embeds: [
-            new EmbedBuilder()
-              .setColor(0x5865f2)
-              .setDescription(chunks[i])
-              .setFooter({ text: `(continued ${i + 1}/${chunks.length})` }),
-          ],
-        });
+        lastMsg = await lastMsg.reply(chunks[i]);
       }
     }
 
     await removeReaction(message, EMOJI_SEEN);
     await message.react(EMOJI_DONE).catch(() => void 0);
-  } catch (err: unknown) {
+    return answer;
+  } catch (err) {
+    clearTimeout(timer!);
     const isTimeout = err instanceof Error && err.message === "timeout";
     console.error("[bot] handleQuestion error:", err);
 
-    await thinkingMsg.edit(
+    await message.reply(
       isTimeout
         ? `⏱️ That took too long (>${config.ANSWER_TIMEOUT_SECONDS}s). Try a more specific question.`
         : `❌ Something went wrong. Please try again.`
@@ -196,23 +157,22 @@ async function handleQuestion(
 
     await removeReaction(message, EMOJI_SEEN);
     await message.react(EMOJI_ERROR).catch(() => void 0);
+    return null;
   }
-
-  return answer;
 }
 
-// ---------------------------------------------------------------------------
-// Message handler: @mention only
-// ---------------------------------------------------------------------------
-
+// Primary entry point for questions directed at the bot
 client.on(Events.MessageCreate, async (message: Message) => {
-  if (message.author.bot) return;
-  if (!client.user) return;
-  if (!message.mentions.has(client.user)) return;
-  if (!isAllowedChannel(message.channelId)) return;
+  if (
+    message.author.bot || 
+    !client.user || 
+    !message.mentions.has(client.user) || 
+    !isAllowedChannel(message.channelId)
+  ) return;
 
-  const question = message.content.replace(/<@!?\d+>/g, "").trim();
+  const question = stripMentions(message.content);
 
+  // Return usage help if just blindly tagged
   if (!question) {
     await message.reply(
       "Hey! Ask me anything about the StarPilot codebase.\n" +
@@ -223,14 +183,8 @@ client.on(Events.MessageCreate, async (message: Message) => {
     return;
   }
 
-  // 👀 — acknowledge immediately
   await message.react(EMOJI_SEEN).catch(() => void 0);
 
-  if (message.channel.isSendable()) {
-    await message.channel.sendTyping().catch(() => void 0);
-  }
-
-  // Walk reply chain to build thread context (empty array if this is a fresh question)
   const history = await buildConversationHistory(message);
   if (history.length) {
     console.log(`[bot] Resuming thread with ${history.length} prior turn(s) for ${message.author.username}`);
@@ -238,26 +192,15 @@ client.on(Events.MessageCreate, async (message: Message) => {
 
   const memoryContext = buildMemoryContext(message.author.id, message.author.username);
   const answer = await handleQuestion(message, question, memoryContext, history);
-
-  // Background memory extraction — doesn't delay the reply
+  
   if (answer) {
     extractAndUpdateMemory(message.author.id, question, answer).catch(console.error);
   }
 });
-
-// ---------------------------------------------------------------------------
-// Ready
-// ---------------------------------------------------------------------------
 
 client.once(Events.ClientReady, (c) => {
   console.log(`[bot] Logged in as ${c.user.tag}`);
   c.user.setActivity("StarPilot questions", { type: ActivityType.Listening });
 });
 
-// ---------------------------------------------------------------------------
-// Start
-// ---------------------------------------------------------------------------
-
-export async function startBot(): Promise<void> {
-  await client.login(config.DISCORD_TOKEN);
-}
+export const startBot = async () => client.login(config.DISCORD_TOKEN);
