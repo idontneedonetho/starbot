@@ -125,9 +125,11 @@ async function handleQuestion(
     );
   });
 
+  const resetTimer = () => timer.refresh();
+
   try {
     const answer = await Promise.race([
-      askAboutRepo(question, getRepoCacheDir(), memoryContext, history),
+      askAboutRepo(question, getRepoCacheDir(), memoryContext, history, resetTimer),
       timeout,
     ]);
     clearTimeout(timer!);

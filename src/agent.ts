@@ -56,7 +56,8 @@ export async function askAboutRepo(
   question: string,
   repoCwd: string,
   memoryContext = "",
-  history: ConversationTurn[] = []
+  history: ConversationTurn[] = [],
+  onProgress?: () => void
 ): Promise<string> {
   const model = mainModel;
 
@@ -78,6 +79,7 @@ export async function askAboutRepo(
 
   let answer = "";
   session.subscribe((event) => {
+    onProgress?.();
     if (
       event.type === "message_update" &&
       event.assistantMessageEvent.type === "text_delta"
