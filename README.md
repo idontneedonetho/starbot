@@ -90,7 +90,13 @@ Simply mention the bot (using its name or server nickname) to initialize an inte
 ```text
 @BotName what GM vehicles does starpilot currently support?
 ```
-_(The bot will instantly react with 👀 to let you know it's thinking, then sequentially output its answers, updating the initial reaction to ✅ upon completion)._
+_(The bot will instantly react with 👀 to let you know it's thinking. If there's a queue, it shows position (1⃣, 2⃣...). While processing, it shows ⏳. When complete, it updates to ✅.)_
+
+**Queue & Concurrency:**
+- The bot can process up to 2 questions simultaneously
+- If there's a queue, users see their position (1⃣, 2⃣, etc.)
+- While processing, the reaction changes to ⏳ (hourglass)
+- On completion, it shows ✅
 
 **Continuing a topic:**
 Simply reply to one of the bot's messages in the same thread. The agent will remember the entire conversation in that thread via persistent sessions.
@@ -110,6 +116,7 @@ discord.js bot (src/bot.ts)
     │
     ├── Get/create session for thread (./data/sessions/<threadId>.jsonl)
     ├── Load user facts from memory.ts (SQLite)
+    ├── Check queue position (1⃣, 2⃣...) if waiting
     │
     ▼
 pi-coding-agent inference (src/agent.ts)
@@ -120,9 +127,8 @@ pi-coding-agent inference (src/agent.ts)
     └── Generates concise answer based on source code findings
     │
     ▼
-Background Extraction               Discord Message
-(src/memory.ts via LLM)      ◄────  Intelligent text chunking (max 2000 chars)
-User facts saved to SQLite          Reaction status cleanly updated (👀 -> ✅)
+Reaction Flow: 👀 → (queue position) → ⏳ → ✅
+User facts saved to SQLite     Message delivered in chunks
 ```
 
 ### File Structure
