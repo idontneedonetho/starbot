@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  starbot:
+    build: .
+    container_name: starbot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./repo-cache:/app/repo-cache
