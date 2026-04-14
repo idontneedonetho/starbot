@@ -112,6 +112,58 @@ async function buildConversationHistory(message: Message): Promise<ConversationT
   if (!client.user) return [];
 
   const turns: ConversationTurn[] = [];
+
+  if (message.channel.isThread()) {
+    try {
+      const msgs = await message.channel.messages.fetch({ limit: 20, before: message.id });
+      const arr = Array.from(msgs.values());
+      
+      let currentBotChunks: string[] = [];
+      let currentUserChunks: string[] = [];
+      
+      for (const msg of arr) {
+        if (turns.length >= MAX_HISTORY_DEPTH) break;
+        
+        if (msg.author.id === client.user.id) {
+          if (currentUserChunks.length > 0) {
+            turns.unshift({
+                question: currentUserChunks.reverse().join('\n'),
+                answer: currentBotChunks.reverse().join('\n'),
+            });
+            currentBotChunks = [];
+            currentUserChunks = [];
+          }
+          currentBotChunks.push(msg.content);
+        } else {
+          currentUserChunks.push(stripMentions(msg.content));
+        }
+      }
+      
+      if (currentBotChunks.length > 0) {
+          if (currentUserChunks.length > 0) {
+              turns.unshift({
+                  question: currentUserChunks.reverse().join('\n'),
+                  answer: currentBotChunks.reverse().join('\n'),
+              });
+          } else {
+              try {
+                 const starterMessage = await message.channel.fetchStarterMessage();
+                 if (starterMessage) {
+                     turns.unshift({
+                         question: stripMentions(starterMessage.content),
+                         answer: currentBotChunks.reverse().join('\n')
+                     });
+                 }
+              } catch (e) {}
+          }
+      }
+      
+      return turns;
+    } catch (err) {
+      console.error("[bot] Thread history fetch error:", err);
+    }
+  }
+
   let ref: typeof message.reference | undefined = message.reference;
 
   while (ref?.messageId && turns.length < MAX_HISTORY_DEPTH) {
@@ -158,12 +210,27 @@ async function handleQuestion(
     clearTimeout(timer!);
 
     const chunks = chunkAnswer(answer);
-    let lastMsg = await message.reply(chunks[0]);
+    
+    let threadTarget: any = null;
+    
+    if (!message.channel.isThread()) {
+      try {
+        const threadName = question.split('\n')[0].substring(0, 50) || "Codebase Question";
+        threadTarget = await message.startThread({
+          name: threadName,
+          autoArchiveDuration: 60,
+        });
+      } catch (err) {
+        console.error("[bot] Failed to start thread:", err);
+      }
+    }
+
+    let lastMsg: Message = threadTarget
+      ? await threadTarget.send(chunks[0])
+      : await message.reply(chunks[0]);
 
     for (let i = 1; i < chunks.length; i++) {
-      if (message.channel.isSendable()) {
         lastMsg = await lastMsg.reply(chunks[i]);
-      }
     }
 
     await removeReaction(message, EMOJI_SEEN);
@@ -201,7 +268,7 @@ client.on(Events.MessageCreate, async (message: Message) => {
     await message.reply(
       `Hey! Ask me anything about the StarPilot codebase.\n` +
       `Example: \`@${botName} what GM vehicles are supported?\`\n\n` +
-      `💡 Reply to one of my answers to continue the conversation in context.\n` +
+      `💡 I will create a thread to answer your question. You can continue the conversation there!\n` +
       `🧠 I'll also pick up on things you mention about your setup and remember them.`
     );
     return;

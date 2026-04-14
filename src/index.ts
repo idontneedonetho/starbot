@@ -1,4 +1,3 @@
-import "dotenv/config";
 import http from "http";
 import cron from "node-cron";
 import { initRepo, syncRepo } from "./repoSync.js";

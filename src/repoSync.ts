@@ -64,8 +64,3 @@ export function getRepoCacheDir(): string {
   return config.REPO_CACHE_DIR;
 }
 
-/** Returns true if the last sync succeeded within the threshold */
-export function isRepoStale(): boolean {
-  if (!lastSuccessfulSync) return false;
-  return Date.now() - lastSuccessfulSync.getTime() > STALE_THRESHOLD_MS;
-}

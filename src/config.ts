@@ -17,7 +17,7 @@ function optionalEnv(key: string, fallback: string): string {
 /** Centralized configuration schema */
 export const config = {
   DISCORD_TOKEN: requireEnv("DISCORD_TOKEN"),
-  DISCORD_CLIENT_ID: requireEnv("DISCORD_CLIENT_ID"),
+  DISCORD_CLIENT_ID: optionalEnv("DISCORD_CLIENT_ID", ""),  // reserved for slash-command registration
 
   LLM_PROVIDER: optionalEnv("LLM_PROVIDER", "anthropic"),
   LLM_API_KEY: requireEnv("LLM_API_KEY"),
