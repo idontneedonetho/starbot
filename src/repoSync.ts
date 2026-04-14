@@ -4,6 +4,8 @@ import path from "path";
 import { config } from "./config.js";
 
 let git: SimpleGit | null = null;
+let lastSuccessfulSync: Date | null = null;
+const STALE_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2 hours
 
 /**
  * Clones the StarPilot repo on first run, or pulls updates if already present.
@@ -29,6 +31,7 @@ export async function initRepo(): Promise<void> {
       "--single-branch",
     ]);
     console.log(`[repoSync] Clone complete.`);
+    lastSuccessfulSync = new Date();
   }
 
   git = simpleGit(dir);
@@ -52,8 +55,14 @@ export async function syncRepo(): Promise<void> {
     console.log(
       `[repoSync] Up to date. Latest commit: ${latest?.hash?.slice(0, 8)} — ${latest?.message}`
     );
+    lastSuccessfulSync = new Date();
   } catch (err) {
     console.error("[repoSync] Sync failed:", err);
+    if (lastSuccessfulSync && Date.now() - lastSuccessfulSync.getTime() > STALE_THRESHOLD_MS) {
+      console.warn(
+        `[repoSync] ⚠️ Repo stale for ${Math.round((Date.now() - lastSuccessfulSync.getTime()) / 60_000)}min. Answers may be outdated.`
+      );
+    }
   }
 }
 
@@ -62,4 +71,12 @@ export async function syncRepo(): Promise<void> {
  */
 export function getRepoCacheDir(): string {
   return config.REPO_CACHE_DIR;
+}
+
+/**
+ * Returns true if the last successful repo sync was more than 2 hours ago.
+ */
+export function isRepoStale(): boolean {
+  if (!lastSuccessfulSync) return false;
+  return Date.now() - lastSuccessfulSync.getTime() > STALE_THRESHOLD_MS;
 }

@@ -15,6 +15,32 @@ const EMOJI_SEEN  = "👀";
 const EMOJI_DONE  = "✅";
 const EMOJI_ERROR = "❌";
 const MAX_HISTORY_DEPTH = 4;
+const MAX_CONCURRENT = 2;
+
+// Simple promise-based semaphore to bound concurrent agent sessions
+class Semaphore {
+  private queue: (() => void)[] = [];
+  private active = 0;
+  constructor(private readonly max: number) {}
+
+  async acquire(): Promise<void> {
+    if (this.active < this.max) {
+      this.active++;
+      return;
+    }
+    return new Promise<void>((resolve) => {
+      this.queue.push(() => { this.active++; resolve(); });
+    });
+  }
+
+  release(): void {
+    this.active--;
+    const next = this.queue.shift();
+    if (next) next();
+  }
+}
+
+const agentSemaphore = new Semaphore(MAX_CONCURRENT);
 
 // Initialize Discord client with necessary permissions
 const client = new Client({
@@ -92,14 +118,14 @@ async function buildConversationHistory(message: Message): Promise<ConversationT
   let ref: typeof message.reference | undefined = message.reference;
 
   while (ref?.messageId && turns.length < MAX_HISTORY_DEPTH) {
-    const botMsg = await message.channel.messages.fetch(ref.messageId).catch(() => null);
+    const botMsg: Message | null = await message.channel.messages.fetch(ref.messageId).catch(() => null);
     if (botMsg?.author.id !== client.user.id) break;
 
     // Only read actual message content (ignore embeds entirely)
     const answer = botMsg.content;
     if (!answer || !botMsg.reference?.messageId) break;
 
-    const userMsg = await message.channel.messages.fetch(botMsg.reference.messageId).catch(() => null);
+    const userMsg: Message | null = await message.channel.messages.fetch(botMsg.reference.messageId).catch(() => null);
     const question = userMsg ? stripMentions(userMsg.content) : "";
     if (!question) break;
 
@@ -195,8 +221,15 @@ client.on(Events.MessageCreate, async (message: Message) => {
   }
 
   const memoryContext = buildMemoryContext(message.author.id, message.author.username);
-  const answer = await handleQuestion(message, botName, question, memoryContext, history);
-  
+
+  await agentSemaphore.acquire();
+  let answer: string | null;
+  try {
+    answer = await handleQuestion(message, botName, question, memoryContext, history);
+  } finally {
+    agentSemaphore.release();
+  }
+
   if (answer) {
     extractAndUpdateMemory(message.author.id, question, answer).catch(console.error);
   }
@@ -207,5 +240,6 @@ client.once(Events.ClientReady, (c) => {
   c.user.setActivity("StarPilot questions", { type: ActivityType.Listening });
 });
 
+export const isBotReady = () => client.isReady();
 export const startBot = async () => client.login(config.DISCORD_TOKEN);
 export const stopBot = async () => client.destroy();

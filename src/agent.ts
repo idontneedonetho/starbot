@@ -1,12 +1,10 @@
 import {
-  AuthStorage,
   createAgentSession,
   createReadOnlyTools,
   DefaultResourceLoader,
-  ModelRegistry,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
-import { config } from "./config.js";
+import { authStorage, modelRegistry, mainModel } from "./providers.js";
 
 const buildSystemPrompt = (botName: string) => `\
 You are ${botName}, an expert assistant for the StarPilot project — a custom fork of comma.ai's openpilot
@@ -41,16 +39,7 @@ function formatHistory(history: ConversationTurn[]): string {
   return lines.join("\n") + "\n\n";
 }
 
-// Agent singleton configuration
-const authStorage = AuthStorage.create();
-authStorage.setRuntimeApiKey(config.LLM_PROVIDER, config.LLM_API_KEY);
-const modelRegistry = ModelRegistry.create(authStorage);
-const mainModel = modelRegistry.find(config.LLM_PROVIDER, config.LLM_MODEL) ?? undefined;
-if (!mainModel) {
-  console.warn(
-    `[agent] Model ${config.LLM_PROVIDER}/${config.LLM_MODEL} not found; pi will pick first available.`
-  );
-}
+
 
 export async function askAboutRepo(
   botName: string,
@@ -80,12 +69,12 @@ export async function askAboutRepo(
 
   let answer = "";
   session.subscribe((event) => {
-    onProgress?.();
     if (
       event.type === "message_update" &&
       event.assistantMessageEvent.type === "text_delta"
     ) {
       answer += event.assistantMessageEvent.delta;
+      onProgress?.();
     }
   });
 

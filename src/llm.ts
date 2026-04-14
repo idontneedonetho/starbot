@@ -1,11 +1,9 @@
 import {
-  AuthStorage,
   createAgentSession,
   DefaultResourceLoader,
-  ModelRegistry,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
-import { config } from "./config.js";
+import { authStorage, modelRegistry, mainModel } from "./providers.js";
 
 /**
  * Creates a minimal, single-turn LLM session (no tools, in-memory).
@@ -16,10 +14,7 @@ export async function singleTurnLlm(
   systemPrompt: string,
   userMessage: string
 ): Promise<string> {
-  const authStorage = AuthStorage.create();
-  authStorage.setRuntimeApiKey(config.LLM_PROVIDER, config.LLM_API_KEY);
-  const modelRegistry = ModelRegistry.create(authStorage);
-  const model = modelRegistry.find(config.LLM_PROVIDER, config.LLM_MODEL) ?? undefined;
+
 
   // System prompt injected via resource loader (the only supported path in pi SDK)
   const loader = new DefaultResourceLoader({
@@ -31,7 +26,7 @@ export async function singleTurnLlm(
     sessionManager: SessionManager.inMemory(),
     authStorage,
     modelRegistry,
-    model,
+    model: mainModel,
     tools: [],          // no tools — pure text generation
     resourceLoader: loader,
   });

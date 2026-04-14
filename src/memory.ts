@@ -9,6 +9,33 @@ const MEMORIES_PATH = path.resolve(__dirname, "../data/memories.json");
 // Max facts before we auto-compress to a summary paragraph
 const MAX_FACTS = 10;
 
+// Async mutex to prevent concurrent read-modify-write races on memories.json
+class AsyncMutex {
+  private locked = false;
+  private queue: (() => void)[] = [];
+
+  async acquire(): Promise<void> {
+    if (!this.locked) {
+      this.locked = true;
+      return;
+    }
+    return new Promise<void>((resolve) => {
+      this.queue.push(() => { this.locked = true; resolve(); });
+    });
+  }
+
+  release(): void {
+    const next = this.queue.shift();
+    if (next) {
+      next();
+    } else {
+      this.locked = false;
+    }
+  }
+}
+
+const memoryMutex = new AsyncMutex();
+
 type UserProfile = {
   facts: string[];      // Extracted atomic facts about the user
   updatedAt: string;
@@ -81,6 +108,7 @@ export async function extractAndUpdateMemory(
   question: string,
   answer: string
 ): Promise<void> {
+  await memoryMutex.acquire();
   try {
     const profile = getProfile(userId);
 
@@ -120,6 +148,8 @@ export async function extractAndUpdateMemory(
     console.log(`[memory] Updated ${newFacts.length} fact(s) for user ${userId}`);
   } catch (err) {
     console.warn("[memory] extractAndUpdateMemory failed:", err);
+  } finally {
+    memoryMutex.release();
   }
 }
 
