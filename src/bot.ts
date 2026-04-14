@@ -11,8 +11,8 @@ import { askAboutRepo, type ConversationTurn } from "./agent.js";
 import { getRepoCacheDir } from "./repoSync.js";
 import { buildMemoryContext, extractAndUpdateMemory } from "./memory.js";
 
-const EMOJI_SEEN  = "👀";
-const EMOJI_DONE  = "✅";
+const EMOJI_SEEN = "👀";
+const EMOJI_DONE = "✅";
 const EMOJI_ERROR = "❌";
 const MAX_HISTORY_DEPTH = 4;
 const MAX_CONCURRENT = 2;
@@ -21,7 +21,7 @@ const MAX_CONCURRENT = 2;
 class Semaphore {
   private queue: (() => void)[] = [];
   private active = 0;
-  constructor(private readonly max: number) {}
+  constructor(private readonly max: number) { }
 
   async acquire(): Promise<void> {
     if (this.active < this.max) {
@@ -55,14 +55,14 @@ const client = new Client({
 
 const stripMentions = (text: string) => text.replace(/<@!?\d+>/g, "").trim();
 
-const isAllowedChannel = (id: string) => 
+const isAllowedChannel = (id: string) =>
   config.ALLOWED_CHANNEL_IDS.length === 0 || config.ALLOWED_CHANNEL_IDS.includes(id);
 
 /** Splits text into Discord-safe chunks while preserving code blocks */
 function chunkAnswer(text: string, maxLen = 2000): string[] {
   const chunks: string[] = [];
   let remaining = text;
-  
+
   while (remaining.length > maxLen) {
     const chunkLimit = maxLen - 20;
     let split = remaining.lastIndexOf("\n", chunkLimit);
@@ -70,7 +70,7 @@ function chunkAnswer(text: string, maxLen = 2000): string[] {
 
     let inCodeBlock = false;
     let lang = "";
-    
+
     const lines = remaining.slice(0, split).split("\n");
     for (const line of lines) {
       const trimmed = line.trim();
@@ -96,7 +96,7 @@ function chunkAnswer(text: string, maxLen = 2000): string[] {
     chunks.push(chunkText);
     remaining = nextText;
   }
-  
+
   if (remaining.trim()) chunks.push(remaining);
   return chunks;
 }
@@ -117,18 +117,18 @@ async function buildConversationHistory(message: Message): Promise<ConversationT
     try {
       const msgs = await message.channel.messages.fetch({ limit: 20, before: message.id });
       const arr = Array.from(msgs.values());
-      
+
       let currentBotChunks: string[] = [];
       let currentUserChunks: string[] = [];
-      
+
       for (const msg of arr) {
         if (turns.length >= MAX_HISTORY_DEPTH) break;
-        
+
         if (msg.author.id === client.user.id) {
           if (currentUserChunks.length > 0) {
             turns.unshift({
-                question: currentUserChunks.reverse().join('\n'),
-                answer: currentBotChunks.reverse().join('\n'),
+              question: currentUserChunks.reverse().join('\n'),
+              answer: currentBotChunks.reverse().join('\n'),
             });
             currentBotChunks = [];
             currentUserChunks = [];
@@ -138,26 +138,26 @@ async function buildConversationHistory(message: Message): Promise<ConversationT
           currentUserChunks.push(stripMentions(msg.content));
         }
       }
-      
+
       if (currentBotChunks.length > 0) {
-          if (currentUserChunks.length > 0) {
+        if (currentUserChunks.length > 0) {
+          turns.unshift({
+            question: currentUserChunks.reverse().join('\n'),
+            answer: currentBotChunks.reverse().join('\n'),
+          });
+        } else {
+          try {
+            const starterMessage = await message.channel.fetchStarterMessage();
+            if (starterMessage) {
               turns.unshift({
-                  question: currentUserChunks.reverse().join('\n'),
-                  answer: currentBotChunks.reverse().join('\n'),
+                question: stripMentions(starterMessage.content),
+                answer: currentBotChunks.reverse().join('\n')
               });
-          } else {
-              try {
-                 const starterMessage = await message.channel.fetchStarterMessage();
-                 if (starterMessage) {
-                     turns.unshift({
-                         question: stripMentions(starterMessage.content),
-                         answer: currentBotChunks.reverse().join('\n')
-                     });
-                 }
-              } catch (e) {}
-          }
+            }
+          } catch (e) { }
+        }
       }
-      
+
       return turns;
     } catch (err) {
       console.error("[bot] Thread history fetch error:", err);
@@ -210,9 +210,9 @@ async function handleQuestion(
     clearTimeout(timer!);
 
     const chunks = chunkAnswer(answer);
-    
+
     let threadTarget: any = null;
-    
+
     if (!message.channel.isThread()) {
       try {
         const threadName = question.split('\n')[0].substring(0, 50) || "Codebase Question";
@@ -230,7 +230,7 @@ async function handleQuestion(
       : await message.reply(chunks[0]);
 
     for (let i = 1; i < chunks.length; i++) {
-        lastMsg = await lastMsg.reply(chunks[i]);
+      lastMsg = await lastMsg.reply(chunks[i]);
     }
 
     await removeReaction(message, EMOJI_SEEN);
@@ -255,9 +255,9 @@ async function handleQuestion(
 
 client.on(Events.MessageCreate, async (message: Message) => {
   if (
-    message.author.bot || 
-    !client.user || 
-    !message.mentions.has(client.user) || 
+    message.author.bot ||
+    !client.user ||
+    !message.mentions.has(client.user) ||
     !isAllowedChannel(message.channelId)
   ) return;
 
