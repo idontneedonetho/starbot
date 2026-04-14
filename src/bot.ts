@@ -8,22 +8,15 @@ import {
   ActivityType,
 } from "discord.js";
 import { config } from "./config.js";
-import { askAboutRepo, type ConversationTurn } from "./agent.js";
+import { askAboutRepo } from "./agent.js";
 import { getRepoCacheDir } from "./repoSync.js";
-import { buildMemoryContext, extractAndUpdateMemory } from "./memory.js";
-import { RateLimiter, createRateLimiterCleanup } from "./utils/rateLimiter.js";
-import { Semaphore } from "./utils/semaphore.js";
+import { buildMemoryContext, extractAndUpdateMemory, getOrCreateSessionPath, deleteSession } from "./memory.js";
+import { tryAcquireRateLimit, acquireWithQueuePosition, getQueuePosition } from "./utils/limits.js";
 import { chunkAnswer } from "./utils/chunking.js";
 
 const EMOJI_SEEN = "👀";
 const EMOJI_DONE = "✅";
 const EMOJI_ERROR = "❌";
-const MAX_HISTORY_DEPTH = 4;
-const MAX_CONCURRENT = 2;
-
-const rateLimiter = new RateLimiter();
-const rateLimitCleanup = createRateLimiterCleanup(rateLimiter);
-const agentSemaphore = new Semaphore(MAX_CONCURRENT);
 
 const client = new Client({
   intents: [
@@ -49,100 +42,19 @@ const sanitizeThreadName = (text: string): string => {
 const isAllowedChannel = (id: string) =>
   config.ALLOWED_CHANNEL_IDS.length === 0 || config.ALLOWED_CHANNEL_IDS.includes(id);
 
-
-
-async function removeReaction(message: Message, emoji: string) {
-  if (client.user) {
-    await message.reactions.cache.get(emoji)?.users.remove(client.user.id).catch(() => void 0);
-  }
-}
-
-/** Recursively gathers reply history up to MAX_HISTORY_DEPTH */
-async function buildConversationHistory(message: Message): Promise<ConversationTurn[]> {
-  if (!client.user) return [];
-
-  const turns: ConversationTurn[] = [];
-
+function getThreadId(message: Message): string {
   if (message.channel.isThread()) {
-    try {
-      const msgs = await message.channel.messages.fetch({ limit: 20, before: message.id });
-      const arr = Array.from(msgs.values());
-
-      let currentBotChunks: string[] = [];
-      let currentUserChunks: string[] = [];
-
-      for (const msg of arr) {
-        if (turns.length >= MAX_HISTORY_DEPTH) break;
-
-        if (msg.author.id === client.user.id) {
-          if (currentUserChunks.length > 0) {
-            turns.unshift({
-              question: currentUserChunks.reverse().join('\n'),
-              answer: currentBotChunks.reverse().join('\n'),
-            });
-            currentBotChunks = [];
-            currentUserChunks = [];
-          }
-          currentBotChunks.push(msg.content);
-        } else {
-          currentUserChunks.push(stripMentions(msg.content));
-        }
-      }
-
-      if (currentBotChunks.length > 0) {
-        if (currentUserChunks.length > 0) {
-          turns.unshift({
-            question: currentUserChunks.reverse().join('\n'),
-            answer: currentBotChunks.reverse().join('\n'),
-          });
-        } else {
-          try {
-            const starterMessage = await message.channel.fetchStarterMessage();
-            if (starterMessage) {
-              turns.unshift({
-                question: stripMentions(starterMessage.content),
-                answer: currentBotChunks.reverse().join('\n')
-              });
-            }
-          } catch (e) {
-            console.warn("[bot] Failed to fetch starter message:", e);
-          }
-        }
-      }
-
-      return turns;
-    } catch (err) {
-      console.error("[bot] Thread history fetch error:", err);
-    }
+    return message.channel.id;
   }
-
-  let ref: typeof message.reference | undefined = message.reference;
-
-  while (ref?.messageId && turns.length < MAX_HISTORY_DEPTH) {
-    const botMsg: Message | null = await message.channel.messages.fetch(ref.messageId).catch(() => null);
-    if (botMsg?.author.id !== client.user.id) break;
-
-    const answer = botMsg.content;
-    if (!answer || !botMsg.reference?.messageId) break;
-
-    const userMsg: Message | null = await message.channel.messages.fetch(botMsg.reference.messageId).catch(() => null);
-    const question = userMsg ? stripMentions(userMsg.content) : "";
-    if (!question) break;
-
-    turns.unshift({ question, answer });
-    ref = userMsg?.reference;
-  }
-
-  return turns;
+  return message.id;
 }
 
-/** Handles LLM interaction and response delivery */
 async function handleQuestion(
   message: Message,
   botName: string,
   question: string,
-  memoryContext: string,
-  history: ConversationTurn[]
+  sessionPath: string,
+  memoryContext: string
 ) {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -156,7 +68,7 @@ async function handleQuestion(
 
   try {
     const answer = await Promise.race([
-      askAboutRepo(botName, question, getRepoCacheDir(), memoryContext, history, resetTimer),
+      askAboutRepo(botName, question, getRepoCacheDir(), sessionPath, memoryContext, resetTimer),
       timeout,
     ]);
     clearTimeout(timer);
@@ -185,7 +97,6 @@ async function handleQuestion(
       lastMsg = await lastMsg.reply(chunks[i]);
     }
 
-    await removeReaction(message, EMOJI_SEEN);
     await message.react(EMOJI_DONE).catch(() => void 0);
     return answer;
   } catch (err) {
@@ -199,7 +110,6 @@ async function handleQuestion(
         : `❌ Something went wrong. Please try again.`
     );
 
-    await removeReaction(message, EMOJI_SEEN);
     await message.react(EMOJI_ERROR).catch(() => void 0);
     return null;
   }
@@ -226,7 +136,7 @@ client.on(Events.MessageCreate, async (message: Message) => {
     return;
   }
 
-  if (!rateLimiter.tryAcquire(message.author.id)) {
+  if (!tryAcquireRateLimit(message.author.id)) {
     await message.reply(
       `⚠️ You're doing that too often. Please wait a minute before asking another question.`
     );
@@ -235,19 +145,32 @@ client.on(Events.MessageCreate, async (message: Message) => {
 
   await message.react(EMOJI_SEEN).catch(() => void 0);
 
-  const history = await buildConversationHistory(message);
-  if (history.length) {
-    console.log(`[bot] Resuming thread with ${history.length} prior turn(s) for ${message.author.username}`);
-  }
+  const threadId = getThreadId(message);
+  const sessionPath = getOrCreateSessionPath(threadId);
+  console.log(`[bot] Using session ${sessionPath} for thread ${threadId}`);
 
   const memoryContext = await buildMemoryContext(message.author.id, message.author.username);
 
-  await agentSemaphore.acquire();
+  const queuePos = getQueuePosition();
+  if (queuePos > 0) {
+    const queueEmoji = queuePos > 9 ? "🔟" : `${queuePos}⃣`;
+    await message.reactions.cache.get(EMOJI_SEEN)?.users.remove(client.user?.id).catch(() => void 0);
+    await message.react(queueEmoji).catch(() => void 0);
+  }
+
+  const { release } = await acquireWithQueuePosition();
+
+  const currentReactions = [...message.reactions.cache.values()];
+  for (const reaction of currentReactions) {
+    await reaction.users.remove(client.user?.id).catch(() => void 0);
+  }
+  await message.react("⏳").catch(() => void 0);
+
   let answer: string | null;
   try {
-    answer = await handleQuestion(message, botName, question, memoryContext, history);
+    answer = await handleQuestion(message, botName, question, sessionPath, memoryContext);
   } finally {
-    agentSemaphore.release();
+    release();
   }
 
   if (answer) {
@@ -260,9 +183,12 @@ client.once(Events.ClientReady, (c) => {
   c.user.setActivity("StarPilot questions", { type: ActivityType.Listening });
 });
 
+client.on(Events.ThreadDelete, (thread) => {
+  deleteSession(thread.id);
+});
+
 export const isBotReady = () => client.isReady();
 export const startBot = async () => client.login(config.DISCORD_TOKEN);
 export const stopBot = async () => {
-  clearInterval(rateLimitCleanup);
   await client.destroy();
 };

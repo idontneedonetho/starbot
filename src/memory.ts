@@ -1,16 +1,32 @@
 import Database from "better-sqlite3";
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { singleTurnLlm } from "./agent.js";
-import { EXTRACTOR_SYSTEM, COMPRESSOR_SYSTEM, REFRESH_SYSTEM } from "./prompts/memory.js";
-import { parseJsonArrayFromLLM, buildCompressPrompt } from "./utils/llm.js";
+import { EXTRACTOR_SYSTEM, COMPRESSOR_SYSTEM } from "./prompts.js";
+import { config } from "./config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = path.resolve(__dirname, "../data/memories.db");
 
 const MAX_FACTS = 10;
-const MAX_CONVERSATION_PAIRS = 10;
-const MEMORY_REFRESH_BATCH_SIZE = 5;
+
+function parseJsonArrayFromLLM<T>(raw: string): T[] {
+  try {
+    const cleaned = raw.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
+    const parsed = JSON.parse(cleaned);
+    if (Array.isArray(parsed)) {
+      return parsed.filter((f): f is T => typeof f === "string");
+    }
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+function buildCompressPrompt(facts: string[]): string {
+  return `Facts:\n${facts.map((f, i) => `${i + 1}. ${f}`).join("\n")}`;
+}
 
 const db = new Database(DB_PATH);
 
@@ -20,25 +36,13 @@ db.exec(`
     facts TEXT DEFAULT '[]',
     updated_at TEXT NOT NULL
   );
-  
-  CREATE TABLE IF NOT EXISTS conversations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT NOT NULL,
-    question TEXT NOT NULL,
-    answer TEXT NOT NULL,
-    created_at TEXT NOT NULL
-  );
-  
-  CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations(user_id);
-  CREATE INDEX IF NOT EXISTS idx_conversations_created_at ON conversations(created_at);
 `);
 
-function getProfile(userId: string): { facts: string[]; updatedAt: string } {
-  const row = db.prepare("SELECT facts, updated_at FROM user_profiles WHERE user_id = ?").get(userId) as { facts: string; updated_at: string } | undefined;
-  if (!row) return { facts: [], updatedAt: new Date().toISOString() };
+function getProfile(userId: string): { facts: string[] } {
+  const row = db.prepare("SELECT facts FROM user_profiles WHERE user_id = ?").get(userId) as { facts: string } | undefined;
+  if (!row) return { facts: [] };
   return {
     facts: JSON.parse(row.facts),
-    updatedAt: row.updated_at,
   };
 }
 
@@ -51,27 +55,23 @@ function saveProfile(userId: string, facts: string[]): void {
   stmt.run(userId, JSON.stringify(facts), new Date().toISOString());
 }
 
-function saveConversation(userId: string, question: string, answer: string): void {
-  db.prepare(`
-    INSERT INTO conversations (user_id, question, answer, created_at)
-    VALUES (?, ?, ?, ?)
-  `).run(userId, question, answer, new Date().toISOString());
-
-  db.prepare(`
-    DELETE FROM conversations WHERE user_id = ? AND id NOT IN (
-      SELECT id FROM conversations WHERE user_id = ? ORDER BY created_at DESC LIMIT ?
-    )
-  `).run(userId, userId, MAX_CONVERSATION_PAIRS);
+function ensureSessionDir(): void {
+  if (!fs.existsSync(config.SESSION_DIR)) {
+    fs.mkdirSync(config.SESSION_DIR, { recursive: true });
+  }
 }
 
-function getConversationHistory(userId: string): { question: string; answer: string }[] {
-  const rows = db.prepare(`
-    SELECT question, answer FROM conversations 
-    WHERE user_id = ? 
-    ORDER BY created_at DESC 
-    LIMIT ?
-  `).all(userId, MAX_CONVERSATION_PAIRS) as { question: string; answer: string }[];
-  return rows.reverse();
+export function getOrCreateSessionPath(threadId: string): string {
+  ensureSessionDir();
+  return path.join(config.SESSION_DIR, `${threadId}.jsonl`);
+}
+
+export function deleteSession(threadId: string): void {
+  const sessionPath = path.join(config.SESSION_DIR, `${threadId}.jsonl`);
+  if (fs.existsSync(sessionPath)) {
+    fs.unlinkSync(sessionPath);
+    console.log(`[memory] Deleted session for thread ${threadId}`);
+  }
 }
 
 export async function extractAndUpdateMemory(
@@ -86,8 +86,6 @@ export async function extractAndUpdateMemory(
     const raw = await singleTurnLlm(EXTRACTOR_SYSTEM, prompt);
 
     const newFacts: string[] = parseJsonArrayFromLLM(raw);
-
-    saveConversation(userId, question, answer);
 
     if (newFacts.length === 0) return;
 
@@ -111,71 +109,12 @@ export async function extractAndUpdateMemory(
 
 export async function buildMemoryContext(userId: string, username: string): Promise<string> {
   const profile = getProfile(userId);
-  const conversationHistory = getConversationHistory(userId);
 
-  const parts: string[] = [];
+  if (profile.facts.length === 0) return "";
 
-  if (profile.facts.length) {
-    const factsText = profile.facts.length === 1
-      ? profile.facts[0]
-      : profile.facts.map((f) => `- ${f}`).join("\n");
-    parts.push(`[What you know about ${username}]\n${factsText}`);
-  }
+  const factsText = profile.facts.length === 1
+    ? profile.facts[0]
+    : profile.facts.map((f) => `- ${f}`).join("\n");
 
-  if (conversationHistory.length) {
-    const historyText = conversationHistory
-      .slice(-3)
-      .map((c) => `Q: ${c.question}\nA: ${c.answer.slice(0, 200)}`)
-      .join("\n\n");
-    parts.push(`[Recent conversation]\n${historyText}`);
-  }
-
-  if (!parts.length) return "";
-
-  return parts.join("\n\n") + "\n\nUse this context if relevant to their question.\n\n";
-}
-
-export async function refreshAllUserMemories(): Promise<void> {
-  console.log("[memory] Starting periodic memory refresh...");
-
-  const userIds = db.prepare("SELECT user_id FROM user_profiles").all() as { user_id: string }[];
-  let refreshed = 0;
-
-  const processUser = async (userId: string): Promise<boolean> => {
-    try {
-      const history = getConversationHistory(userId);
-      if (history.length === 0) return false;
-
-      const historyText = history
-        .map((c) => `Q: ${c.question}\nA: ${c.answer}`)
-        .join("\n\n---\n\n");
-
-      const raw = await singleTurnLlm(REFRESH_SYSTEM, historyText);
-
-      const newFacts: string[] = parseJsonArrayFromLLM(raw);
-      if (newFacts.length === 0) return false;
-
-      let finalFacts: string[];
-      if (newFacts.length > MAX_FACTS) {
-        const summary = await singleTurnLlm(COMPRESSOR_SYSTEM, buildCompressPrompt(newFacts));
-        finalFacts = [summary.trim()];
-      } else {
-        finalFacts = newFacts;
-      }
-
-      saveProfile(userId, finalFacts);
-      return true;
-    } catch (err) {
-      console.warn(`[memory] Failed to refresh memory for user ${userId}:`, err);
-      return false;
-    }
-  };
-
-  for (let i = 0; i < userIds.length; i += MEMORY_REFRESH_BATCH_SIZE) {
-    const batch = userIds.slice(i, i + MEMORY_REFRESH_BATCH_SIZE);
-    const results = await Promise.all(batch.map((u) => processUser(u.user_id)));
-    refreshed += results.filter(Boolean).length;
-  }
-
-  console.log(`[memory] Refreshed ${refreshed}/${userIds.length} user profiles`);
+  return `[What you know about ${username}]\n${factsText}\n\nUse this context if relevant to their question.\n\n`;
 }

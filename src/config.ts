@@ -48,9 +48,12 @@ export const config = {
     "REPO_CACHE_DIR",
     path.resolve(__dirname, "../repo-cache/starpilot")
   ),
+  SESSION_DIR: optionalEnv(
+    "SESSION_DIR",
+    path.resolve(__dirname, "../data/sessions")
+  ),
 
   SYNC_CRON: optionalEnv("SYNC_CRON", "0 * * * *"),
-  MEMORY_REFRESH_CRON: optionalEnv("MEMORY_REFRESH_CRON", "0 4 * * *"),
   ANSWER_TIMEOUT_SECONDS: parseInt(
     optionalEnv("ANSWER_TIMEOUT_SECONDS", "90"),
     10

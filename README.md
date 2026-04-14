@@ -9,11 +9,11 @@ StarBot keeps a local shallow clone of the StarPilot repository up to date and s
 ## Capabilities
 
 - **Natural Mention Interface**: Simply ping the bot (e.g., `@BotName`) to ask a question. No slash commands required.
-- **Continuous Conversations**: StarBot analyzes Discord's native reply chains to seamlessly maintain thread context.
+- **Persistent Thread Sessions**: Each Discord thread gets its own persistent pi-coding-agent session. Continue the conversation naturally - the agent remembers previous messages in that thread.
 - **Automatic User Memory**: An asynchronous LLM pipeline silently extracts and stores facts about your vehicle, hardware setup (like ZSS or pedal interceptors), and preferences in local SQLite storage so you don't have to repeat yourself.
 - **Automated Codebase Syncing**: Automatically clones and shallow-syncs the targeted StarPilot branch on an hourly cron schedule to save bandwidth and ensure accuracy.
 - **Robust Message Chunking**: Intelligent code-aware chunking effortlessly handles responses longer than Discord's 2,000 character limit without breaking code blocks.
-- **Zero-Trust Agent**: Agent sessions are isolated to specific questions and the repository is kept completely read-only.
+- **Session Cleanup**: When a Discord thread is deleted, the corresponding session file is automatically removed.
 - **Production-Ready Docker**: Features a lightweight multi-stage Docker build with graceful process stop/shutdown built-in.
 
 ---
@@ -51,6 +51,7 @@ Fill in the required values in your `.env` file:
 | `CHEAP_LLM_MODEL` | | Optional cheaper model ID (e.g., `claude-haiku-3-5`) |
 | `STARPILOT_REPO_URL` | | Fork URL (default: `https://github.com/firestar5683/starpilot`) |
 | `STARPILOT_BRANCH` | | Branch to track (default: `StarPilot`) |
+| `SESSION_DIR` | | Session storage directory (default: `./data/sessions`) |
 | `ANSWER_TIMEOUT_SECONDS` | | Agent inference timeout (default: `90`) |
 
 ### 2. Invite the bot to your server
@@ -92,7 +93,7 @@ Simply mention the bot (using its name or server nickname) to initialize an inte
 _(The bot will instantly react with 👀 to let you know it's thinking, then sequentially output its answers, updating the initial reaction to ✅ upon completion)._
 
 **Continuing a topic:**
-Simply use Discord's native *Reply* feature to respond to one of the bot's messages, and it will automatically crawl up the reply chain to establish the conversation history and context.
+Simply reply to one of the bot's messages in the same thread. The agent will remember the entire conversation in that thread via persistent sessions.
 
 **Leveraging Memory:**
 If you ever mention *"I drive a 2017 Chevy Volt with a Comma 3X"*, StarBot will quietly extract and compress this detail in the background, automatically saving it to a local SQLite database (`./data/memories.db`). You can then comfortably ask *"where is the steering control logic for my car?"* entirely out of context down the line.
@@ -104,23 +105,24 @@ If you ever mention *"I drive a 2017 Chevy Volt with a Comma 3X"*, StarBot will 
 ```
 Discord User
     │
-    ▼ @mention or Native Reply
+    ▼ @mention in thread
 discord.js bot (src/bot.ts)
     │
-    ├── Analyzes Message Thread History via Discord API
-    ├── Loads Stored User Context from memory.ts (SQLite)
+    ├── Get/create session for thread (./data/sessions/<threadId>.jsonl)
+    ├── Load user facts from memory.ts (SQLite)
     │
     ▼
 pi-coding-agent inference (src/agent.ts)
     │
     ├── cwd = local clone (./repo-cache/starpilot) (Kept up-to-date by node-cron)
+    ├── Session persists conversation history in JSONL file
     ├── LLM dynamically loads/greps required code files via SDK read tools
     └── Generates concise answer based on source code findings
     │
     ▼
 Background Extraction               Discord Message
 (src/memory.ts via LLM)      ◄────  Intelligent text chunking (max 2000 chars)
-Extracted facts saved               Reaction status cleanly updated (👀 -> ✅)
+User facts saved to SQLite          Reaction status cleanly updated (👀 -> ✅)
 ```
 
 ### File Structure
@@ -129,19 +131,14 @@ Extracted facts saved               Reaction status cleanly updated (👀 -> ✅
 src/
 ├── index.ts          # Entry point, health server, cron jobs
 ├── bot.ts            # Discord client, message handlers
-├── agent.ts          # pi-coding-agent session wrapper
-├── config.ts         # Environment configuration
-├── memory.ts         # SQLite user profiles & conversation history
-├── providers.ts      # LLM model registry
-├── repoSync.ts       # Git clone/sync with retry logic
-├── prompts/          # LLM system prompts
-│   ├── agent.ts      # System prompt & history formatting
-│   └── memory.ts     # Extraction/compression prompts
-└── utils/            # Shared utilities
-    ├── rateLimiter.ts
-    ├── semaphore.ts
-    ├── chunking.ts  # Discord-safe text chunking
-    └── llm.ts       # JSON parsing & prompt helpers
+├── agent.ts          # pi-coding-agent session wrapper + LLM providers
+├── config.ts        # Environment configuration
+├── memory.ts        # SQLite user profiles & thread sessions
+├── prompts.ts       # LLM system prompts
+├── repoSync.ts      # Git clone/sync with retry logic
+└── utils/
+    ├── limits.ts    # npm packages (semaphore + rate limiter)
+    └── chunking.ts  # Discord-safe text chunking
 ```
 
 ---
