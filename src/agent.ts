@@ -6,10 +6,6 @@ import { buildSystemPrompt } from "./prompts.js";
 const authStorage = AuthStorage.create();
 authStorage.setRuntimeApiKey(config.LLM_PROVIDER, config.LLM_API_KEY);
 
-if (config.CHEAP_LLM_PROVIDER && config.CHEAP_LLM_MODEL) {
-  authStorage.setRuntimeApiKey(config.CHEAP_LLM_PROVIDER, config.LLM_API_KEY);
-}
-
 const modelRegistry = ModelRegistry.create(authStorage);
 
 const mainModel = modelRegistry.find(config.LLM_PROVIDER, config.LLM_MODEL);

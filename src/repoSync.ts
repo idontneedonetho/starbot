@@ -50,6 +50,10 @@ async function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function getRetryDelay(attempt: number): number {
+  return RETRY_DELAY_MS * Math.pow(2, attempt - 1);
+}
+
 /** Synchronizes repo state with remote origin */
 export async function syncRepo(): Promise<void> {
   if (initPromise) await initPromise;
@@ -75,8 +79,9 @@ export async function syncRepo(): Promise<void> {
       lastError = err as Error;
       console.warn(`[repoSync] Attempt ${attempt} failed:`, err);
       if (attempt < MAX_RETRIES) {
-        console.log(`[repoSync] Retrying in ${RETRY_DELAY_MS / 1000}s...`);
-        await sleep(RETRY_DELAY_MS);
+        const delay = getRetryDelay(attempt);
+        console.log(`[repoSync] Retrying in ${delay / 1000}s...`);
+        await sleep(delay);
       }
     }
   }

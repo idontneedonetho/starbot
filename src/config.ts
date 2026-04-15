@@ -42,7 +42,7 @@ export const SESSION_DIR = config.SESSION_DIR ?? defaultSessionDir;
 
 export function validateConfig(): void {
   if (!config.LLM_MODEL || !config.REPO_CACHE_DIR || !config.SESSION_DIR) {
-    throw new Error("[config] Missing required configuration");
+    throw new Error("[config] Invalid configuration");
   }
   if (ANSWER_TIMEOUT_SECONDS < 10 || ANSWER_TIMEOUT_SECONDS > 300) {
     throw new Error("[config] ANSWER_TIMEOUT_SECONDS must be between 10 and 300");

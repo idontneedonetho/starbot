@@ -46,18 +46,28 @@ function parseFactsFromLLM(raw: string): Fact[] {
   }
 }
 
-const db = new Database(DB_PATH);
+let db: Database.Database | null = null;
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS user_profiles (
-    user_id TEXT PRIMARY KEY,
-    facts TEXT DEFAULT '[]',
-    updated_at TEXT NOT NULL
-  );
-`);
+function getDb(): Database.Database {
+  if (!db) {
+    const dbDir = path.dirname(DB_PATH);
+    if (!fs.existsSync(dbDir)) {
+      fs.mkdirSync(dbDir, { recursive: true });
+    }
+    db = new Database(DB_PATH);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS user_profiles (
+        user_id TEXT PRIMARY KEY,
+        facts TEXT DEFAULT '[]',
+        updated_at TEXT NOT NULL
+      );
+    `);
+  }
+  return db;
+}
 
 function getProfile(userId: string): { facts: Fact[] } {
-  const row = db.prepare("SELECT facts FROM user_profiles WHERE user_id = ?").get(userId) as { facts: string } | undefined;
+  const row = getDb().prepare("SELECT facts FROM user_profiles WHERE user_id = ?").get(userId) as { facts: string } | undefined;
   if (!row) return { facts: [] };
   return {
     facts: JSON.parse(row.facts),
@@ -65,7 +75,7 @@ function getProfile(userId: string): { facts: Fact[] } {
 }
 
 function saveProfile(userId: string, facts: Fact[]): void {
-  db.prepare(`
+  getDb().prepare(`
     INSERT INTO user_profiles (user_id, facts, updated_at)
     VALUES (?, ?, ?)
     ON CONFLICT(user_id) DO UPDATE SET facts = excluded.facts, updated_at = excluded.updated_at

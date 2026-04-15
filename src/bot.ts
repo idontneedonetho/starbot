@@ -98,9 +98,7 @@ async function handleQuestion(
     }
 
     const reactions = [...message.reactions.cache.values()];
-    for (const reaction of reactions) {
-      await reaction.users.remove(client.user?.id).catch(() => void 0);
-    }
+    await Promise.all(reactions.map(r => r.users.remove(client.user?.id).catch(() => void 0)));
     await message.react(EMOJI_DONE).catch(() => void 0);
     return answer;
   } catch (err) {
@@ -165,9 +163,7 @@ client.on(Events.MessageCreate, async (message: Message) => {
   const { release } = await acquireWithQueuePosition();
 
   const currentReactions = [...message.reactions.cache.values()];
-  for (const reaction of currentReactions) {
-    await reaction.users.remove(client.user?.id).catch(() => void 0);
-  }
+  await Promise.all(currentReactions.map(r => r.users.remove(client.user?.id).catch(() => void 0)));
   await message.react("⏳").catch(() => void 0);
 
   let answer: string | null;
@@ -185,6 +181,18 @@ client.on(Events.MessageCreate, async (message: Message) => {
 client.once(Events.ClientReady, (c) => {
   console.log(`[bot] Logged in as ${c.user.tag}`);
   c.user.setActivity("StarPilot questions", { type: ActivityType.Listening });
+});
+
+client.on(Events.Warn, (info) => {
+  console.warn(`[bot] Warning: ${info}`);
+});
+
+client.on(Events.ShardDisconnect, (event, id) => {
+  console.log(`[bot] Shard ${id} disconnected. Code: ${event.code}, reason: ${event.reason}`);
+});
+
+client.on(Events.ShardReconnecting, (id) => {
+  console.log(`[bot] Reconnecting shard ${id}...`);
 });
 
 client.on(Events.ThreadDelete, (thread) => {
