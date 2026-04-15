@@ -1,5 +1,5 @@
-import { AuthStorage, ModelRegistry, createAgentSession, DefaultResourceLoader, SessionManager, type AgentSession, type AgentSessionEventListener } from "@mariozechner/pi-coding-agent";
-import fs from "fs";
+import { AuthStorage, ModelRegistry, createAgentSession, DefaultResourceLoader, SessionManager, type AgentSession, type AgentSessionEventListener, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { buildMemoryContext } from "./memory.js";
 import { config } from "./config.js";
 import { buildSystemPrompt } from "./prompts.js";
 
@@ -32,10 +32,30 @@ function createTextCollector(onText: (text: string) => void): AgentSessionEventL
 
 const loaderCache = new Map<string, DefaultResourceLoader>();
 
+const memoryExtension = (pi: ExtensionAPI) => {
+  pi.on("before_agent_start", async (event) => {
+    const userIdMatch = event.prompt.match(/\[user_id:(\d+)\]/);
+    if (userIdMatch) {
+      const userId = userIdMatch[1];
+      const memory = await buildMemoryContext(userId, "User");
+      if (memory) {
+        return {
+          systemPrompt: event.systemPrompt + "\n\n" + memory,
+          prompt: event.prompt.replace(`[user_id:${userId}]`, "").trim(),
+        };
+      }
+    }
+  });
+};
+
 function getLoader(cwd: string, systemPrompt: string): DefaultResourceLoader {
   const key = `${cwd}:${systemPrompt}`;
   if (!loaderCache.has(key)) {
-    const loader = new DefaultResourceLoader({ cwd, systemPromptOverride: () => systemPrompt });
+    const loader = new DefaultResourceLoader({
+      cwd,
+      systemPromptOverride: () => systemPrompt,
+      extensionFactories: [memoryExtension],
+    });
     loaderCache.set(key, loader);
   }
   return loaderCache.get(key)!;
@@ -79,7 +99,7 @@ export async function singleTurnLlm(systemPrompt: string, userMessage: string, m
   return result.trim();
 }
 
-export async function askAboutRepo(botName: string, question: string, repoCwd: string, sessionPath: string | undefined, memoryContext = "", onProgress?: () => void, onActivity?: () => void): Promise<string> {
+export async function askAboutRepo(botName: string, question: string, repoCwd: string, sessionPath: string | undefined, userId?: string, onProgress?: () => void, onActivity?: () => void): Promise<string> {
   const systemPrompt = buildSystemPrompt(botName);
   const session = await createSession(repoCwd, systemPrompt, true, sessionPath, mainModel);
   let answer = "";
@@ -89,7 +109,7 @@ export async function askAboutRepo(botName: string, question: string, repoCwd: s
     }
   });
   session.subscribe(createTextCollector((text) => { answer += text; onProgress?.(); }));
-  const fullPrompt = memoryContext ? `${memoryContext}\n\n${question}` : question;
+  const fullPrompt = userId ? `[user_id:${userId}]\n\n${question}` : question;
   try {
     await session.prompt(fullPrompt);
   } finally {

@@ -13,7 +13,7 @@ const DB_PATH = path.resolve(__dirname, "../data/memories.db");
 const MAX_FACTS = 5;
 const MIN_CONFIDENCE = 3;
 
-const CategoryStruct = enums(["vehicle", "hardware", "role", "preference"]);
+const CategoryStruct = enums(["vehicle", "hardware", "expertise", "preference", "useCase", "knownIssues", "goals"]);
 const FactStruct = object({
   category: CategoryStruct,
   content: string(),
@@ -21,7 +21,7 @@ const FactStruct = object({
 });
 
 interface Fact {
-  category: "vehicle" | "hardware" | "role" | "preference";
+  category: "vehicle" | "hardware" | "expertise" | "preference" | "useCase" | "knownIssues" | "goals";
   content: string;
   confidence: number;
 }
@@ -154,8 +154,11 @@ export async function buildMemoryContext(userId: string, username: string): Prom
   const byCategory: Record<string, string[]> = {
     vehicle: [],
     hardware: [],
-    role: [],
+    expertise: [],
     preference: [],
+    useCase: [],
+    knownIssues: [],
+    goals: [],
   };
 
   for (const fact of profile.facts) {
@@ -163,11 +166,14 @@ export async function buildMemoryContext(userId: string, username: string): Prom
   }
 
   const parts: string[] = [`[What you know about ${username}]`];
-  
+
   if (byCategory.vehicle.length) parts.push(`Vehicle: ${byCategory.vehicle.join(", ")}`);
   if (byCategory.hardware.length) parts.push(`Hardware: ${byCategory.hardware.join(", ")}`);
-  if (byCategory.role.length) parts.push(`Role: ${byCategory.role.join(", ")}`);
+  if (byCategory.expertise.length) parts.push(`Expertise: ${byCategory.expertise.join(", ")}`);
   if (byCategory.preference.length) parts.push(`Preferences: ${byCategory.preference.join(", ")}`);
+  if (byCategory.useCase.length) parts.push(`Use Case: ${byCategory.useCase.join(", ")}`);
+  if (byCategory.knownIssues.length) parts.push(`Known Issues: ${byCategory.knownIssues.join(", ")}`);
+  if (byCategory.goals.length) parts.push(`Goals: ${byCategory.goals.join(", ")}`);
 
   return parts.join("\n") + "\n\nUse this context if relevant to their question.\n\n";
 }

@@ -11,7 +11,7 @@ import {
 import { config, ALLOWED_CHANNEL_IDS, ANSWER_TIMEOUT_SECONDS } from "./config.js";
 import { askAboutRepo } from "./agent.js";
 import { getRepoCacheDir } from "./repoSync.js";
-import { buildMemoryContext, extractAndUpdateMemory, getOrCreateSessionPath, deleteSession } from "./memory.js";
+import { extractAndUpdateMemory, getOrCreateSessionPath, deleteSession } from "./memory.js";
 import { tryAcquireRateLimit, acquireWithQueuePosition, getQueuePosition } from "./utils/limits.js";
 import { chunkAnswer } from "./utils/chunking.js";
 
@@ -66,7 +66,7 @@ async function handleQuestion(
   botName: string,
   question: string,
   sessionPath: string,
-  memoryContext: string
+  userId: string
 ): Promise<{ answer: string; sessionThreadId: string } | null> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -80,7 +80,7 @@ async function handleQuestion(
 
   try {
     const answer = await Promise.race([
-      askAboutRepo(botName, question, getRepoCacheDir(), sessionPath, memoryContext, resetTimer, resetTimer),
+      askAboutRepo(botName, question, getRepoCacheDir(), sessionPath, userId, resetTimer, resetTimer),
       timeout,
     ]);
     clearTimeout(timer);
@@ -109,7 +109,7 @@ async function handleQuestion(
       lastMsg = await lastMsg.reply(chunks[i]);
     }
 
-    await message.reactions.resolve("⏳")?.remove();
+    await clearReactions(message);
     await react(message, EMOJI_DONE);
     return { answer, sessionThreadId: threadTarget ? threadTarget.id : message.channel.id };
   } catch (err) {
@@ -123,7 +123,7 @@ async function handleQuestion(
         : `❌ Something went wrong. Please try again.`
     );
 
-    await message.reactions.resolve("⏳")?.remove();
+    await clearReactions(message);
     await react(message, EMOJI_ERROR);
 
     const failedThreadId = message.channel.isThread() ? message.channel.id : message.id;
@@ -166,7 +166,7 @@ client.on(Events.MessageCreate, async (message: Message) => {
 
   await react(message, EMOJI_SEEN);
 
-  const memoryContext = await buildMemoryContext(message.author.id, message.author.username);
+  const userId = message.author.id;
 
   const queuePos = getQueuePosition();
   await clearReactions(message);
@@ -185,7 +185,7 @@ client.on(Events.MessageCreate, async (message: Message) => {
     const initialSessionPath = getOrCreateSessionPath(initialThreadId);
     console.log(`[bot] Using session ${initialSessionPath} for thread ${initialThreadId}`);
 
-    const result = await handleQuestion(message, botName, question, initialSessionPath, memoryContext);
+    const result = await handleQuestion(message, botName, question, initialSessionPath, userId);
     if (result) {
       answer = result.answer;
       sessionPath = getOrCreateSessionPath(result.sessionThreadId);

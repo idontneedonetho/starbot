@@ -22,7 +22,7 @@ Output ONLY a JSON array matching this schema:
   "items": {
     "type": "object",
     "properties": {
-      "category": { "enum": ["vehicle", "hardware", "role", "preference"] },
+      "category": { "enum": ["vehicle", "hardware", "expertise", "preference", "useCase", "knownIssues", "goals"] },
       "content": { "type": "string", "maxLength": 300 },
       "confidence": { "type": "integer", "minimum": 1, "maximum": 5 }
     },
@@ -32,9 +32,12 @@ Output ONLY a JSON array matching this schema:
 
 Allowed categories:
 - "vehicle": year/make/model (e.g. "Has a 2019 Chevy Bolt EV")
-- "hardware": comma device, modifications (e.g. "Uses Comma 3X", "Has ZSS")
-- "role": developer, tester, daily driver, etc.
-- "preference": explicit preferences or constraints
+- "hardware": comma device, sensors, modifications (e.g. "Uses Comma 3X", "Has ZSS", "LGS01")
+- "expertise": technical skill level (e.g. "expert developer", "beginner", "can read code")
+- "preference": explicit preferences, settings, driving style (e.g. "prefers aggressive lane changes", "wants relaxed following")
+- "useCase": how they use openpilot (e.g. "daily commute", "highway only", "testing development")
+- "knownIssues": problems they've hit (e.g. "lateral control unstable", "disengage on curves")
+- "goals": what they want to achieve (e.g. "improve lane keeping", "enable custom longitudinal")
 
 Rules:
 - ONLY extract facts about the USER, not about StarPilot or code
