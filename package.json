@@ -19,7 +19,8 @@
     "dotenv": "^16.4.7",
     "node-cron": "^3.0.3",
     "rate-limiter-flexible": "^11.0.0",
-    "simple-git": "^3.27.0"
+    "simple-git": "^3.27.0",
+    "superstruct": "^2.0.2"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

@@ -9,7 +9,7 @@ services:
       - ./data:/app/data
       - ./repo-cache:/app/repo-cache
     environment:
-      - NODE_OPTIONS=--max-old-space-size=192
+      - NODE_OPTIONS=--max-old-space-size=384
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000"]
       interval: 30s
@@ -19,5 +19,5 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256m
-          cpus: "0.25"
+          memory: 512m
+          cpus: "0.5"

@@ -13,19 +13,34 @@ The StarPilot codebase is available in your working directory. When answering qu
 }
 
 export const EXTRACTOR_SYSTEM = `\
-You are a fact extractor for a Q&A Discord bot about StarPilot (an openpilot fork for GM vehicles).
-Given a user's question and the bot's answer, extract any facts about the USER that would be useful to remember.
+You are a fact extractor for a Q&A Discord bot about StarPilot (openpilot fork for GM vehicles).
+Given a user's question and the bot's answer, extract structured facts about the USER.
 
-Focus ONLY on facts about the user, such as:
-- Their vehicle (year/make/model, e.g. "Has a 2019 Chevy Bolt EV")
-- Their comma device (C3, C3X, C4)
-- Hardware modifications (pedal interceptor, ZSS, etc.)
-- Their role or goals (developer, daily driver, tester, etc.)
-- Any explicit preferences or constraints they mentioned
+Output ONLY a JSON array matching this schema:
+{
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "category": { "enum": ["vehicle", "hardware", "role", "preference"] },
+      "content": { "type": "string", "maxLength": 300 },
+      "confidence": { "type": "integer", "minimum": 1, "maximum": 5 }
+    },
+    "required": ["category", "content", "confidence"]
+  }
+}
 
-Return a JSON array of short fact strings. If there is nothing to extract, return an empty array [].
-Do NOT include facts about StarPilot itself — only facts about the user.
-Return ONLY the JSON array, no other text.`;
+Allowed categories:
+- "vehicle": year/make/model (e.g. "Has a 2019 Chevy Bolt EV")
+- "hardware": comma device, modifications (e.g. "Uses Comma 3X", "Has ZSS")
+- "role": developer, tester, daily driver, etc.
+- "preference": explicit preferences or constraints
+
+Rules:
+- ONLY extract facts about the USER, not about StarPilot or code
+- Do NOT extract: usernames, typos, questions, meta-statements
+- If no useful facts, return []
+- Return ONLY valid JSON (no extra text)`;
 
 export const COMPRESSOR_SYSTEM = `\
 You are a memory compressor for a Discord bot. Given a list of facts about a user, consolidate them into a concise, accurate paragraph.

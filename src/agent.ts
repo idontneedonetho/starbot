@@ -1,4 +1,5 @@
 import { AuthStorage, ModelRegistry, createAgentSession, DefaultResourceLoader, SessionManager, type AgentSession, type AgentSessionEventListener } from "@mariozechner/pi-coding-agent";
+import fs from "fs";
 import { config } from "./config.js";
 import { buildSystemPrompt } from "./prompts.js";
 
@@ -38,10 +39,10 @@ async function createSession(cwd: string, systemPrompt: string, useTools: boolea
   await loader.reload();
 
   let sessionManager: SessionManager;
-  if (sessionPath) {
-    sessionManager = require("fs").existsSync(sessionPath) ? SessionManager.open(sessionPath) : SessionManager.create(cwd, sessionPath);
+  if (sessionPath && fs.existsSync(sessionPath) && fs.statSync(sessionPath).isFile()) {
+    sessionManager = SessionManager.open(sessionPath);
   } else {
-    sessionManager = SessionManager.inMemory();
+    sessionManager = SessionManager.create(cwd, sessionPath ?? "");
   }
 
   const { session } = await createAgentSession({ cwd, model, sessionManager, authStorage, modelRegistry, tools: useTools ? undefined : [], resourceLoader: loader });

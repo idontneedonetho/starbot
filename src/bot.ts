@@ -97,6 +97,10 @@ async function handleQuestion(
       lastMsg = await lastMsg.reply(chunks[i]);
     }
 
+    const reactions = [...message.reactions.cache.values()];
+    for (const reaction of reactions) {
+      await reaction.users.remove(client.user?.id).catch(() => void 0);
+    }
     await message.react(EMOJI_DONE).catch(() => void 0);
     return answer;
   } catch (err) {
