@@ -47,8 +47,17 @@ async function createSession(cwd: string, systemPrompt: string, useTools: boolea
 
   let sessionManager: SessionManager;
   if (sessionPath) {
-    const stat = fs.statSync(sessionPath);
-    sessionManager = stat.isFile() ? SessionManager.open(sessionPath) : SessionManager.create(cwd, sessionPath);
+    try {
+      const sessions = await SessionManager.list(cwd, sessionPath);
+      if (sessions.length > 0) {
+        const mostRecent = sessions[sessions.length - 1];
+        sessionManager = SessionManager.open(mostRecent.path, sessionPath);
+      } else {
+        sessionManager = SessionManager.create(cwd, sessionPath);
+      }
+    } catch {
+      sessionManager = SessionManager.create(cwd, sessionPath);
+    }
   } else {
     sessionManager = SessionManager.inMemory();
   }
@@ -70,15 +79,21 @@ export async function singleTurnLlm(systemPrompt: string, userMessage: string, m
   return result.trim();
 }
 
-export async function askAboutRepo(botName: string, question: string, repoCwd: string, sessionPath: string | undefined, memoryContext = "", onProgress?: () => void): Promise<string> {
+export async function askAboutRepo(botName: string, question: string, repoCwd: string, sessionPath: string | undefined, memoryContext = "", onProgress?: () => void, onActivity?: () => void): Promise<string> {
   const systemPrompt = buildSystemPrompt(botName);
   const session = await createSession(repoCwd, systemPrompt, true, sessionPath, mainModel);
   let answer = "";
+  const unsubActivity = session.subscribe((event) => {
+    if (onActivity && (event.type === "turn_start" || event.type === "tool_execution_start" || event.type === "message_start")) {
+      onActivity();
+    }
+  });
   session.subscribe(createTextCollector((text) => { answer += text; onProgress?.(); }));
   const fullPrompt = memoryContext ? `${memoryContext}\n\n${question}` : question;
   try {
     await session.prompt(fullPrompt);
   } finally {
+    unsubActivity();
     session.dispose();
   }
   return answer.trim() || "I was unable to generate an answer. Please try again.";

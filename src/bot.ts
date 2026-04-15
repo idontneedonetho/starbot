@@ -1,3 +1,4 @@
+import fs from "fs";
 import {
   Client,
   GatewayIntentBits,
@@ -66,7 +67,7 @@ async function handleQuestion(
   question: string,
   sessionPath: string,
   memoryContext: string
-) {
+): Promise<{ answer: string; sessionThreadId: string } | null> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(
@@ -79,7 +80,7 @@ async function handleQuestion(
 
   try {
     const answer = await Promise.race([
-      askAboutRepo(botName, question, getRepoCacheDir(), sessionPath, memoryContext, resetTimer),
+      askAboutRepo(botName, question, getRepoCacheDir(), sessionPath, memoryContext, resetTimer, resetTimer),
       timeout,
     ]);
     clearTimeout(timer);
@@ -108,8 +109,9 @@ async function handleQuestion(
       lastMsg = await lastMsg.reply(chunks[i]);
     }
 
+    await message.reactions.resolve("⏳")?.remove();
     await react(message, EMOJI_DONE);
-    return answer;
+    return { answer, sessionThreadId: threadTarget ? threadTarget.id : message.channel.id };
   } catch (err) {
     clearTimeout(timer);
     const isTimeout = err instanceof Error && err.message === "timeout";
@@ -121,7 +123,15 @@ async function handleQuestion(
         : `❌ Something went wrong. Please try again.`
     );
 
+    await message.reactions.resolve("⏳")?.remove();
     await react(message, EMOJI_ERROR);
+
+    const failedThreadId = message.channel.isThread() ? message.channel.id : message.id;
+    const failedSessionPath = getOrCreateSessionPath(failedThreadId);
+    if (fs.existsSync(failedSessionPath)) {
+      fs.rmSync(failedSessionPath, { recursive: true, force: true });
+      console.log(`[bot] Cleaned up orphaned session: ${failedSessionPath}`);
+    }
     return null;
   }
 }
@@ -156,10 +166,6 @@ client.on(Events.MessageCreate, async (message: Message) => {
 
   await react(message, EMOJI_SEEN);
 
-  const threadId = getThreadId(message);
-  const sessionPath = getOrCreateSessionPath(threadId);
-  console.log(`[bot] Using session ${sessionPath} for thread ${threadId}`);
-
   const memoryContext = await buildMemoryContext(message.author.id, message.author.username);
 
   const queuePos = getQueuePosition();
@@ -172,9 +178,19 @@ client.on(Events.MessageCreate, async (message: Message) => {
 
   await react(message, "⏳");
 
-  let answer: string | null;
+  let answer: string | null = null;
+  let sessionPath: string | undefined;
   try {
-    answer = await handleQuestion(message, botName, question, sessionPath, memoryContext);
+    const initialThreadId = getThreadId(message);
+    const initialSessionPath = getOrCreateSessionPath(initialThreadId);
+    console.log(`[bot] Using session ${initialSessionPath} for thread ${initialThreadId}`);
+
+    const result = await handleQuestion(message, botName, question, initialSessionPath, memoryContext);
+    if (result) {
+      answer = result.answer;
+      sessionPath = getOrCreateSessionPath(result.sessionThreadId);
+      console.log(`[bot] Session now using thread ${result.sessionThreadId}: ${sessionPath}`);
+    }
   } finally {
     release();
   }

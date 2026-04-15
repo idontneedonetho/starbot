@@ -99,9 +99,9 @@ export function getOrCreateSessionPath(threadId: string): string {
 }
 
 export function deleteSession(threadId: string): void {
-  const sessionPath = path.join(SESSION_DIR, threadId);
-  if (fs.existsSync(sessionPath)) {
-    fs.unlinkSync(sessionPath);
+  const sessionDir = path.join(SESSION_DIR, threadId);
+  if (fs.existsSync(sessionDir)) {
+    fs.rmSync(sessionDir, { recursive: true, force: true });
     console.log(`[memory] Deleted session for thread ${threadId}`);
   }
 }
