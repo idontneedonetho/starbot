@@ -82,27 +82,32 @@ function saveProfile(userId: string, facts: Fact[]): void {
   `).run(userId, JSON.stringify(facts), new Date().toISOString());
 }
 
+let sessionDirEnsured = false;
+
 function ensureSessionDir(): void {
-  if (!fs.existsSync(SESSION_DIR)) {
-    fs.mkdirSync(SESSION_DIR, { recursive: true });
+  if (!sessionDirEnsured) {
+    if (!fs.existsSync(SESSION_DIR)) {
+      fs.mkdirSync(SESSION_DIR, { recursive: true });
+    }
+    sessionDirEnsured = true;
   }
 }
 
 export function getOrCreateSessionPath(threadId: string): string {
   ensureSessionDir();
-  return path.join(SESSION_DIR, `${threadId}.jsonl`);
+  return path.join(SESSION_DIR, threadId);
 }
 
 export function deleteSession(threadId: string): void {
-  const sessionPath = path.join(SESSION_DIR, `${threadId}.jsonl`);
+  const sessionPath = path.join(SESSION_DIR, threadId);
   if (fs.existsSync(sessionPath)) {
-    fs.rmSync(sessionPath, { recursive: true, force: true });
+    fs.unlinkSync(sessionPath);
     console.log(`[memory] Deleted session for thread ${threadId}`);
   }
 }
 
 function formatFactsForCompression(facts: Fact[]): string {
-  return `Facts:\n${facts.map((f, i) => `[${f.category}] ${f.content}`).join("\n")}`;
+  return `Facts:\n${facts.map((f) => `[${f.category}] ${f.content}`).join("\n")}`;
 }
 
 export async function extractAndUpdateMemory(
@@ -159,18 +164,10 @@ export async function buildMemoryContext(userId: string, username: string): Prom
 
   const parts: string[] = [`[What you know about ${username}]`];
   
-  if (byCategory.vehicle.length) {
-    parts.push(`Vehicle: ${byCategory.vehicle.join(", ")}`);
-  }
-  if (byCategory.hardware.length) {
-    parts.push(`Hardware: ${byCategory.hardware.join(", ")}`);
-  }
-  if (byCategory.role.length) {
-    parts.push(`Role: ${byCategory.role.join(", ")}`);
-  }
-  if (byCategory.preference.length) {
-    parts.push(`Preferences: ${byCategory.preference.join(", ")}`);
-  }
+  if (byCategory.vehicle.length) parts.push(`Vehicle: ${byCategory.vehicle.join(", ")}`);
+  if (byCategory.hardware.length) parts.push(`Hardware: ${byCategory.hardware.join(", ")}`);
+  if (byCategory.role.length) parts.push(`Role: ${byCategory.role.join(", ")}`);
+  if (byCategory.preference.length) parts.push(`Preferences: ${byCategory.preference.join(", ")}`);
 
   return parts.join("\n") + "\n\nUse this context if relevant to their question.\n\n";
 }

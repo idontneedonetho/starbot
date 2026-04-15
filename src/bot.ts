@@ -31,6 +31,17 @@ const client = new Client({
 
 const stripMentions = (text: string) => text.replace(/<@!?\d+>/g, "").trim();
 
+const safe = (promise: Promise<unknown>) => promise.catch(() => void 0);
+
+async function clearReactions(message: Message): Promise<void> {
+  await Promise.all([...message.reactions.cache.values()]
+    .map(r => safe(r.users.remove(client.user?.id))));
+}
+
+async function react(message: Message, emoji: string): Promise<void> {
+  await safe(message.react(emoji));
+}
+
 const sanitizeThreadName = (text: string): string => {
   const cleaned = text
     .replace(/[^\w\s\-.,!?()[\]]/g, "")
@@ -97,9 +108,7 @@ async function handleQuestion(
       lastMsg = await lastMsg.reply(chunks[i]);
     }
 
-    const reactions = [...message.reactions.cache.values()];
-    await Promise.all(reactions.map(r => r.users.remove(client.user?.id).catch(() => void 0)));
-    await message.react(EMOJI_DONE).catch(() => void 0);
+    await react(message, EMOJI_DONE);
     return answer;
   } catch (err) {
     clearTimeout(timer);
@@ -112,7 +121,7 @@ async function handleQuestion(
         : `❌ Something went wrong. Please try again.`
     );
 
-    await message.react(EMOJI_ERROR).catch(() => void 0);
+    await react(message, EMOJI_ERROR);
     return null;
   }
 }
@@ -145,7 +154,7 @@ client.on(Events.MessageCreate, async (message: Message) => {
     return;
   }
 
-  await message.react(EMOJI_SEEN).catch(() => void 0);
+  await react(message, EMOJI_SEEN);
 
   const threadId = getThreadId(message);
   const sessionPath = getOrCreateSessionPath(threadId);
@@ -154,17 +163,14 @@ client.on(Events.MessageCreate, async (message: Message) => {
   const memoryContext = await buildMemoryContext(message.author.id, message.author.username);
 
   const queuePos = getQueuePosition();
+  await clearReactions(message);
   if (queuePos > 0) {
-    const queueEmoji = queuePos > 9 ? "🔟" : `${queuePos}⃣`;
-    await message.reactions.cache.get(EMOJI_SEEN)?.users.remove(client.user?.id).catch(() => void 0);
-    await message.react(queueEmoji).catch(() => void 0);
+    await react(message, queuePos > 9 ? "🔟" : `${queuePos}⃣`);
   }
 
   const { release } = await acquireWithQueuePosition();
 
-  const currentReactions = [...message.reactions.cache.values()];
-  await Promise.all(currentReactions.map(r => r.users.remove(client.user?.id).catch(() => void 0)));
-  await message.react("⏳").catch(() => void 0);
+  await react(message, "⏳");
 
   let answer: string | null;
   try {

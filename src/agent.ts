@@ -30,15 +30,27 @@ function createTextCollector(onText: (text: string) => void): AgentSessionEventL
   };
 }
 
+const loaderCache = new Map<string, DefaultResourceLoader>();
+
+function getLoader(cwd: string, systemPrompt: string): DefaultResourceLoader {
+  const key = `${cwd}:${systemPrompt}`;
+  if (!loaderCache.has(key)) {
+    const loader = new DefaultResourceLoader({ cwd, systemPromptOverride: () => systemPrompt });
+    loaderCache.set(key, loader);
+  }
+  return loaderCache.get(key)!;
+}
+
 async function createSession(cwd: string, systemPrompt: string, useTools: boolean, sessionPath: string | undefined, model = mainModel): Promise<AgentSession> {
-  const loader = new DefaultResourceLoader({ cwd, systemPromptOverride: () => systemPrompt });
+  const loader = getLoader(cwd, systemPrompt);
   await loader.reload();
 
   let sessionManager: SessionManager;
-  if (sessionPath && fs.existsSync(sessionPath) && fs.statSync(sessionPath).isFile()) {
-    sessionManager = SessionManager.open(sessionPath);
+  if (sessionPath) {
+    const stat = fs.statSync(sessionPath);
+    sessionManager = stat.isFile() ? SessionManager.open(sessionPath) : SessionManager.create(cwd, sessionPath);
   } else {
-    sessionManager = SessionManager.create(cwd, sessionPath ?? "");
+    sessionManager = SessionManager.inMemory();
   }
 
   const { session } = await createAgentSession({ cwd, model, sessionManager, authStorage, modelRegistry, tools: useTools ? undefined : [], resourceLoader: loader });
@@ -59,7 +71,6 @@ export async function singleTurnLlm(systemPrompt: string, userMessage: string, m
 }
 
 export async function askAboutRepo(botName: string, question: string, repoCwd: string, sessionPath: string | undefined, memoryContext = "", onProgress?: () => void): Promise<string> {
-  if (!mainModel) throw new Error("No main model configured");
   const systemPrompt = buildSystemPrompt(botName);
   const session = await createSession(repoCwd, systemPrompt, true, sessionPath, mainModel);
   let answer = "";
