@@ -1,7 +1,7 @@
 import { simpleGit, type SimpleGit } from "simple-git";
 import fs from "fs";
 import path from "path";
-import { config } from "./config.js";
+import { config, REPO_CACHE_DIR } from "./config.js";
 
 let git: SimpleGit | null = null;
 let lastSuccessfulSync: Date | null = null;
@@ -15,7 +15,7 @@ const RETRY_DELAY_MS = 5000;
 export async function initRepo(): Promise<void> {
   if (initPromise) return initPromise;
   
-  const dir = config.REPO_CACHE_DIR;
+  const dir = REPO_CACHE_DIR;
 
   const doInit = async () => {
     if (fs.existsSync(path.join(dir, ".git"))) {
@@ -54,7 +54,7 @@ async function sleep(ms: number): Promise<void> {
 export async function syncRepo(): Promise<void> {
   if (initPromise) await initPromise;
   if (!git) {
-    git = simpleGit(config.REPO_CACHE_DIR);
+    git = simpleGit(REPO_CACHE_DIR);
   }
 
   let lastError: Error | null = null;
@@ -90,7 +90,7 @@ export async function syncRepo(): Promise<void> {
 }
 
 export function getRepoCacheDir(): string {
-  return config.REPO_CACHE_DIR;
+  return REPO_CACHE_DIR;
 }
 
 export function isRepoReady(): boolean {

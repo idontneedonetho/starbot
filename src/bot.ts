@@ -7,7 +7,7 @@ import {
   Events,
   ActivityType,
 } from "discord.js";
-import { config } from "./config.js";
+import { config, ALLOWED_CHANNEL_IDS, ANSWER_TIMEOUT_SECONDS } from "./config.js";
 import { askAboutRepo } from "./agent.js";
 import { getRepoCacheDir } from "./repoSync.js";
 import { buildMemoryContext, extractAndUpdateMemory, getOrCreateSessionPath, deleteSession } from "./memory.js";
@@ -40,7 +40,7 @@ const sanitizeThreadName = (text: string): string => {
 };
 
 const isAllowedChannel = (id: string) =>
-  config.ALLOWED_CHANNEL_IDS.length === 0 || config.ALLOWED_CHANNEL_IDS.includes(id);
+  ALLOWED_CHANNEL_IDS.length === 0 || ALLOWED_CHANNEL_IDS.includes(id);
 
 function getThreadId(message: Message): string {
   if (message.channel.isThread()) {
@@ -60,7 +60,7 @@ async function handleQuestion(
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(
       () => reject(new Error("timeout")),
-      config.ANSWER_TIMEOUT_SECONDS * 1000
+      ANSWER_TIMEOUT_SECONDS * 1000
     );
   });
 
@@ -110,7 +110,7 @@ async function handleQuestion(
 
     await message.reply(
       isTimeout
-        ? `⏱️ That took too long (>${config.ANSWER_TIMEOUT_SECONDS}s). Try a more specific question.`
+        ? `⏱️ That took too long (>${ANSWER_TIMEOUT_SECONDS}s). Try a more specific question.`
         : `❌ Something went wrong. Please try again.`
     );
 

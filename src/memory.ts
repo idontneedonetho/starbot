@@ -5,7 +5,7 @@ import { fileURLToPath } from "url";
 import { object, string, number, enums, validate } from "superstruct";
 import { singleTurnLlm } from "./agent.js";
 import { EXTRACTOR_SYSTEM, COMPRESSOR_SYSTEM } from "./prompts.js";
-import { config } from "./config.js";
+import { SESSION_DIR } from "./config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = path.resolve(__dirname, "../data/memories.db");
@@ -73,18 +73,18 @@ function saveProfile(userId: string, facts: Fact[]): void {
 }
 
 function ensureSessionDir(): void {
-  if (!fs.existsSync(config.SESSION_DIR)) {
-    fs.mkdirSync(config.SESSION_DIR, { recursive: true });
+  if (!fs.existsSync(SESSION_DIR)) {
+    fs.mkdirSync(SESSION_DIR, { recursive: true });
   }
 }
 
 export function getOrCreateSessionPath(threadId: string): string {
   ensureSessionDir();
-  return path.join(config.SESSION_DIR, `${threadId}.jsonl`);
+  return path.join(SESSION_DIR, `${threadId}.jsonl`);
 }
 
 export function deleteSession(threadId: string): void {
-  const sessionPath = path.join(config.SESSION_DIR, `${threadId}.jsonl`);
+  const sessionPath = path.join(SESSION_DIR, `${threadId}.jsonl`);
   if (fs.existsSync(sessionPath)) {
     fs.rmSync(sessionPath, { recursive: true, force: true });
     console.log(`[memory] Deleted session for thread ${threadId}`);
