@@ -18,21 +18,15 @@ export function tryAcquireRateLimit(userId: string): boolean {
 
 export const semaphore = new ShopifySemaphore(MAX_CONCURRENT);
 
-let waitingCount = 0;
-let runningCount = 0;
+let activeCount = 0;
 
 export async function acquireWithQueuePosition(): Promise<{ release: () => void; position: number }> {
-  const position = waitingCount;
-  waitingCount++;
-  
+  const position = activeCount;
   const permit = await semaphore.acquire();
-  
-  waitingCount--;
-  runningCount++;
-  
+  activeCount++;
   return {
     release: () => {
-      runningCount--;
+      activeCount--;
       permit.release();
     },
     position
@@ -40,5 +34,5 @@ export async function acquireWithQueuePosition(): Promise<{ release: () => void;
 }
 
 export function getQueuePosition(): number {
-  return runningCount + waitingCount;
+  return activeCount;
 }

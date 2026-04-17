@@ -2,7 +2,6 @@ import Database from "better-sqlite3";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { object, string, number, enums, validate } from "superstruct";
 import { singleTurnLlm } from "./agent.js";
 import { EXTRACTOR_SYSTEM, COMPRESSOR_SYSTEM } from "./prompts.js";
 import { SESSION_DIR } from "./config.js";
@@ -12,33 +11,29 @@ const DB_PATH = path.resolve(__dirname, "../data/memories.db");
 
 const MAX_FACTS = 5;
 const MIN_CONFIDENCE = 3;
+const SESSION_MAX_AGE_DAYS = 30;
 
-const CategoryStruct = enums(["vehicle", "hardware", "expertise", "preference", "useCase", "knownIssues", "goals"]);
-const FactStruct = object({
-  category: CategoryStruct,
-  content: string(),
-  confidence: number(),
-});
+const VALID_CATEGORIES = new Set(["vehicle", "hardware", "expertise", "preference", "useCase", "knownIssues", "goals"]);
 
-interface Fact {
-  category: "vehicle" | "hardware" | "expertise" | "preference" | "useCase" | "knownIssues" | "goals";
-  content: string;
-  confidence: number;
+function isValidFact(f: unknown): f is { category: string; content: string; confidence: number } {
+  if (!f || typeof f !== "object") return false;
+  const obj = f as Record<string, unknown>;
+  return (
+    VALID_CATEGORIES.has(obj.category as string) &&
+    typeof obj.content === "string" &&
+    typeof obj.confidence === "number" &&
+    obj.confidence >= MIN_CONFIDENCE
+  );
 }
 
-function parseFactsFromLLM(raw: string): Fact[] {
+function parseFactsFromLLM(raw: string): { category: string; content: string; confidence: number }[] {
   try {
     const cleaned = raw.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
     const jsonMatch = cleaned.match(/\[[\s\S]*\]/);
     if (!jsonMatch) return [];
     const parsed = JSON.parse(jsonMatch[0]);
     if (Array.isArray(parsed)) {
-      return parsed
-        .filter((f): f is Fact => {
-          const [error] = validate(f, FactStruct);
-          if (error) return false;
-          return (f as Fact).confidence >= MIN_CONFIDENCE;
-        });
+      return parsed.filter(isValidFact);
     }
     return [];
   } catch {
@@ -66,6 +61,8 @@ function getDb(): Database.Database {
   return db;
 }
 
+type Fact = { category: string; content: string; confidence: number };
+
 function getProfile(userId: string): { facts: Fact[] } {
   const row = getDb().prepare("SELECT facts FROM user_profiles WHERE user_id = ?").get(userId) as { facts: string } | undefined;
   if (!row) return { facts: [] };
@@ -90,6 +87,30 @@ function ensureSessionDir(): void {
       fs.mkdirSync(SESSION_DIR, { recursive: true });
     }
     sessionDirEnsured = true;
+  }
+}
+
+export function cleanupOldSessions(): void {
+  ensureSessionDir();
+  try {
+    const now = Date.now();
+    const entries = fs.readdirSync(SESSION_DIR, { withFileTypes: true });
+    let cleaned = 0;
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const sessionPath = path.join(SESSION_DIR, entry.name);
+      const stats = fs.statSync(sessionPath);
+      const ageDays = (now - stats.mtimeMs) / (1000 * 60 * 60 * 24);
+      if (ageDays > SESSION_MAX_AGE_DAYS) {
+        fs.rmSync(sessionPath, { recursive: true, force: true });
+        cleaned++;
+      }
+    }
+    if (cleaned > 0) {
+      console.log(`[memory] Cleaned up ${cleaned} stale session(s)`);
+    }
+  } catch (err) {
+    console.warn("[memory] Session cleanup failed:", err);
   }
 }
 
@@ -129,15 +150,14 @@ export async function extractAndUpdateMemory(
     if (uniqueNewFacts.length === 0) return;
 
     const merged = [...profile.facts, ...uniqueNewFacts];
-    const limited = merged.slice(-MAX_FACTS);
-
     let finalFacts: Fact[];
-    if (limited.length > MAX_FACTS) {
+    if (merged.length > MAX_FACTS) {
+      const limited = merged.slice(-MAX_FACTS);
       const summary = await singleTurnLlm(COMPRESSOR_SYSTEM, formatFactsForCompression(limited));
       finalFacts = [{ category: "preference", content: summary.trim(), confidence: 5 }];
       console.log(`[memory] Compressed ${limited.length} facts for user ${userId}`);
     } else {
-      finalFacts = limited;
+      finalFacts = merged;
     }
 
     saveProfile(userId, finalFacts);

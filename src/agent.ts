@@ -1,6 +1,6 @@
-import { AuthStorage, ModelRegistry, createAgentSession, DefaultResourceLoader, SessionManager, type AgentSession, type AgentSessionEventListener, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { AuthStorage, ModelRegistry, createAgentSession, DefaultResourceLoader, SessionManager, readOnlyTools, type AgentSession, type AgentSessionEventListener, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { buildMemoryContext } from "./memory.js";
-import { config } from "./config.js";
+import { config, REPO_NAME, REPO_DESC } from "./config.js";
 import { buildSystemPrompt } from "./prompts.js";
 
 const authStorage = AuthStorage.create();
@@ -30,7 +30,8 @@ function createTextCollector(onText: (text: string) => void): AgentSessionEventL
   };
 }
 
-const loaderCache = new Map<string, DefaultResourceLoader>();
+const MAX_LOADER_CACHE_SIZE = 10;
+const loaderCache: Map<string, DefaultResourceLoader> = new Map();
 
 const memoryExtension = (pi: ExtensionAPI) => {
   pi.on("before_agent_start", async (event) => {
@@ -50,15 +51,22 @@ const memoryExtension = (pi: ExtensionAPI) => {
 
 function getLoader(cwd: string, systemPrompt: string): DefaultResourceLoader {
   const key = `${cwd}:${systemPrompt}`;
-  if (!loaderCache.has(key)) {
-    const loader = new DefaultResourceLoader({
-      cwd,
-      systemPromptOverride: () => systemPrompt,
-      extensionFactories: [memoryExtension],
-    });
-    loaderCache.set(key, loader);
+  if (loaderCache.has(key)) {
+    return loaderCache.get(key)!;
   }
-  return loaderCache.get(key)!;
+  
+  if (loaderCache.size >= MAX_LOADER_CACHE_SIZE) {
+    const firstKey = loaderCache.keys().next().value;
+    if (firstKey) loaderCache.delete(firstKey);
+  }
+  
+  const loader = new DefaultResourceLoader({
+    cwd,
+    systemPromptOverride: () => systemPrompt,
+    extensionFactories: [memoryExtension],
+  });
+  loaderCache.set(key, loader);
+  return loader;
 }
 
 async function createSession(cwd: string, systemPrompt: string, useTools: boolean, sessionPath: string | undefined, model = mainModel): Promise<AgentSession> {
@@ -82,7 +90,7 @@ async function createSession(cwd: string, systemPrompt: string, useTools: boolea
     sessionManager = SessionManager.inMemory();
   }
 
-  const { session } = await createAgentSession({ cwd, model, sessionManager, authStorage, modelRegistry, tools: useTools ? undefined : [], resourceLoader: loader });
+  const { session } = await createAgentSession({ cwd, model, sessionManager, authStorage, modelRegistry, tools: useTools ? readOnlyTools : [], resourceLoader: loader });
   return session;
 }
 
@@ -100,7 +108,7 @@ export async function singleTurnLlm(systemPrompt: string, userMessage: string, m
 }
 
 export async function askAboutRepo(botName: string, question: string, repoCwd: string, sessionPath: string | undefined, userId?: string, onProgress?: () => void, onActivity?: () => void): Promise<string> {
-  const systemPrompt = buildSystemPrompt(botName);
+  const systemPrompt = buildSystemPrompt(botName, REPO_NAME, REPO_DESC);
   const session = await createSession(repoCwd, systemPrompt, true, sessionPath, mainModel);
   let answer = "";
   const unsubActivity = session.subscribe((event) => {

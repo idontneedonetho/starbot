@@ -1,4 +1,3 @@
-import fs from "fs";
 import {
   Client,
   GatewayIntentBits,
@@ -8,11 +7,11 @@ import {
   Events,
   ActivityType,
 } from "discord.js";
-import { config, ALLOWED_CHANNEL_IDS, ANSWER_TIMEOUT_SECONDS } from "./config.js";
+import { config, ALLOWED_CHANNEL_IDS, ANSWER_TIMEOUT_SECONDS, REPO_NAME } from "./config.js";
 import { askAboutRepo } from "./agent.js";
 import { getRepoCacheDir } from "./repoSync.js";
 import { extractAndUpdateMemory, getOrCreateSessionPath, deleteSession } from "./memory.js";
-import { tryAcquireRateLimit, acquireWithQueuePosition, getQueuePosition } from "./utils/limits.js";
+import { tryAcquireRateLimit, acquireWithQueuePosition } from "./utils/limits.js";
 import { chunkAnswer } from "./utils/chunking.js";
 
 const EMOJI_SEEN = "👀";
@@ -54,18 +53,10 @@ const sanitizeThreadName = (text: string): string => {
 const isAllowedChannel = (id: string) =>
   ALLOWED_CHANNEL_IDS.length === 0 || ALLOWED_CHANNEL_IDS.includes(id);
 
-function getThreadId(message: Message): string {
-  if (message.channel.isThread()) {
-    return message.channel.id;
-  }
-  return message.id;
-}
-
 async function handleQuestion(
   message: Message,
   botName: string,
   question: string,
-  sessionPath: string,
   userId: string
 ): Promise<{ answer: string; sessionThreadId: string } | null> {
   let timer: NodeJS.Timeout | undefined;
@@ -78,28 +69,31 @@ async function handleQuestion(
 
   const resetTimer = () => timer?.refresh();
 
+  let threadTarget: ThreadChannel | null = null;
+
+  if (!message.channel.isThread()) {
+    try {
+      const threadName = sanitizeThreadName(question.split('\n')[0]);
+      threadTarget = await message.startThread({
+        name: threadName,
+        autoArchiveDuration: 60,
+      });
+    } catch (err) {
+      console.error("[bot] Failed to start thread:", err);
+    }
+  }
+
+  const threadId = threadTarget ? threadTarget.id : message.channel.id;
+  const threadSessionPath = getOrCreateSessionPath(threadId);
+
   try {
     const answer = await Promise.race([
-      askAboutRepo(botName, question, getRepoCacheDir(), sessionPath, userId, resetTimer, resetTimer),
+      askAboutRepo(botName, question, getRepoCacheDir(), threadSessionPath, userId, resetTimer, resetTimer),
       timeout,
     ]);
     clearTimeout(timer);
 
     const chunks = chunkAnswer(answer);
-
-    let threadTarget: ThreadChannel | null = null;
-
-    if (!message.channel.isThread()) {
-      try {
-        const threadName = sanitizeThreadName(question.split('\n')[0]);
-        threadTarget = await message.startThread({
-          name: threadName,
-          autoArchiveDuration: 60,
-        });
-      } catch (err) {
-        console.error("[bot] Failed to start thread:", err);
-      }
-    }
 
     let lastMsg: Message = threadTarget
       ? await threadTarget.send(chunks[0])
@@ -111,27 +105,27 @@ async function handleQuestion(
 
     await clearReactions(message);
     await react(message, EMOJI_DONE);
-    return { answer, sessionThreadId: threadTarget ? threadTarget.id : message.channel.id };
+    return { answer, sessionThreadId: threadId };
   } catch (err) {
     clearTimeout(timer);
     const isTimeout = err instanceof Error && err.message === "timeout";
     console.error("[bot] handleQuestion error:", err);
 
-    await message.reply(
-      isTimeout
-        ? `⏱️ That took too long (>${ANSWER_TIMEOUT_SECONDS}s). Try a more specific question.`
-        : `❌ Something went wrong. Please try again.`
-    );
+    const errorMsg = threadTarget
+      ? await threadTarget.send(
+          isTimeout
+            ? `⏱️ That took too long (>${ANSWER_TIMEOUT_SECONDS}s). Try a more specific question.`
+            : `❌ Something went wrong. Please try again.`
+        )
+      : await message.reply(
+          isTimeout
+            ? `⏱️ That took too long (>${ANSWER_TIMEOUT_SECONDS}s). Try a more specific question.`
+            : `❌ Something went wrong. Please try again.`
+        );
 
     await clearReactions(message);
     await react(message, EMOJI_ERROR);
 
-    const failedThreadId = message.channel.isThread() ? message.channel.id : message.id;
-    const failedSessionPath = getOrCreateSessionPath(failedThreadId);
-    if (fs.existsSync(failedSessionPath)) {
-      fs.rmSync(failedSessionPath, { recursive: true, force: true });
-      console.log(`[bot] Cleaned up orphaned session: ${failedSessionPath}`);
-    }
     return null;
   }
 }
@@ -149,8 +143,8 @@ client.on(Events.MessageCreate, async (message: Message) => {
 
   if (!question) {
     await message.reply(
-      `Hey! Ask me anything about the StarPilot codebase.\n` +
-      `Example: \`@${botName} what GM vehicles are supported?\`\n\n` +
+      `Hey! Ask me anything about the ${REPO_NAME} codebase.\n` +
+      `Example: \`@${botName} what vehicles are supported?\`\n\n` +
       `💡 I will create a thread to answer your question. You can continue the conversation there!\n` +
       `🧠 I'll also pick up on things you mention about your setup and remember them.`
     );
@@ -165,31 +159,23 @@ client.on(Events.MessageCreate, async (message: Message) => {
   }
 
   await react(message, EMOJI_SEEN);
-
-  const userId = message.author.id;
-
-  const queuePos = getQueuePosition();
   await clearReactions(message);
+
+  const { release, position: queuePos } = await acquireWithQueuePosition();
+
   if (queuePos > 0) {
     await react(message, queuePos > 9 ? "🔟" : `${queuePos}⃣`);
   }
 
-  const { release } = await acquireWithQueuePosition();
-
   await react(message, "⏳");
 
-  let answer: string | null = null;
-  let sessionPath: string | undefined;
-  try {
-    const initialThreadId = getThreadId(message);
-    const initialSessionPath = getOrCreateSessionPath(initialThreadId);
-    console.log(`[bot] Using session ${initialSessionPath} for thread ${initialThreadId}`);
+  const userId = message.author.id;
 
-    const result = await handleQuestion(message, botName, question, initialSessionPath, userId);
+  let answer: string | null = null;
+  try {
+    const result = await handleQuestion(message, botName, question, userId);
     if (result) {
       answer = result.answer;
-      sessionPath = getOrCreateSessionPath(result.sessionThreadId);
-      console.log(`[bot] Session now using thread ${result.sessionThreadId}: ${sessionPath}`);
     }
   } finally {
     release();
@@ -202,7 +188,7 @@ client.on(Events.MessageCreate, async (message: Message) => {
 
 client.once(Events.ClientReady, (c) => {
   console.log(`[bot] Logged in as ${c.user.tag}`);
-  c.user.setActivity("StarPilot questions", { type: ActivityType.Listening });
+  c.user.setActivity(`${REPO_NAME} questions`, { type: ActivityType.Listening });
 });
 
 client.on(Events.Warn, (info) => {

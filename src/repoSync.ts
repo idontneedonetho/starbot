@@ -7,44 +7,10 @@ let git: SimpleGit | null = null;
 let lastSuccessfulSync: Date | null = null;
 let initPromise: Promise<void> | null = null;
 let isInitialized = false;
+let syncFailed = false;
 const STALE_THRESHOLD_MS = 2 * 60 * 60 * 1000;
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 5000;
-
-/** Clones or updates the shallow repository cache */
-export async function initRepo(): Promise<void> {
-  if (initPromise) return initPromise;
-  
-  const dir = REPO_CACHE_DIR;
-
-  const doInit = async () => {
-    if (fs.existsSync(path.join(dir, ".git"))) {
-      console.log(`[repoSync] Repo already exists at ${dir}. Pulling latest...`);
-      await syncRepo();
-    } else {
-      console.log(
-        `[repoSync] Cloning ${config.STARPILOT_REPO_URL} (branch: ${config.STARPILOT_BRANCH}) → ${dir}`
-      );
-      fs.mkdirSync(dir, { recursive: true });
-      const baseGit = simpleGit();
-      await baseGit.clone(config.STARPILOT_REPO_URL, dir, [
-        "--branch",
-        config.STARPILOT_BRANCH,
-        "--depth",
-        "1",
-        "--single-branch",
-      ]);
-      console.log(`[repoSync] Clone complete.`);
-      lastSuccessfulSync = new Date();
-    }
-
-    git = simpleGit(dir);
-    isInitialized = true;
-  };
-
-  initPromise = doInit();
-  return initPromise;
-}
 
 async function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -54,11 +20,55 @@ function getRetryDelay(attempt: number): number {
   return RETRY_DELAY_MS * Math.pow(2, attempt - 1);
 }
 
-/** Synchronizes repo state with remote origin */
+export async function initRepo(): Promise<void> {
+  if (initPromise) return initPromise;
+  
+  const dir = REPO_CACHE_DIR;
+
+  const doInit = async () => {
+    try {
+      const gitDir = path.join(dir, ".git");
+      if (fs.existsSync(gitDir)) {
+        console.log(`[repoSync] Repo already exists at ${dir}. Pulling latest...`);
+        await syncRepo();
+      } else {
+        console.log(
+          `[repoSync] Cloning ${config.STARPILOT_REPO_URL} (branch: ${config.STARPILOT_BRANCH}) → ${dir}`
+        );
+        fs.mkdirSync(dir, { recursive: true });
+        const baseGit = simpleGit();
+        await baseGit.clone(config.STARPILOT_REPO_URL, dir, [
+          "--branch",
+          config.STARPILOT_BRANCH,
+          "--depth",
+          "1",
+          "--single-branch",
+        ]);
+        console.log(`[repoSync] Clone complete.`);
+        lastSuccessfulSync = new Date();
+      }
+      git = simpleGit(dir);
+      isInitialized = true;
+    } catch (err) {
+      console.error("[repoSync] Initial clone failed:", err);
+      isInitialized = false;
+      throw err;
+    }
+  };
+
+  initPromise = doInit();
+  return initPromise;
+}
+
 export async function syncRepo(): Promise<void> {
   if (initPromise) await initPromise;
   if (!git) {
-    git = simpleGit(REPO_CACHE_DIR);
+    try {
+      git = simpleGit(REPO_CACHE_DIR);
+    } catch {
+      console.warn("[repoSync] Cannot access repo directory");
+      return;
+    }
   }
 
   let lastError: Error | null = null;
@@ -74,6 +84,7 @@ export async function syncRepo(): Promise<void> {
         `[repoSync] Up to date. Latest commit: ${latest?.hash?.slice(0, 8)} — ${latest?.message}`
       );
       lastSuccessfulSync = new Date();
+      syncFailed = false;
       return;
     } catch (err) {
       lastError = err as Error;
@@ -86,10 +97,11 @@ export async function syncRepo(): Promise<void> {
     }
   }
 
+  syncFailed = true;
   console.error("[repoSync] Sync failed after all retries:", lastError);
   if (lastSuccessfulSync && Date.now() - lastSuccessfulSync.getTime() > STALE_THRESHOLD_MS) {
     console.warn(
-      `[repoSync] ⚠️ Repo stale for ${Math.round((Date.now() - lastSuccessfulSync.getTime()) / 60_000)}min. Answers may be outdated.`
+      `[repoSync] Repo stale for ${Math.round((Date.now() - lastSuccessfulSync.getTime()) / 60_000)}min. Answers may be outdated.`
     );
   }
 }
@@ -99,7 +111,7 @@ export function getRepoCacheDir(): string {
 }
 
 export function isRepoReady(): boolean {
-  return isInitialized && lastSuccessfulSync !== null;
+  return isInitialized && lastSuccessfulSync !== null && !syncFailed;
 }
 
 export function getLastSyncTime(): Date | null {

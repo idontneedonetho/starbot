@@ -3,6 +3,7 @@ import cron from "node-cron";
 import { initRepo, syncRepo, isRepoReady, getLastSyncTime } from "./repoSync.js";
 import { startBot, stopBot, isBotReady } from "./bot.js";
 import { config, validateConfig } from "./config.js";
+import { cleanupOldSessions } from "./memory.js";
 
 function getHealthStatus(): { ok: boolean; status: string } {
   const botReady = isBotReady();
@@ -19,6 +20,7 @@ async function main(): Promise<void> {
 
   try {
     validateConfig();
+    cleanupOldSessions();
     await initRepo();
   } catch (err) {
     console.error("[index] Failed to initialise:", err);
