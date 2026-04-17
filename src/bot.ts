@@ -6,6 +6,7 @@ import {
   type ThreadChannel,
   Events,
   ActivityType,
+  REST,
 } from "discord.js";
 import { config, ALLOWED_CHANNEL_IDS, ANSWER_TIMEOUT_SECONDS, REPO_NAME } from "./config.js";
 import { askAboutRepo } from "./agent.js";
@@ -13,6 +14,9 @@ import { getRepoCacheDir } from "./repoSync.js";
 import { extractAndUpdateMemory, getOrCreateSessionPath, deleteSession } from "./memory.js";
 import { tryAcquireRateLimit, acquireWithQueuePosition } from "./utils/limits.js";
 import { chunkAnswer } from "./utils/chunking.js";
+import { getAllCommands } from "./plugins/manager.js";
+import { initPluginSystem, getCommand } from "./plugins/loader.js";
+import { setupEventHandlers } from "./events/handler.js";
 
 const EMOJI_SEEN = "👀";
 const EMOJI_DONE = "✅";
@@ -22,12 +26,16 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.DirectMessages,
     GatewayIntentBits.GuildMessageReactions,
   ],
   partials: [Partials.Channel, Partials.Message, Partials.Reaction],
 });
+
+const rest = new REST({ version: "10" }).setToken(config.DISCORD_TOKEN);
+let applicationId: string | null = null;
 
 const stripMentions = (text: string) => text.replace(/<@!?\d+>/g, "").trim();
 
@@ -111,17 +119,19 @@ async function handleQuestion(
     const isTimeout = err instanceof Error && err.message === "timeout";
     console.error("[bot] handleQuestion error:", err);
 
-    const errorMsg = threadTarget
-      ? await threadTarget.send(
-          isTimeout
-            ? `⏱️ That took too long (>${ANSWER_TIMEOUT_SECONDS}s). Try a more specific question.`
-            : `❌ Something went wrong. Please try again.`
-        )
-      : await message.reply(
-          isTimeout
-            ? `⏱️ That took too long (>${ANSWER_TIMEOUT_SECONDS}s). Try a more specific question.`
-            : `❌ Something went wrong. Please try again.`
-        );
+    if (threadTarget) {
+      await threadTarget.send(
+        isTimeout
+          ? `⏱️ That took too long (>${ANSWER_TIMEOUT_SECONDS}s). Try a more specific question.`
+          : `❌ Something went wrong. Please try again.`
+      );
+    } else {
+      await message.reply(
+        isTimeout
+          ? `⏱️ That took too long (>${ANSWER_TIMEOUT_SECONDS}s). Try a more specific question.`
+          : `❌ Something went wrong. Please try again.`
+      );
+    }
 
     await clearReactions(message);
     await react(message, EMOJI_ERROR);
@@ -138,8 +148,10 @@ client.on(Events.MessageCreate, async (message: Message) => {
     !isAllowedChannel(message.channelId)
   ) return;
 
-  const question = stripMentions(message.content);
+  const content = message.content;
   const botName = message.guild?.members.me?.nickname || client.user.displayName || client.user.username || "StarBot";
+
+  const question = stripMentions(content);
 
   if (!question) {
     await message.reply(
@@ -186,9 +198,59 @@ client.on(Events.MessageCreate, async (message: Message) => {
   }
 });
 
-client.once(Events.ClientReady, (c) => {
+client.on(Events.InteractionCreate, async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
+
+  const commandName = interaction.commandName;
+
+  // Check plugin commands
+  const pluginCommand = getAllCommands().find(c => c.data.name === commandName);
+  if (pluginCommand) {
+    try {
+      await pluginCommand.execute(interaction);
+    } catch (err) {
+      console.error(`[bot] Plugin command ${commandName} error:`, err);
+      await interaction.reply("❌ An error occurred.");
+    }
+    return;
+  }
+
+  // Check dynamically loaded commands
+  const dynamicCommand = getCommand(commandName);
+  if (dynamicCommand) {
+    try {
+      await dynamicCommand.execute(interaction);
+    } catch (err) {
+      console.error(`[bot] Command ${commandName} error:`, err);
+      await interaction.reply("❌ An error occurred while executing this command.");
+    }
+    return;
+  }
+
+  console.warn(`[bot] Received interaction for unknown command: ${commandName}`);
+});
+
+client.once(Events.ClientReady, async (c) => {
   console.log(`[bot] Logged in as ${c.user.tag}`);
   c.user.setActivity(`${REPO_NAME} questions`, { type: ActivityType.Listening });
+
+  applicationId = c.user.id;
+  initPluginSystem(client, rest, applicationId);
+  setupEventHandlers(client);
+
+  // Register plugin manager commands
+  const { registerPluginCommands, getAllCommands: getPluginCmds } = await import("./plugins/manager.js");
+  const pluginCommands = getPluginCmds().map(c => c.data.toJSON());
+  
+  try {
+    await rest.put(
+      `/applications/${applicationId}/commands`,
+      { body: pluginCommands }
+    );
+    console.log("[bot] Registered plugin commands: add, modify, delete");
+  } catch (err) {
+    console.error("[bot] Failed to register plugin commands:", err);
+  }
 });
 
 client.on(Events.Warn, (info) => {

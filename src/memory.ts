@@ -4,14 +4,9 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { singleTurnLlm } from "./agent.js";
 import { EXTRACTOR_SYSTEM, COMPRESSOR_SYSTEM } from "./prompts.js";
-import { SESSION_DIR } from "./config.js";
+import { SESSION_DIR, SESSION_MAX_AGE_DAYS, DB_PATH, MAX_FACTS, MIN_CONFIDENCE } from "./config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_PATH = path.resolve(__dirname, "../data/memories.db");
-
-const MAX_FACTS = 5;
-const MIN_CONFIDENCE = 3;
-const SESSION_MAX_AGE_DAYS = 30;
 
 const VALID_CATEGORIES = new Set(["vehicle", "hardware", "expertise", "preference", "useCase", "knownIssues", "goals"]);
 

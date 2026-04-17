@@ -1,23 +1,20 @@
 import { simpleGit, type SimpleGit } from "simple-git";
 import fs from "fs";
 import path from "path";
-import { config, REPO_CACHE_DIR } from "./config.js";
+import { config, REPO_CACHE_DIR, STALE_THRESHOLD_MS, SYNC_MAX_RETRIES, SYNC_RETRY_DELAY_MS } from "./config.js";
 
 let git: SimpleGit | null = null;
 let lastSuccessfulSync: Date | null = null;
 let initPromise: Promise<void> | null = null;
 let isInitialized = false;
 let syncFailed = false;
-const STALE_THRESHOLD_MS = 2 * 60 * 60 * 1000;
-const MAX_RETRIES = 3;
-const RETRY_DELAY_MS = 5000;
 
 async function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function getRetryDelay(attempt: number): number {
-  return RETRY_DELAY_MS * Math.pow(2, attempt - 1);
+  return SYNC_RETRY_DELAY_MS * Math.pow(2, attempt - 1);
 }
 
 export async function initRepo(): Promise<void> {
@@ -73,9 +70,9 @@ export async function syncRepo(): Promise<void> {
 
   let lastError: Error | null = null;
 
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+  for (let attempt = 1; attempt <= SYNC_MAX_RETRIES; attempt++) {
     try {
-      console.log(`[repoSync] Syncing latest from remote (attempt ${attempt}/${MAX_RETRIES})...`);
+      console.log(`[repoSync] Syncing latest from remote (attempt ${attempt}/${SYNC_MAX_RETRIES})...`);
       await git.fetch(["origin", config.STARPILOT_BRANCH, "--depth", "1"]);
       await git.reset(["--hard", `origin/${config.STARPILOT_BRANCH}`]);
       const log = await git.log({ maxCount: 1 });
@@ -89,7 +86,7 @@ export async function syncRepo(): Promise<void> {
     } catch (err) {
       lastError = err as Error;
       console.warn(`[repoSync] Attempt ${attempt} failed:`, err);
-      if (attempt < MAX_RETRIES) {
+      if (attempt < SYNC_MAX_RETRIES) {
         const delay = getRetryDelay(attempt);
         console.log(`[repoSync] Retrying in ${delay / 1000}s...`);
         await sleep(delay);

@@ -1,9 +1,6 @@
 import { Semaphore as ShopifySemaphore } from "@shopify/semaphore";
 import { RateLimiterMemory } from "rate-limiter-flexible";
-
-const RATE_LIMIT_WINDOW_SEC = 60;
-const RATE_LIMIT_MAX = 3;
-const MAX_CONCURRENT = 2;
+import { RATE_LIMIT_WINDOW_SEC, RATE_LIMIT_MAX, MAX_CONCURRENT } from "../config.js";
 
 export const rateLimiter = new RateLimiterMemory({ points: RATE_LIMIT_MAX, duration: RATE_LIMIT_WINDOW_SEC });
 
@@ -31,8 +28,4 @@ export async function acquireWithQueuePosition(): Promise<{ release: () => void;
     },
     position
   };
-}
-
-export function getQueuePosition(): number {
-  return activeCount;
 }
