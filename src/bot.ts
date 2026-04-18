@@ -239,7 +239,7 @@ client.once(Events.ClientReady, async (c) => {
   setupEventHandlers(client);
 
   // Register plugin manager commands
-  const { registerPluginCommands, getAllCommands: getPluginCmds } = await import("./plugins/manager.js");
+  const { getAllCommands: getPluginCmds } = await import("./plugins/manager.js");
   const pluginCommands = getPluginCmds().map(c => c.data.toJSON());
   
   try {
@@ -247,7 +247,7 @@ client.once(Events.ClientReady, async (c) => {
       `/applications/${applicationId}/commands`,
       { body: pluginCommands }
     );
-    console.log("[bot] Registered plugin commands: add, modify, delete");
+    console.log("[bot] Registered plugin commands: /manage");
   } catch (err) {
     console.error("[bot] Failed to register plugin commands:", err);
   }

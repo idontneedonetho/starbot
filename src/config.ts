@@ -8,7 +8,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const defaultRepoCacheDir = path.resolve(__dirname, "../repo-cache/starpilot");
 const defaultSessionDir = path.resolve(__dirname, "../data/sessions");
 const defaultPluginsDir = path.resolve(__dirname, "../data/plugins");
-const defaultPluginTestsDir = path.resolve(__dirname, "../tests/plugins");
+const defaultBotSrcDir = path.resolve(__dirname, "../src");
 
 const cronValidator = makeValidator((val: string) => {
   const regex = /^(\*|([0-5]?\d|\*)) (\*|([0-5]?\d|\*)) (\*|([0-2]?\d|\*)) (\*|([0-2]?\d|\*)) (\*|([0-6]|\*))$/;
@@ -31,9 +31,6 @@ export const config = cleanEnv(process.env, {
   REPO_CACHE_DIR: str({ default: defaultRepoCacheDir }),
   SESSION_DIR: str({ default: defaultSessionDir }),
   PLUGINS_DIR: str({ default: defaultPluginsDir }),
-  PLUGINS_TESTS_DIR: str({ default: defaultPluginTestsDir }),
-  PLUGIN_MAX_RETRIES: num({ default: 5 }),
-  PLUGIN_TIMEOUT_SECONDS: num({ default: 90 }),
   SYNC_CRON: cronValidator({ default: "0 * * * *" }),
   ANSWER_TIMEOUT_SECONDS: num({ default: 90 }),
   ALLOWED_CHANNEL_IDS: str({ default: "" }),
@@ -59,9 +56,6 @@ export const SESSION_DIR = config.SESSION_DIR;
 export const REPO_NAME = config.REPO_NAME;
 export const REPO_DESC = config.REPO_DESC;
 export const PLUGINS_DIR = config.PLUGINS_DIR;
-export const PLUGINS_TESTS_DIR = config.PLUGINS_TESTS_DIR;
-export const PLUGIN_MAX_RETRIES = config.PLUGIN_MAX_RETRIES;
-export const PLUGIN_TIMEOUT_SECONDS = config.PLUGIN_TIMEOUT_SECONDS;
 export const RATE_LIMIT_WINDOW_SEC = config.RATE_LIMIT_WINDOW_SEC;
 export const RATE_LIMIT_MAX = config.RATE_LIMIT_MAX;
 export const MAX_CONCURRENT = config.MAX_CONCURRENT;
@@ -72,6 +66,7 @@ export const SYNC_MAX_RETRIES = config.SYNC_MAX_RETRIES;
 export const SYNC_RETRY_DELAY_MS = config.SYNC_RETRY_DELAY_MS;
 export const MAX_FACTS = config.MAX_FACTS;
 export const MIN_CONFIDENCE = config.MIN_CONFIDENCE;
+export const BOT_SRC_DIR = process.env.BOT_SRC_DIR || defaultBotSrcDir;
 
 export function validateConfig(): void {
   if (!config.LLM_MODEL || !REPO_CACHE_DIR || !SESSION_DIR) {

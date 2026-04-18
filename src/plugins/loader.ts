@@ -1,9 +1,11 @@
 import { Client, SlashCommandBuilder, REST, Routes } from "discord.js";
 import fs from "fs";
 import path from "path";
+import { pathToFileURL } from "url";
 import { PLUGINS_DIR } from "../config.js";
 
 const commands = new Map<string, { data: SlashCommandBuilder; execute: (interaction: any) => Promise<void> }>();
+export { commands };
 const eventHandlers = new Map<string, Array<(client: Client, ...args: any[]) => Promise<void>>>();
 let restRef: REST | null = null;
 let applicationId: string | null = null;
@@ -23,29 +25,30 @@ export function initPluginSystem(client: Client, rest: REST, appId: string): voi
 }
 
 export async function loadPlugin(pluginPath: string): Promise<void> {
-  const resolvedPath = require.resolve(pluginPath);
-  if (require.cache[resolvedPath]) {
-    delete require.cache[resolvedPath];
-  }
+  try {
+    const fileUrl = pathToFileURL(pluginPath).href;
+    const module = await import(fileUrl);
+    const plugin: Plugin = module;
+    const name = path.basename(pluginPath, ".js").replace(/^plugin-/, "");
 
-  const plugin: Plugin = require(resolvedPath);
-  const name = path.basename(pluginPath, ".js").replace(/^plugin-/, "");
-
-  if (plugin.command) {
-    commands.set(name, {
-      data: plugin.command.data,
-      execute: plugin.command.execute,
-    });
-    console.log(`[plugins] Loaded command: ${name}`);
-  }
-
-  if (plugin.events) {
-    for (const [eventName, handler] of Object.entries(plugin.events)) {
-      const handlers = eventHandlers.get(eventName) || [];
-      handlers.push(handler);
-      eventHandlers.set(eventName, handlers);
-      console.log(`[plugins] Loaded event handler: ${eventName} -> ${name}`);
+    if (plugin.command) {
+      commands.set(name, {
+        data: plugin.command.data,
+        execute: plugin.command.execute,
+      });
+      console.log(`[plugins] Loaded command: ${name}`);
     }
+
+    if (plugin.events) {
+      for (const [eventName, handler] of Object.entries(plugin.events)) {
+        const handlers = eventHandlers.get(eventName) || [];
+        handlers.push(handler);
+        eventHandlers.set(eventName, handlers);
+        console.log(`[plugins] Loaded event handler: ${eventName} -> ${name}`);
+      }
+    }
+  } catch (err) {
+    throw new Error(`Failed to load plugin: ${err}`);
   }
 }
 

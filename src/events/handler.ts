@@ -17,12 +17,10 @@ const EVENT_MAP: Record<string, string> = {
 
 export function setupEventHandlers(client: Client): void {
   for (const [handlerName, eventName] of Object.entries(EVENT_MAP)) {
-    const handlers = getEventHandlers(handlerName);
-    if (handlers.length === 0) continue;
-
-    console.log(`[events] Setting up ${handlerName} with ${handlers.length} handler(s)`);
-
     client.on(eventName as any, async (...args: any[]) => {
+      const handlers = getEventHandlers(handlerName);
+      if (handlers.length === 0) return;
+
       for (const handler of handlers) {
         try {
           await handler(client, ...args);
