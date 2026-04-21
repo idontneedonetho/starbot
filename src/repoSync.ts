@@ -17,58 +17,10 @@ function getRetryDelay(attempt: number): number {
   return SYNC_RETRY_DELAY_MS * Math.pow(2, attempt - 1);
 }
 
-export async function initRepo(): Promise<void> {
-  if (initPromise) return initPromise;
-
-  const dir = REPO_CACHE_DIR;
-
-  const doInit = async () => {
-    try {
-      const gitDir = path.join(dir, ".git");
-      if (fs.existsSync(gitDir)) {
-        console.log(`[repoSync] Repo already exists at ${dir}. Pulling latest...`);
-        await syncRepo();
-      } else {
-        console.log(
-          `[repoSync] Cloning ${config.STARPILOT_REPO_URL} (branch: ${config.STARPILOT_BRANCH}) → ${dir}`,
-        );
-        fs.mkdirSync(dir, { recursive: true });
-        const baseGit = simpleGit();
-        await baseGit.clone(config.STARPILOT_REPO_URL, dir, [
-          "--branch",
-          config.STARPILOT_BRANCH,
-          "--depth",
-          "1",
-          "--single-branch",
-        ]);
-        console.log(`[repoSync] Clone complete.`);
-        lastSuccessfulSync = new Date();
-      }
-      git = simpleGit(dir);
-      isInitialized = true;
-    } catch (err) {
-      console.error("[repoSync] Initial clone failed:", err);
-      isInitialized = false;
-      // Clear the cached promise so callers can retry rather than seeing a permanently rejected promise.
-      initPromise = null;
-      throw err;
-    }
-  };
-
-  initPromise = doInit();
-  return initPromise;
-}
-
-export async function syncRepo(): Promise<void> {
-  if (initPromise) await initPromise;
-  if (!git) {
-    try {
-      git = simpleGit(REPO_CACHE_DIR);
-    } catch {
-      console.warn("[repoSync] Cannot access repo directory");
-      return;
-    }
-  }
+// Core fetch-and-reset logic shared by both initRepo and syncRepo.
+// Callers are responsible for ensuring git is initialized before calling this.
+async function pullFromRemote(): Promise<void> {
+  if (!git) throw new Error("[repoSync] git not initialized");
 
   let lastError: Error | null = null;
 
@@ -103,6 +55,66 @@ export async function syncRepo(): Promise<void> {
       `[repoSync] Repo stale for ${Math.round((Date.now() - lastSuccessfulSync.getTime()) / 60_000)}min. Answers may be outdated.`,
     );
   }
+}
+
+export async function initRepo(): Promise<void> {
+  if (initPromise) return initPromise;
+
+  const dir = REPO_CACHE_DIR;
+
+  const doInit = async () => {
+    try {
+      const gitDir = path.join(dir, ".git");
+      if (fs.existsSync(gitDir)) {
+        console.log(`[repoSync] Repo already exists at ${dir}. Pulling latest...`);
+        git = simpleGit(dir);
+        // Call pullFromRemote directly — NOT syncRepo, which would await initPromise and deadlock.
+        await pullFromRemote();
+      } else {
+        console.log(
+          `[repoSync] Cloning ${config.STARPILOT_REPO_URL} (branch: ${config.STARPILOT_BRANCH}) → ${dir}`,
+        );
+        fs.mkdirSync(dir, { recursive: true });
+        const baseGit = simpleGit();
+        await baseGit.clone(config.STARPILOT_REPO_URL, dir, [
+          "--branch",
+          config.STARPILOT_BRANCH,
+          "--depth",
+          "1",
+          "--single-branch",
+        ]);
+        console.log(`[repoSync] Clone complete.`);
+        git = simpleGit(dir);
+        lastSuccessfulSync = new Date();
+      }
+      isInitialized = true;
+    } catch (err) {
+      console.error("[repoSync] Initialisation failed:", err);
+      isInitialized = false;
+      // Clear the cached promise so callers can retry rather than seeing a permanently rejected promise.
+      initPromise = null;
+      throw err;
+    }
+  };
+
+  initPromise = doInit();
+  return initPromise;
+}
+
+export async function syncRepo(): Promise<void> {
+  // If initRepo is still in progress (e.g. cron fires early), wait for it first.
+  if (initPromise) await initPromise;
+
+  if (!git) {
+    try {
+      git = simpleGit(REPO_CACHE_DIR);
+    } catch {
+      console.warn("[repoSync] Cannot access repo directory");
+      return;
+    }
+  }
+
+  await pullFromRemote();
 }
 
 export function isRepoReady(): boolean {
