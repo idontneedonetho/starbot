@@ -188,6 +188,8 @@ client.on(Events.MessageCreate, async (message: Message) => {
     if (answer) {
       extractAndUpdateMemory(message.author.id, question, answer).catch(console.error);
     }
+  } catch (err) {
+    console.error("[bot] Unhandled error in message handler:", err);
   } finally {
     release();
   }

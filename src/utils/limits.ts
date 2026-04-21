@@ -23,12 +23,21 @@ export function acquireWithQueuePosition(): { release: () => void; position: num
   activeCount++;
   
   let permitRelease: (() => void) | null = null;
+  let isReleased = false;
+
   const waitPromise = semaphore.acquire().then(permit => {
-    permitRelease = () => permit.release();
+    if (isReleased) {
+      // release() was already called while we were waiting in the queue.
+      permit.release();
+    } else {
+      permitRelease = () => permit.release();
+    }
   });
 
   return {
     release: () => {
+      if (isReleased) return;
+      isReleased = true;
       activeCount--;
       if (permitRelease) permitRelease();
     },
