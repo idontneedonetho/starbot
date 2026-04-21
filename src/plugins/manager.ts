@@ -3,7 +3,7 @@ import fs from "fs";
 import path from "path";
 import { PLUGINS_DIR, ADMIN_USER_IDS } from "../config.js";
 import { createPlugin } from "../agent.js";
-import { loadPlugin, registerCommand, commands } from "./loader.js";
+import { loadPlugin, unloadPlugin, registerCommand, commands } from "./loader.js";
 
 const adminUserSet = new Set(ADMIN_USER_IDS);
 
@@ -104,12 +104,32 @@ export const manageCommand = {
         console.warn("[manage] Agent did not confirm PLUGIN_READY, attempting to load anyway...");
       }
 
-      // Only load files that didn't exist before the agent ran to avoid double-loading.
+      let loadedCount = 0;
+
+      // Reload a modified plugin (unload stale version first, then load the rewritten file).
+      if (plugin) {
+        const modifiedFile = `plugin-${plugin}.js`;
+        const modifiedPath = path.join(PLUGINS_DIR, modifiedFile);
+        if (fs.existsSync(modifiedPath)) {
+          try {
+            unloadPlugin(plugin);
+            await loadPlugin(modifiedPath);
+            if (commands.get(plugin)) {
+              await registerCommand(plugin);
+            }
+            loadedCount++;
+            console.log(`[manage] Reloaded: ${modifiedFile}`);
+          } catch (err) {
+            console.warn(`[manage] Failed to reload ${modifiedFile}:`, err);
+          }
+        }
+      }
+
+      // Load any brand-new plugin files the agent created.
       const newFiles = fs.existsSync(PLUGINS_DIR)
         ? fs.readdirSync(PLUGINS_DIR).filter(f => f.endsWith(".js") && f.startsWith("plugin-") && !existingFiles.has(f))
         : [];
 
-      let loadedCount = 0;
       for (const file of newFiles) {
         const pluginPath = path.join(PLUGINS_DIR, file);
         try {
@@ -125,13 +145,13 @@ export const manageCommand = {
         }
       }
 
-      if (newFiles.length > 0 && loadedCount === 0) {
-        throw new Error("No new plugins could be loaded");
+      if (loadedCount === 0 && (plugin || newFiles.length > 0)) {
+        throw new Error("Plugin could not be loaded");
       }
 
       const summary = loadedCount > 0
-        ? `✅ Done. (${loadedCount} new plugin(s) loaded)`
-        : `✅ Done. (no new plugin files created)`;
+        ? `✅ Done. (${loadedCount} plugin(s) loaded/reloaded)`
+        : `✅ Done. (no plugin files created)`;
       await interaction.editReply(summary);
     } catch (err) {
       console.error("[manage] Agent error:", err);
