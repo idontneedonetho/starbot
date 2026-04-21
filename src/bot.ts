@@ -14,7 +14,7 @@ import { extractAndUpdateMemory, getOrCreateSessionPath, deleteSession } from ".
 import { tryAcquireRateLimit, acquireWithQueuePosition } from "./utils/limits.js";
 import { chunkAnswer } from "./utils/chunking.js";
 import { getAllCommands } from "./plugins/manager.js";
-import { initPluginSystem, getCommand } from "./plugins/loader.js";
+import { initPluginSystem, getCommand, syncDiscordCommands } from "./plugins/loader.js";
 import { setupEventHandlers } from "./events/handler.js";
 
 const EMOJI_SEEN = "👀";
@@ -66,16 +66,6 @@ async function handleQuestion(
   question: string,
   userId: string,
 ): Promise<{ answer: string; sessionThreadId: string } | null> {
-  let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new Error("timeout")),
-      ANSWER_TIMEOUT_SECONDS * 1000,
-    );
-  });
-
-  const resetTimer = () => timer?.refresh();
-
   let threadTarget: ThreadChannel | null = null;
 
   if (!message.channel.isThread()) {
@@ -94,11 +84,14 @@ async function handleQuestion(
   const threadSessionPath = getOrCreateSessionPath(threadId);
 
   try {
-    const answer = await Promise.race([
-      askAboutRepo(botName, question, REPO_CACHE_DIR, threadSessionPath, userId, resetTimer, resetTimer),
-      timeout,
-    ]);
-    clearTimeout(timer);
+    const answer = await askAboutRepo(
+      botName,
+      question,
+      REPO_CACHE_DIR,
+      threadSessionPath,
+      userId,
+      ANSWER_TIMEOUT_SECONDS * 1000
+    );
 
     const chunks = chunkAnswer(answer);
 
@@ -114,7 +107,6 @@ async function handleQuestion(
     await react(message, EMOJI_DONE);
     return { answer, sessionThreadId: threadId };
   } catch (err) {
-    clearTimeout(timer);
     const isTimeout = err instanceof Error && err.message === "timeout";
     console.error("[bot] handleQuestion error:", err);
 
@@ -166,13 +158,15 @@ client.on(Events.MessageCreate, async (message: Message) => {
   // Add the "seen" reaction and leave it visible while the bot is waiting/working.
   await react(message, EMOJI_SEEN);
 
-  const { release, position: queuePos } = await acquireWithQueuePosition();
+  const { release, position, wait } = acquireWithQueuePosition();
 
-  // Show queue position if there are requests ahead, then switch to the hourglass.
-  if (queuePos > 0) {
+  if (position >= config.MAX_CONCURRENT) {
+    const queuePos = position - config.MAX_CONCURRENT + 1;
     await clearReactions(message);
     await react(message, queuePos > 9 ? "🔟" : `${queuePos}⃣`);
   }
+
+  await wait;
 
   await clearReactions(message);
   await react(message, "⏳");
@@ -232,16 +226,12 @@ client.once(Events.ClientReady, async (c) => {
   initPluginSystem(client, rest, applicationId);
   setupEventHandlers(client);
 
-  // Register the static plugin manager commands (/manage etc.).
-  const pluginCommands = getAllCommands().map(c => c.data.toJSON());
+  // Register the static plugin manager commands and any dynamic commands.
   try {
-    await rest.put(
-      `/applications/${applicationId}/commands`,
-      { body: pluginCommands },
-    );
-    console.log("[bot] Registered plugin commands: /manage");
+    await syncDiscordCommands(getAllCommands());
+    console.log("[bot] Discord commands synchronized");
   } catch (err) {
-    console.error("[bot] Failed to register plugin commands:", err);
+    console.error("[bot] Failed to sync Discord commands:", err);
   }
 });
 

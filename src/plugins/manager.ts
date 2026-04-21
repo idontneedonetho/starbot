@@ -3,7 +3,7 @@ import fs from "fs";
 import path from "path";
 import { PLUGINS_DIR, ADMIN_USER_IDS } from "../config.js";
 import { createPlugin } from "../agent.js";
-import { loadPlugin, unloadPlugin, registerCommand, commands } from "./loader.js";
+import { loadPlugin, unloadPlugin, syncDiscordCommands, commands } from "./loader.js";
 
 const adminUserSet = new Set(ADMIN_USER_IDS);
 
@@ -115,7 +115,7 @@ export const manageCommand = {
             unloadPlugin(plugin);
             await loadPlugin(modifiedPath);
             if (commands.get(plugin)) {
-              await registerCommand(plugin);
+              await syncDiscordCommands(getAllCommands());
             }
             loadedCount++;
             console.log(`[manage] Reloaded: ${modifiedFile}`);
@@ -136,7 +136,7 @@ export const manageCommand = {
           await loadPlugin(pluginPath);
           const name = file.replace(/^plugin-/, "").replace(/\.js$/, "");
           if (commands.get(name)) {
-            await registerCommand(name);
+            await syncDiscordCommands(getAllCommands());
           }
           loadedCount++;
           console.log(`[manage] Loaded: ${file}`);

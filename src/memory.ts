@@ -121,40 +121,56 @@ function formatFactsForCompression(facts: Fact[]): string {
   return `Facts:\n${facts.map((f) => `[${f.category}] ${f.content}`).join("\n")}`;
 }
 
+const userExtractionQueue = new Map<string, Promise<void>>();
+
 export async function extractAndUpdateMemory(
   userId: string,
   question: string,
   answer: string,
 ): Promise<void> {
-  try {
-    const profile = getProfile(userId);
-    const prompt = `Question from user: ${question}\n\nBot's answer: ${answer}`;
-    const raw = await singleTurnLlm(EXTRACTOR_SYSTEM, prompt);
+  const previousTask = userExtractionQueue.get(userId) || Promise.resolve();
 
-    const newFacts = parseFactsFromLLM(raw);
-    if (newFacts.length === 0) return;
+  const currentTask = previousTask.then(async () => {
+    try {
+      const profile = getProfile(userId);
+      const prompt = `Question from user: ${question}\n\nBot's answer: ${answer}`;
+      const raw = await singleTurnLlm(EXTRACTOR_SYSTEM, prompt);
 
-    const existingContents = new Set(profile.facts.map(f => f.content.toLowerCase()));
-    const uniqueNewFacts = newFacts.filter(f => !existingContents.has(f.content.toLowerCase()));
+      const newFacts = parseFactsFromLLM(raw);
+      if (newFacts.length === 0) return;
 
-    if (uniqueNewFacts.length === 0) return;
+      const existingContents = new Set(profile.facts.map(f => f.content.toLowerCase()));
+      const uniqueNewFacts = newFacts.filter(f => !existingContents.has(f.content.toLowerCase()));
 
-    const merged = [...profile.facts, ...uniqueNewFacts];
-    let finalFacts: Fact[];
-    if (merged.length > MAX_FACTS) {
-      const limited = merged.slice(-MAX_FACTS);
-      const summary = await singleTurnLlm(COMPRESSOR_SYSTEM, formatFactsForCompression(limited));
-      finalFacts = [{ category: "preference", content: summary.trim(), confidence: 5 }];
-      console.log(`[memory] Compressed ${limited.length} facts for user ${userId}`);
-    } else {
-      finalFacts = merged;
+      if (uniqueNewFacts.length === 0) return;
+
+      const merged = [...profile.facts, ...uniqueNewFacts];
+      let finalFacts: Fact[];
+      if (merged.length > MAX_FACTS) {
+        const limited = merged.slice(-MAX_FACTS);
+        const summary = await singleTurnLlm(COMPRESSOR_SYSTEM, formatFactsForCompression(limited));
+        finalFacts = [{ category: "preference", content: summary.trim(), confidence: 5 }];
+        console.log(`[memory] Compressed ${limited.length} facts for user ${userId}`);
+      } else {
+        finalFacts = merged;
+      }
+
+      saveProfile(userId, finalFacts);
+      console.log(`[memory] Updated ${uniqueNewFacts.length} fact(s) for user ${userId}`);
+    } catch (err) {
+      console.warn("[memory] extractAndUpdateMemory failed:", err);
     }
+  });
 
-    saveProfile(userId, finalFacts);
-    console.log(`[memory] Updated ${uniqueNewFacts.length} fact(s) for user ${userId}`);
-  } catch (err) {
-    console.warn("[memory] extractAndUpdateMemory failed:", err);
-  }
+  userExtractionQueue.set(userId, currentTask);
+
+  currentTask.finally(() => {
+    if (userExtractionQueue.get(userId) === currentTask) {
+      userExtractionQueue.delete(userId);
+    }
+  });
+
+  return currentTask;
 }
 
 export async function buildMemoryContext(userId: string, username: string): Promise<string> {

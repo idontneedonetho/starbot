@@ -18,15 +18,21 @@ export const semaphore = new ShopifySemaphore(MAX_CONCURRENT);
 
 let activeCount = 0;
 
-export async function acquireWithQueuePosition(): Promise<{ release: () => void; position: number }> {
+export function acquireWithQueuePosition(): { release: () => void; position: number; wait: Promise<void> } {
   const position = activeCount;
-  const permit = await semaphore.acquire();
   activeCount++;
+  
+  let permitRelease: (() => void) | null = null;
+  const waitPromise = semaphore.acquire().then(permit => {
+    permitRelease = () => permit.release();
+  });
+
   return {
     release: () => {
       activeCount--;
-      permit.release();
+      if (permitRelease) permitRelease();
     },
     position,
+    wait: waitPromise,
   };
 }

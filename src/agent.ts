@@ -161,22 +161,45 @@ export async function askAboutRepo(
   repoCwd: string,
   sessionPath: string | undefined,
   userId?: string,
-  onProgress?: () => void,
-  onActivity?: () => void,
+  timeoutMs: number = 90000,
 ): Promise<string> {
   const systemPrompt = buildSystemPrompt(botName, REPO_NAME, REPO_DESC);
   const session = await createSession(repoCwd, systemPrompt, readOnlyTools as AgentTool[], sessionPath, mainModel);
   let answer = "";
+
+  let inactivityTimer: NodeJS.Timeout;
+  let rejectTimeout!: (err: Error) => void;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    rejectTimeout = reject;
+    inactivityTimer = setTimeout(
+      () => reject(new Error("timeout")),
+      timeoutMs,
+    );
+  });
+
+  const resetTimer = () => {
+    clearTimeout(inactivityTimer);
+    inactivityTimer = setTimeout(
+      () => rejectTimeout(new Error("timeout")),
+      timeoutMs,
+    );
+  };
+
   const unsubActivity = session.subscribe((event) => {
-    if (onActivity && (event.type === "turn_start" || event.type === "tool_execution_start" || event.type === "message_start")) {
-      onActivity();
+    if (event.type === "turn_start" || event.type === "tool_execution_start" || event.type === "message_start") {
+      resetTimer();
     }
   });
-  session.subscribe(createTextCollector((text) => { answer += text; onProgress?.(); }));
+  session.subscribe(createTextCollector((text) => {
+    answer += text;
+    resetTimer();
+  }));
+
   const fullPrompt = userId ? `[user_id:${userId}]\n\n${question}` : question;
   try {
-    await session.prompt(fullPrompt);
+    await Promise.race([session.prompt(fullPrompt), timeoutPromise]);
   } finally {
+    clearTimeout(inactivityTimer!);
     unsubActivity();
     session.dispose();
   }

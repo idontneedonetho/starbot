@@ -17,44 +17,56 @@ function getRetryDelay(attempt: number): number {
   return SYNC_RETRY_DELAY_MS * Math.pow(2, attempt - 1);
 }
 
+let syncPromise: Promise<void> | null = null;
+
 // Core fetch-and-reset logic shared by both initRepo and syncRepo.
 // Callers are responsible for ensuring git is initialized before calling this.
 async function pullFromRemote(): Promise<void> {
-  if (!git) throw new Error("[repoSync] git not initialized");
+  if (syncPromise) return syncPromise;
 
-  let lastError: Error | null = null;
+  const doSync = async () => {
+    if (!git) throw new Error("[repoSync] git not initialized");
 
-  for (let attempt = 1; attempt <= SYNC_MAX_RETRIES; attempt++) {
-    try {
-      console.log(`[repoSync] Syncing latest from remote (attempt ${attempt}/${SYNC_MAX_RETRIES})...`);
-      await git.fetch(["origin", config.STARPILOT_BRANCH, "--depth", "1"]);
-      await git.reset(["--hard", `origin/${config.STARPILOT_BRANCH}`]);
-      const log = await git.log({ maxCount: 1 });
-      const latest = log.latest;
-      console.log(
-        `[repoSync] Up to date. Latest commit: ${latest?.hash?.slice(0, 8)} — ${latest?.message}`,
-      );
-      lastSuccessfulSync = new Date();
-      syncFailed = false;
-      return;
-    } catch (err) {
-      lastError = err as Error;
-      console.warn(`[repoSync] Attempt ${attempt} failed:`, err);
-      if (attempt < SYNC_MAX_RETRIES) {
-        const delay = getRetryDelay(attempt);
-        console.log(`[repoSync] Retrying in ${delay / 1000}s...`);
-        await sleep(delay);
+    let lastError: Error | null = null;
+
+    for (let attempt = 1; attempt <= SYNC_MAX_RETRIES; attempt++) {
+      try {
+        console.log(`[repoSync] Syncing latest from remote (attempt ${attempt}/${SYNC_MAX_RETRIES})...`);
+        await git.fetch(["origin", config.STARPILOT_BRANCH, "--depth", "1"]);
+        await git.reset(["--hard", `origin/${config.STARPILOT_BRANCH}`]);
+        const log = await git.log({ maxCount: 1 });
+        const latest = log.latest;
+        console.log(
+          `[repoSync] Up to date. Latest commit: ${latest?.hash?.slice(0, 8)} — ${latest?.message}`,
+        );
+        lastSuccessfulSync = new Date();
+        syncFailed = false;
+        return;
+      } catch (err) {
+        lastError = err as Error;
+        console.warn(`[repoSync] Attempt ${attempt} failed:`, err);
+        if (attempt < SYNC_MAX_RETRIES) {
+          const delay = getRetryDelay(attempt);
+          console.log(`[repoSync] Retrying in ${delay / 1000}s...`);
+          await sleep(delay);
+        }
       }
     }
-  }
 
-  syncFailed = true;
-  console.error("[repoSync] Sync failed after all retries:", lastError);
-  if (lastSuccessfulSync && Date.now() - lastSuccessfulSync.getTime() > STALE_THRESHOLD_MS) {
-    console.warn(
-      `[repoSync] Repo stale for ${Math.round((Date.now() - lastSuccessfulSync.getTime()) / 60_000)}min. Answers may be outdated.`,
-    );
-  }
+    syncFailed = true;
+    console.error("[repoSync] Sync failed after all retries:", lastError);
+    if (lastSuccessfulSync && Date.now() - lastSuccessfulSync.getTime() > STALE_THRESHOLD_MS) {
+      console.warn(
+        `[repoSync] Repo stale for ${Math.round((Date.now() - lastSuccessfulSync.getTime()) / 60_000)}min. Answers may be outdated.`,
+      );
+    }
+  };
+
+  syncPromise = doSync().finally(() => {
+    syncPromise = null;
+  });
+
+  return syncPromise;
 }
 
 export async function initRepo(): Promise<void> {

@@ -32,7 +32,7 @@ export function initPluginSystem(client: Client, rest: REST, appId: string): voi
 export async function loadPlugin(pluginPath: string): Promise<void> {
   try {
     const fileUrl = pathToFileURL(pluginPath).href;
-    const module = await import(fileUrl);
+    const module = await import(`${fileUrl}?t=${Date.now()}`);
     const plugin: Plugin = module;
     const name = path.basename(pluginPath, ".js").replace(/^plugin-/, "");
 
@@ -60,24 +60,25 @@ export async function loadPlugin(pluginPath: string): Promise<void> {
   }
 }
 
-export async function registerCommand(name: string): Promise<void> {
-  const cmd = commands.get(name);
-  if (!cmd) throw new Error(`Command ${name} not found in loaded plugins`);
-
+export async function syncDiscordCommands(staticCommands: any[] = []): Promise<void> {
   if (!restRef || !applicationId) {
-    console.warn(`[plugins] REST not initialized, skipping Discord registration for ${name}`);
+    console.warn(`[plugins] REST not initialized, skipping Discord registration`);
     return;
   }
 
+  const allCmds = [
+    ...staticCommands.map(c => c.data.toJSON()),
+    ...Array.from(commands.values()).map(c => c.data.toJSON()),
+  ];
+
   try {
-    const cmdData = cmd.data.toJSON();
     await restRef.put(
       Routes.applicationCommands(applicationId),
-      { body: [cmdData] },
+      { body: allCmds },
     );
-    console.log(`[plugins] Registered command globally: ${name}`);
+    console.log(`[plugins] Synced ${allCmds.length} commands globally`);
   } catch (err) {
-    console.error(`[plugins] Failed to register command ${name}:`, err);
+    console.error(`[plugins] Failed to sync commands:`, err);
     throw err;
   }
 }
