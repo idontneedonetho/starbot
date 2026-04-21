@@ -127,11 +127,16 @@ async function handleQuestion(
 }
 
 client.on(Events.MessageCreate, async (message: Message) => {
+  let isAllowed = isAllowedChannel(message.channelId);
+  if (!isAllowed && message.channel.isThread()) {
+    isAllowed = isAllowedChannel(message.channel.parentId || "");
+  }
+
   if (
     message.author.bot ||
     !client.user ||
     !message.mentions.has(client.user) ||
-    !isAllowedChannel(message.channelId)
+    !isAllowed
   ) return;
 
   const content = message.content;
@@ -160,31 +165,31 @@ client.on(Events.MessageCreate, async (message: Message) => {
 
   const { release, position, wait } = acquireWithQueuePosition();
 
-  if (position >= config.MAX_CONCURRENT) {
-    const queuePos = position - config.MAX_CONCURRENT + 1;
-    await clearReactions(message);
-    await react(message, queuePos > 9 ? "🔟" : `${queuePos}⃣`);
-  }
-
-  await wait;
-
-  await clearReactions(message);
-  await react(message, "⏳");
-
-  const userId = message.author.id;
-  let answer: string | null = null;
-
   try {
+    if (position >= config.MAX_CONCURRENT) {
+      const queuePos = position - config.MAX_CONCURRENT + 1;
+      await clearReactions(message);
+      await react(message, queuePos > 9 ? "🔟" : `${queuePos}⃣`);
+    }
+
+    await wait;
+
+    await clearReactions(message);
+    await react(message, "⏳");
+
+    const userId = message.author.id;
+    let answer: string | null = null;
+
     const result = await handleQuestion(message, botName, question, userId);
     if (result) {
       answer = result.answer;
     }
+
+    if (answer) {
+      extractAndUpdateMemory(message.author.id, question, answer).catch(console.error);
+    }
   } finally {
     release();
-  }
-
-  if (answer) {
-    extractAndUpdateMemory(message.author.id, question, answer).catch(console.error);
   }
 });
 
