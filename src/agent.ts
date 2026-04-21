@@ -195,7 +195,7 @@ export async function askAboutRepo(
       resetTimer();
     }
   });
-  session.subscribe(createTextCollector((text) => {
+  const unsubText = session.subscribe(createTextCollector((text) => {
     answer += text;
     resetTimer();
   }));
@@ -206,6 +206,7 @@ export async function askAboutRepo(
   } finally {
     clearTimeout(inactivityTimer!);
     unsubActivity();
+    unsubText();
     session.dispose();
   }
   return answer.trim() || "I was unable to generate an answer. Please try again.";
@@ -254,7 +255,7 @@ export async function createPlugin(
     }
   });
 
-  session.subscribe(createTextCollector((text) => {
+  const unsubText = session.subscribe(createTextCollector((text) => {
     answer += text;
     onProgress?.(text);
     onAnswerUpdate?.(answer);
@@ -268,6 +269,7 @@ export async function createPlugin(
   } finally {
     clearTimeout(inactivityTimer!);
     unsubActivity();
+    unsubText();
     session.dispose();
   }
 
