@@ -48,11 +48,16 @@ const memoryExtension = (pi: ExtensionAPI) => {
     if (userIdMatch) {
       const userId = userIdMatch[1];
       const memory = await buildMemoryContext(userId, "User");
+      const cleanPrompt = event.prompt.replace(new RegExp(`\\[user_id:${userId}\\]`), "").trim();
+      
       if (memory) {
         return {
           systemPrompt: event.systemPrompt + "\n\n" + memory,
-          // Use a RegExp so the replacement actually fires (string literal won't match brackets).
-          prompt: event.prompt.replace(new RegExp(`\\[user_id:${userId}\\]`), "").trim(),
+          prompt: cleanPrompt,
+        };
+      } else {
+        return {
+          prompt: cleanPrompt,
         };
       }
     }

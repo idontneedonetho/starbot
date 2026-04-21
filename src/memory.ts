@@ -147,10 +147,9 @@ export async function extractAndUpdateMemory(
       const merged = [...profile.facts, ...uniqueNewFacts];
       let finalFacts: Fact[];
       if (merged.length > MAX_FACTS) {
-        const limited = merged.slice(-MAX_FACTS);
-        const summary = await singleTurnLlm(COMPRESSOR_SYSTEM, formatFactsForCompression(limited));
+        const summary = await singleTurnLlm(COMPRESSOR_SYSTEM, formatFactsForCompression(merged));
         finalFacts = [{ category: "preference", content: summary.trim(), confidence: 5 }];
-        console.log(`[memory] Compressed ${limited.length} facts for user ${userId}`);
+        console.log(`[memory] Compressed ${merged.length} facts for user ${userId}`);
       } else {
         finalFacts = merged;
       }
