@@ -8,9 +8,8 @@ import {
   ActivityType,
   REST,
 } from "discord.js";
-import { config, ALLOWED_CHANNEL_IDS, ANSWER_TIMEOUT_SECONDS, REPO_NAME } from "./config.js";
+import { config, ALLOWED_CHANNEL_IDS, ANSWER_TIMEOUT_SECONDS, REPO_NAME, REPO_CACHE_DIR } from "./config.js";
 import { askAboutRepo } from "./agent.js";
-import { getRepoCacheDir } from "./repoSync.js";
 import { extractAndUpdateMemory, getOrCreateSessionPath, deleteSession } from "./memory.js";
 import { tryAcquireRateLimit, acquireWithQueuePosition } from "./utils/limits.js";
 import { chunkAnswer } from "./utils/chunking.js";
@@ -65,13 +64,13 @@ async function handleQuestion(
   message: Message,
   botName: string,
   question: string,
-  userId: string
+  userId: string,
 ): Promise<{ answer: string; sessionThreadId: string } | null> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(
       () => reject(new Error("timeout")),
-      ANSWER_TIMEOUT_SECONDS * 1000
+      ANSWER_TIMEOUT_SECONDS * 1000,
     );
   });
 
@@ -81,7 +80,7 @@ async function handleQuestion(
 
   if (!message.channel.isThread()) {
     try {
-      const threadName = sanitizeThreadName(question.split('\n')[0]);
+      const threadName = sanitizeThreadName(question.split("\n")[0]);
       threadTarget = await message.startThread({
         name: threadName,
         autoArchiveDuration: 60,
@@ -96,7 +95,7 @@ async function handleQuestion(
 
   try {
     const answer = await Promise.race([
-      askAboutRepo(botName, question, getRepoCacheDir(), threadSessionPath, userId, resetTimer, resetTimer),
+      askAboutRepo(botName, question, REPO_CACHE_DIR, threadSessionPath, userId, resetTimer, resetTimer),
       timeout,
     ]);
     clearTimeout(timer);
@@ -119,23 +118,18 @@ async function handleQuestion(
     const isTimeout = err instanceof Error && err.message === "timeout";
     console.error("[bot] handleQuestion error:", err);
 
+    const errMsg = isTimeout
+      ? `⏱️ That took too long (>${ANSWER_TIMEOUT_SECONDS}s). Try a more specific question.`
+      : `❌ Something went wrong. Please try again.`;
+
     if (threadTarget) {
-      await threadTarget.send(
-        isTimeout
-          ? `⏱️ That took too long (>${ANSWER_TIMEOUT_SECONDS}s). Try a more specific question.`
-          : `❌ Something went wrong. Please try again.`
-      );
+      await threadTarget.send(errMsg);
     } else {
-      await message.reply(
-        isTimeout
-          ? `⏱️ That took too long (>${ANSWER_TIMEOUT_SECONDS}s). Try a more specific question.`
-          : `❌ Something went wrong. Please try again.`
-      );
+      await message.reply(errMsg);
     }
 
     await clearReactions(message);
     await react(message, EMOJI_ERROR);
-
     return null;
   }
 }
@@ -150,7 +144,6 @@ client.on(Events.MessageCreate, async (message: Message) => {
 
   const content = message.content;
   const botName = message.guild?.members.me?.nickname || client.user.displayName || client.user.username || "StarBot";
-
   const question = stripMentions(content);
 
   if (!question) {
@@ -158,32 +151,35 @@ client.on(Events.MessageCreate, async (message: Message) => {
       `Hey! Ask me anything about the ${REPO_NAME} codebase.\n` +
       `Example: \`@${botName} what vehicles are supported?\`\n\n` +
       `💡 I will create a thread to answer your question. You can continue the conversation there!\n` +
-      `🧠 I'll also pick up on things you mention about your setup and remember them.`
+      `🧠 I'll also pick up on things you mention about your setup and remember them.`,
     );
     return;
   }
 
-  if (!tryAcquireRateLimit(message.author.id)) {
+  if (!await tryAcquireRateLimit(message.author.id)) {
     await message.reply(
-      `⚠️ You're doing that too often. Please wait a minute before asking another question.`
+      `⚠️ You're doing that too often. Please wait a minute before asking another question.`,
     );
     return;
   }
 
+  // Add the "seen" reaction and leave it visible while the bot is waiting/working.
   await react(message, EMOJI_SEEN);
-  await clearReactions(message);
 
   const { release, position: queuePos } = await acquireWithQueuePosition();
 
+  // Show queue position if there are requests ahead, then switch to the hourglass.
   if (queuePos > 0) {
+    await clearReactions(message);
     await react(message, queuePos > 9 ? "🔟" : `${queuePos}⃣`);
   }
 
+  await clearReactions(message);
   await react(message, "⏳");
 
   const userId = message.author.id;
-
   let answer: string | null = null;
+
   try {
     const result = await handleQuestion(message, botName, question, userId);
     if (result) {
@@ -203,7 +199,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   const commandName = interaction.commandName;
 
-  // Check plugin commands
   const pluginCommand = getAllCommands().find(c => c.data.name === commandName);
   if (pluginCommand) {
     try {
@@ -215,7 +210,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
-  // Check dynamically loaded commands
   const dynamicCommand = getCommand(commandName);
   if (dynamicCommand) {
     try {
@@ -238,14 +232,12 @@ client.once(Events.ClientReady, async (c) => {
   initPluginSystem(client, rest, applicationId);
   setupEventHandlers(client);
 
-  // Register plugin manager commands
-  const { getAllCommands: getPluginCmds } = await import("./plugins/manager.js");
-  const pluginCommands = getPluginCmds().map(c => c.data.toJSON());
-  
+  // Register the static plugin manager commands (/manage etc.).
+  const pluginCommands = getAllCommands().map(c => c.data.toJSON());
   try {
     await rest.put(
       `/applications/${applicationId}/commands`,
-      { body: pluginCommands }
+      { body: pluginCommands },
     );
     console.log("[bot] Registered plugin commands: /manage");
   } catch (err) {
@@ -271,6 +263,4 @@ client.on(Events.ThreadDelete, (thread) => {
 
 export const isBotReady = () => client.isReady();
 export const startBot = async () => client.login(config.DISCORD_TOKEN);
-export const stopBot = async () => {
-  await client.destroy();
-};
+export const stopBot = async () => { await client.destroy(); };

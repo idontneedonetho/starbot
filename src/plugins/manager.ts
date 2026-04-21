@@ -1,35 +1,23 @@
 import { SlashCommandBuilder, type Interaction, type PermissionsBitField, type ChatInputCommandInteraction } from "discord.js";
 import fs from "fs";
-import { PLUGINS_DIR } from "../config.js";
+import path from "path";
+import { PLUGINS_DIR, ADMIN_USER_IDS } from "../config.js";
 import { createPlugin } from "../agent.js";
 import { loadPlugin, registerCommand, commands } from "./loader.js";
 
-const ADMIN_USER_IDS = process.env.ADMIN_USER_IDS
-  ? process.env.ADMIN_USER_IDS.split(",").map(s => s.trim()).filter(Boolean)
-  : [];
 const adminUserSet = new Set(ADMIN_USER_IDS);
 
 async function checkAdmin(interaction: Interaction): Promise<boolean> {
   const userId = interaction.user?.id;
   if (!userId) return false;
-  
+
   if (adminUserSet.has(userId)) return true;
-  
+
   const member = interaction.member;
   if (!member) return false;
-  
+
   const perms = member.permissions as unknown as PermissionsBitField;
   return perms.has("Administrator");
-}
-
-export function getPluginChoices(): Array<{ name: string; value: string }> {
-  if (!fs.existsSync(PLUGINS_DIR)) return [];
-  
-  const files = fs.readdirSync(PLUGINS_DIR).filter(f => f.endsWith(".js") && f.startsWith("plugin-"));
-  return files.map(f => ({
-    name: f.replace("plugin-", "").replace(".js", ""),
-    value: f.replace("plugin-", "").replace(".js", ""),
-  }));
 }
 
 export const manageCommand = {
@@ -39,13 +27,12 @@ export const manageCommand = {
     .addStringOption(opt =>
       opt.setName("prompt")
         .setDescription("What you want to do (e.g., 'create a ping command', 'delete this plugin', 'add a welcome message')")
-        .setRequired(true)
+        .setRequired(true),
     )
     .addStringOption(opt =>
       opt.setName("plugin")
-        .setDescription("Existing plugin to modify")
-        .setRequired(false)
-        .addChoices(...getPluginChoices())
+        .setDescription("Existing plugin name to modify (type the name)")
+        .setRequired(false),
     ),
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -64,15 +51,19 @@ export const manageCommand = {
     }
 
     await interaction.deferReply();
-
-    let statusMessage = "🔄 Working...";
-    await interaction.editReply(statusMessage);
+    await interaction.editReply("🔄 Working...");
 
     let lastUpdate = Date.now();
     let lastStatus = "";
     let lastAnswerLength = 0;
-
     const UPDATE_INTERVAL = 5000;
+
+    // Snapshot existing plugin files so we only load newly created ones after the agent runs.
+    const existingFiles = new Set(
+      fs.existsSync(PLUGINS_DIR)
+        ? fs.readdirSync(PLUGINS_DIR).filter(f => f.endsWith(".js") && f.startsWith("plugin-"))
+        : [],
+    );
 
     try {
       const fullPrompt = plugin
@@ -91,20 +82,17 @@ export const manageCommand = {
         (currentAnswer) => {
           const now = Date.now();
           const answerLength = currentAnswer.length;
-
           if (now - lastUpdate >= UPDATE_INTERVAL && answerLength !== lastAnswerLength) {
             lastUpdate = now;
             lastAnswerLength = answerLength;
-
             const snippet = currentAnswer.slice(-200).replace(/\n/g, " ");
             const newStatus = snippet.length > 100 ? `🔄 ${snippet.slice(0, 100)}...` : `🔄 ${snippet}`;
-            
             if (newStatus !== lastStatus) {
               lastStatus = newStatus;
               interaction.editReply(newStatus).catch(() => {});
             }
           }
-        }
+        },
       );
 
       if (result.includes("PLUGIN_ERROR:")) {
@@ -116,14 +104,18 @@ export const manageCommand = {
         console.warn("[manage] Agent did not confirm PLUGIN_READY, attempting to load anyway...");
       }
 
-      const newFiles = fs.readdirSync(PLUGINS_DIR).filter(f => f.endsWith(".js") && f.startsWith("plugin-"));
+      // Only load files that didn't exist before the agent ran to avoid double-loading.
+      const newFiles = fs.existsSync(PLUGINS_DIR)
+        ? fs.readdirSync(PLUGINS_DIR).filter(f => f.endsWith(".js") && f.startsWith("plugin-") && !existingFiles.has(f))
+        : [];
+
       let loadedCount = 0;
       for (const file of newFiles) {
+        const pluginPath = path.join(PLUGINS_DIR, file);
         try {
-          await loadPlugin(`${PLUGINS_DIR}/${file}`);
-          const name = file.replace("plugin-", "").replace(".js", "");
-          const cmd = commands.get(name);
-          if (cmd) {
+          await loadPlugin(pluginPath);
+          const name = file.replace(/^plugin-/, "").replace(/\.js$/, "");
+          if (commands.get(name)) {
             await registerCommand(name);
           }
           loadedCount++;
@@ -133,16 +125,19 @@ export const manageCommand = {
         }
       }
 
-      if (loadedCount === 0) {
-        throw new Error("No plugins could be loaded");
+      if (newFiles.length > 0 && loadedCount === 0) {
+        throw new Error("No new plugins could be loaded");
       }
 
-      await interaction.editReply(`✅ Done. (${loadedCount} plugin(s) loaded)`);
+      const summary = loadedCount > 0
+        ? `✅ Done. (${loadedCount} new plugin(s) loaded)`
+        : `✅ Done. (no new plugin files created)`;
+      await interaction.editReply(summary);
     } catch (err) {
       console.error("[manage] Agent error:", err);
       await interaction.editReply(`❌ Failed: ${err}`);
     }
-  }
+  },
 };
 
 export function getAllCommands(): Array<any> {

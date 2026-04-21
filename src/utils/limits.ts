@@ -4,9 +4,10 @@ import { RATE_LIMIT_WINDOW_SEC, RATE_LIMIT_MAX, MAX_CONCURRENT } from "../config
 
 export const rateLimiter = new RateLimiterMemory({ points: RATE_LIMIT_MAX, duration: RATE_LIMIT_WINDOW_SEC });
 
-export function tryAcquireRateLimit(userId: string): boolean {
+// rate-limiter-flexible returns a Promise — must be awaited for the limit to actually fire.
+export async function tryAcquireRateLimit(userId: string): Promise<boolean> {
   try {
-    rateLimiter.consume(userId, 1);
+    await rateLimiter.consume(userId, 1);
     return true;
   } catch {
     return false;
@@ -26,6 +27,6 @@ export async function acquireWithQueuePosition(): Promise<{ release: () => void;
       activeCount--;
       permit.release();
     },
-    position
+    position,
   };
 }

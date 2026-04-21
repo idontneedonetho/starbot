@@ -1,4 +1,16 @@
-import { AuthStorage, ModelRegistry, createAgentSession, DefaultResourceLoader, SessionManager, readOnlyTools, createCodingTools, createReadOnlyTools, type AgentSession, type AgentSessionEventListener, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import {
+  AuthStorage,
+  ModelRegistry,
+  createAgentSession,
+  DefaultResourceLoader,
+  SessionManager,
+  readOnlyTools,
+  createCodingTools,
+  createReadOnlyTools,
+  type AgentSession,
+  type AgentSessionEventListener,
+  type ExtensionAPI,
+} from "@mariozechner/pi-coding-agent";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { buildMemoryContext } from "./memory.js";
 import { config, REPO_NAME, REPO_DESC, PLUGINS_DIR, BOT_SRC_DIR } from "./config.js";
@@ -18,18 +30,6 @@ if (!mainModel) {
   console.warn(`[agent] Model ${config.LLM_PROVIDER}/${config.LLM_MODEL} not found; pi will pick first available.`);
 }
 
-function getPluginTools(): AgentTool[] {
-  return createCodingTools(PLUGINS_DIR) as AgentTool[];
-}
-
-function getBotTools(): AgentTool[] {
-  return createReadOnlyTools(BOT_SRC_DIR) as AgentTool[];
-}
-
-function getRepoTools(): AgentTool[] {
-  return readOnlyTools;
-}
-
 function createTextCollector(onText: (text: string) => void): AgentSessionEventListener {
   return (event) => {
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
@@ -41,6 +41,7 @@ function createTextCollector(onText: (text: string) => void): AgentSessionEventL
 const MAX_LOADER_CACHE_SIZE = 10;
 const loaderCache: Map<string, DefaultResourceLoader> = new Map();
 
+// Extension that injects per-user memory context before each agent turn.
 const memoryExtension = (pi: ExtensionAPI) => {
   pi.on("before_agent_start", async (event) => {
     const userIdMatch = event.prompt.match(/\[user_id:(\d+)\]/);
@@ -50,7 +51,8 @@ const memoryExtension = (pi: ExtensionAPI) => {
       if (memory) {
         return {
           systemPrompt: event.systemPrompt + "\n\n" + memory,
-          prompt: event.prompt.replace(`\[user_id:${userId}\]`, "").trim(),
+          // Use a RegExp so the replacement actually fires (string literal won't match brackets).
+          prompt: event.prompt.replace(new RegExp(`\\[user_id:${userId}\\]`), "").trim(),
         };
       }
     }
@@ -62,14 +64,14 @@ function getLoader(cwd: string, systemPrompt: string, extensionFactory?: (pi: Ex
   if (loaderCache.has(key)) {
     return loaderCache.get(key)!;
   }
-  
+
   if (loaderCache.size >= MAX_LOADER_CACHE_SIZE) {
     const firstKey = loaderCache.keys().next().value;
     if (firstKey) loaderCache.delete(firstKey);
   }
-  
+
   const extensions = extensionFactory ? [extensionFactory, memoryExtension] : [memoryExtension];
-  
+
   const loader = new DefaultResourceLoader({
     cwd,
     systemPromptOverride: () => systemPrompt,
@@ -79,7 +81,13 @@ function getLoader(cwd: string, systemPrompt: string, extensionFactory?: (pi: Ex
   return loader;
 }
 
-async function createSession(cwd: string, systemPrompt: string, tools: AgentTool[], sessionPath?: string, model = mainModel): Promise<AgentSession> {
+async function createSession(
+  cwd: string,
+  systemPrompt: string,
+  tools: AgentTool[],
+  sessionPath?: string,
+  model = mainModel,
+): Promise<AgentSession> {
   const loader = getLoader(cwd, systemPrompt);
   await loader.reload();
 
@@ -100,13 +108,43 @@ async function createSession(cwd: string, systemPrompt: string, tools: AgentTool
     sessionManager = SessionManager.inMemory();
   }
 
-  const { session } = await createAgentSession({ cwd, model, sessionManager, authStorage, modelRegistry, tools: tools as any, resourceLoader: loader });
+  const { session } = await createAgentSession({
+    cwd,
+    model,
+    sessionManager,
+    authStorage,
+    modelRegistry,
+    tools: tools as any,
+    resourceLoader: loader,
+  });
+  return session;
+}
+
+// Creates a minimal session with no extensions (used for internal LLM calls like memory extraction).
+async function createRawSession(systemPrompt: string, tools: AgentTool[], model = mainModel): Promise<AgentSession> {
+  const loader = new DefaultResourceLoader({
+    cwd: process.cwd(),
+    systemPromptOverride: () => systemPrompt,
+    extensionFactories: [],
+  });
+  await loader.reload();
+  const sessionManager = SessionManager.inMemory();
+  const { session } = await createAgentSession({
+    cwd: process.cwd(),
+    model,
+    sessionManager,
+    authStorage,
+    modelRegistry,
+    tools: tools as any,
+    resourceLoader: loader,
+  });
   return session;
 }
 
 export async function singleTurnLlm(systemPrompt: string, userMessage: string, model = memoryModel ?? mainModel): Promise<string> {
   if (!model) throw new Error("No model configured for LLM operations");
-  const session = await createSession(process.cwd(), systemPrompt, getRepoTools(), undefined, model);
+  // Use a raw session — no memory extension needed for internal LLM calls.
+  const session = await createRawSession(systemPrompt, readOnlyTools as AgentTool[], model);
   let result = "";
   session.subscribe(createTextCollector((text) => { result += text; }));
   try {
@@ -117,9 +155,17 @@ export async function singleTurnLlm(systemPrompt: string, userMessage: string, m
   return result.trim();
 }
 
-export async function askAboutRepo(botName: string, question: string, repoCwd: string, sessionPath: string | undefined, userId?: string, onProgress?: () => void, onActivity?: () => void): Promise<string> {
+export async function askAboutRepo(
+  botName: string,
+  question: string,
+  repoCwd: string,
+  sessionPath: string | undefined,
+  userId?: string,
+  onProgress?: () => void,
+  onActivity?: () => void,
+): Promise<string> {
   const systemPrompt = buildSystemPrompt(botName, REPO_NAME, REPO_DESC);
-  const session = await createSession(repoCwd, systemPrompt, getRepoTools(), sessionPath, mainModel);
+  const session = await createSession(repoCwd, systemPrompt, readOnlyTools as AgentTool[], sessionPath, mainModel);
   let answer = "";
   const unsubActivity = session.subscribe((event) => {
     if (onActivity && (event.type === "turn_start" || event.type === "tool_execution_start" || event.type === "message_start")) {
@@ -143,50 +189,59 @@ export async function createPlugin(
   onProgress?: (text: string) => void,
   onActivity?: () => void,
   timeoutMs?: number,
-  onAnswerUpdate?: (fullAnswer: string) => void
+  onAnswerUpdate?: (fullAnswer: string) => void,
 ): Promise<string> {
-  const systemPrompt = CREATE_PLUGIN_SYSTEM;
-
-  const tools = [...getPluginTools(), ...getBotTools()];
-  const session = await createSession(cwd, systemPrompt, tools, undefined, mainModel);
+  const timeout = timeoutMs ?? 120_000;
+  const tools = [
+    ...(createCodingTools(PLUGINS_DIR) as AgentTool[]),
+    ...(createReadOnlyTools(BOT_SRC_DIR) as AgentTool[]),
+  ];
+  const session = await createSession(cwd, CREATE_PLUGIN_SYSTEM, tools, undefined, mainModel);
   let answer = "";
-  let lastEventTime = Date.now();
-  
+
+  // Inactivity timeout: resets whenever the agent produces an event.
+  // Using Promise.race ensures the rejection actually reaches the caller (setInterval throw does not).
+  let inactivityTimer: NodeJS.Timeout;
+  let rejectTimeout!: (err: Error) => void;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    rejectTimeout = reject;
+    inactivityTimer = setTimeout(
+      () => reject(new Error(`Timeout after ${timeout / 1000}s of inactivity`)),
+      timeout,
+    );
+  });
+
+  const resetTimer = () => {
+    clearTimeout(inactivityTimer);
+    inactivityTimer = setTimeout(
+      () => rejectTimeout(new Error(`Timeout after ${timeout / 1000}s of inactivity`)),
+      timeout,
+    );
+  };
+
   const unsubActivity = session.subscribe((event) => {
-    if (onActivity) {
-      if (event.type === "turn_start" || event.type === "tool_execution_start" || event.type === "message_start") {
-        lastEventTime = Date.now();
-        onActivity();
-      }
+    if (event.type === "turn_start" || event.type === "tool_execution_start" || event.type === "message_start") {
+      resetTimer();
+      onActivity?.();
     }
   });
-  
+
   session.subscribe(createTextCollector((text) => {
     answer += text;
     onProgress?.(text);
     onAnswerUpdate?.(answer);
   }));
 
-  const timeout = timeoutMs || 120000;
-  
-  const timer = setInterval(() => {
-    if (Date.now() - lastEventTime > timeout) {
-      clearInterval(timer);
-      session.dispose();
-      throw new Error(`Timeout after ${timeout / 1000}s of inactivity`);
-    }
-  }, 5000);
-  
   try {
-    await session.prompt(prompt);
+    await Promise.race([session.prompt(prompt), timeoutPromise]);
   } catch (err) {
     console.error("[createPlugin] Session error:", err);
     throw err;
+  } finally {
+    clearTimeout(inactivityTimer!);
+    unsubActivity();
+    session.dispose();
   }
-  
-  clearInterval(timer);
-  unsubActivity();
-  session.dispose();
-  
+
   return answer;
 }

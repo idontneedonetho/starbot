@@ -1,12 +1,9 @@
 import Database from "better-sqlite3";
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
 import { singleTurnLlm } from "./agent.js";
 import { EXTRACTOR_SYSTEM, COMPRESSOR_SYSTEM } from "./prompts.js";
 import { SESSION_DIR, SESSION_MAX_AGE_DAYS, DB_PATH, MAX_FACTS, MIN_CONFIDENCE } from "./config.js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const VALID_CATEGORIES = new Set(["vehicle", "hardware", "expertise", "preference", "useCase", "knownIssues", "goals"]);
 
@@ -61,9 +58,7 @@ type Fact = { category: string; content: string; confidence: number };
 function getProfile(userId: string): { facts: Fact[] } {
   const row = getDb().prepare("SELECT facts FROM user_profiles WHERE user_id = ?").get(userId) as { facts: string } | undefined;
   if (!row) return { facts: [] };
-  return {
-    facts: JSON.parse(row.facts),
-  };
+  return { facts: JSON.parse(row.facts) };
 }
 
 function saveProfile(userId: string, facts: Fact[]): void {
@@ -129,7 +124,7 @@ function formatFactsForCompression(facts: Fact[]): string {
 export async function extractAndUpdateMemory(
   userId: string,
   question: string,
-  answer: string
+  answer: string,
 ): Promise<void> {
   try {
     const profile = getProfile(userId);
@@ -166,29 +161,30 @@ export async function buildMemoryContext(userId: string, username: string): Prom
   const profile = getProfile(userId);
   if (profile.facts.length === 0) return "";
 
-  const byCategory: Record<string, string[]> = {
-    vehicle: [],
-    hardware: [],
-    expertise: [],
-    preference: [],
-    useCase: [],
-    knownIssues: [],
-    goals: [],
-  };
+  // Derive the category map from VALID_CATEGORIES — single source of truth.
+  const byCategory: Record<string, string[]> = Object.fromEntries(
+    [...VALID_CATEGORIES].map(cat => [cat, []]),
+  );
 
   for (const fact of profile.facts) {
-    byCategory[fact.category].push(fact.content);
+    byCategory[fact.category]?.push(fact.content);
   }
 
-  const parts: string[] = [`[What you know about ${username}]`];
+  const LABELS: Record<string, string> = {
+    vehicle: "Vehicle",
+    hardware: "Hardware",
+    expertise: "Expertise",
+    preference: "Preferences",
+    useCase: "Use Case",
+    knownIssues: "Known Issues",
+    goals: "Goals",
+  };
 
-  if (byCategory.vehicle.length) parts.push(`Vehicle: ${byCategory.vehicle.join(", ")}`);
-  if (byCategory.hardware.length) parts.push(`Hardware: ${byCategory.hardware.join(", ")}`);
-  if (byCategory.expertise.length) parts.push(`Expertise: ${byCategory.expertise.join(", ")}`);
-  if (byCategory.preference.length) parts.push(`Preferences: ${byCategory.preference.join(", ")}`);
-  if (byCategory.useCase.length) parts.push(`Use Case: ${byCategory.useCase.join(", ")}`);
-  if (byCategory.knownIssues.length) parts.push(`Known Issues: ${byCategory.knownIssues.join(", ")}`);
-  if (byCategory.goals.length) parts.push(`Goals: ${byCategory.goals.join(", ")}`);
+  const parts: string[] = [`[What you know about ${username}]`];
+  for (const cat of VALID_CATEGORIES) {
+    const items = byCategory[cat];
+    if (items.length) parts.push(`${LABELS[cat]}: ${items.join(", ")}`);
+  }
 
   return parts.join("\n") + "\n\nUse this context if relevant to their question.\n\n";
 }

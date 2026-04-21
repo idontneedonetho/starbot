@@ -4,9 +4,14 @@ import path from "path";
 import { pathToFileURL } from "url";
 import { PLUGINS_DIR } from "../config.js";
 
-const commands = new Map<string, { data: SlashCommandBuilder; execute: (interaction: any) => Promise<void> }>();
-export { commands };
+export const commands = new Map<string, { data: SlashCommandBuilder; execute: (interaction: any) => Promise<void> }>();
 const eventHandlers = new Map<string, Array<(client: Client, ...args: any[]) => Promise<void>>>();
+
+// Maps plugin name → list of { eventName, handler } pairs so we can surgically
+// remove only that plugin's handlers without touching other plugins' registrations.
+type HandlerEntry = { eventName: string; handler: (client: Client, ...args: any[]) => Promise<void> };
+const pluginEventIndex = new Map<string, HandlerEntry[]>();
+
 let restRef: REST | null = null;
 let applicationId: string | null = null;
 
@@ -40,12 +45,15 @@ export async function loadPlugin(pluginPath: string): Promise<void> {
     }
 
     if (plugin.events) {
+      const entries: HandlerEntry[] = [];
       for (const [eventName, handler] of Object.entries(plugin.events)) {
-        const handlers = eventHandlers.get(eventName) || [];
+        const handlers = eventHandlers.get(eventName) ?? [];
         handlers.push(handler);
         eventHandlers.set(eventName, handlers);
+        entries.push({ eventName, handler });
         console.log(`[plugins] Loaded event handler: ${eventName} -> ${name}`);
       }
+      pluginEventIndex.set(name, entries);
     }
   } catch (err) {
     throw new Error(`Failed to load plugin: ${err}`);
@@ -65,7 +73,7 @@ export async function registerCommand(name: string): Promise<void> {
     const cmdData = cmd.data.toJSON();
     await restRef.put(
       Routes.applicationCommands(applicationId),
-      { body: [cmdData] }
+      { body: [cmdData] },
     );
     console.log(`[plugins] Registered command globally: ${name}`);
   } catch (err) {
@@ -75,13 +83,26 @@ export async function registerCommand(name: string): Promise<void> {
 }
 
 export function unloadPlugin(name: string): void {
-  if (commands.has(name)) {
-    commands.delete(name);
+  if (commands.delete(name)) {
     console.log(`[plugins] Unloaded command: ${name}`);
   }
-  if (eventHandlers.has(name)) {
-    eventHandlers.delete(name);
-    console.log(`[plugins] Unloaded event handlers: ${name}`);
+
+  // Filter out only this plugin's handler functions, leaving other plugins' handlers intact.
+  const entries = pluginEventIndex.get(name) ?? [];
+  for (const { eventName, handler } of entries) {
+    const handlers = eventHandlers.get(eventName);
+    if (handlers) {
+      const filtered = handlers.filter(h => h !== handler);
+      if (filtered.length > 0) {
+        eventHandlers.set(eventName, filtered);
+      } else {
+        eventHandlers.delete(eventName);
+      }
+    }
+  }
+  if (entries.length > 0) {
+    pluginEventIndex.delete(name);
+    console.log(`[plugins] Unloaded event handlers for: ${name}`);
   }
 }
 
@@ -90,7 +111,7 @@ export function getCommand(name: string): { data: SlashCommandBuilder; execute: 
 }
 
 export function getEventHandlers(eventName: string): Array<(client: Client, ...args: any[]) => Promise<void>> {
-  return eventHandlers.get(eventName) || [];
+  return eventHandlers.get(eventName) ?? [];
 }
 
 export async function loadAllPlugins(): Promise<void> {

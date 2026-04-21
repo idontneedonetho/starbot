@@ -8,22 +8,29 @@ import { cleanupOldSessions } from "./memory.js";
 function getHealthStatus(): { ok: boolean; status: string } {
   const botReady = isBotReady();
   const repoReady = isRepoReady();
-  
+
   if (!botReady) return { ok: false, status: "bot not ready" };
   if (!repoReady) return { ok: false, status: "repo not ready" };
-  
+
   return { ok: true, status: "healthy" };
 }
 
 async function main(): Promise<void> {
   console.log("=== StarBot starting up ===");
 
+  validateConfig();
+
+  // Session cleanup is non-critical — don't let it abort startup.
   try {
-    validateConfig();
     cleanupOldSessions();
+  } catch (err) {
+    console.warn("[index] Session cleanup failed (non-fatal):", err);
+  }
+
+  try {
     await initRepo();
   } catch (err) {
-    console.error("[index] Failed to initialise:", err);
+    console.error("[index] Failed to initialise repo:", err);
     process.exit(1);
   }
 
@@ -40,9 +47,9 @@ async function main(): Promise<void> {
     const health = getHealthStatus();
     if (req.url === "/health") {
       res.writeHead(health.ok ? 200 : 503, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ 
+      res.end(JSON.stringify({
         ...health,
-        lastSync: getLastSyncTime()?.toISOString() ?? null
+        lastSync: getLastSyncTime()?.toISOString() ?? null,
       }));
     } else {
       res.writeHead(404);

@@ -19,7 +19,7 @@ function getRetryDelay(attempt: number): number {
 
 export async function initRepo(): Promise<void> {
   if (initPromise) return initPromise;
-  
+
   const dir = REPO_CACHE_DIR;
 
   const doInit = async () => {
@@ -30,7 +30,7 @@ export async function initRepo(): Promise<void> {
         await syncRepo();
       } else {
         console.log(
-          `[repoSync] Cloning ${config.STARPILOT_REPO_URL} (branch: ${config.STARPILOT_BRANCH}) → ${dir}`
+          `[repoSync] Cloning ${config.STARPILOT_REPO_URL} (branch: ${config.STARPILOT_BRANCH}) → ${dir}`,
         );
         fs.mkdirSync(dir, { recursive: true });
         const baseGit = simpleGit();
@@ -49,6 +49,8 @@ export async function initRepo(): Promise<void> {
     } catch (err) {
       console.error("[repoSync] Initial clone failed:", err);
       isInitialized = false;
+      // Clear the cached promise so callers can retry rather than seeing a permanently rejected promise.
+      initPromise = null;
       throw err;
     }
   };
@@ -78,7 +80,7 @@ export async function syncRepo(): Promise<void> {
       const log = await git.log({ maxCount: 1 });
       const latest = log.latest;
       console.log(
-        `[repoSync] Up to date. Latest commit: ${latest?.hash?.slice(0, 8)} — ${latest?.message}`
+        `[repoSync] Up to date. Latest commit: ${latest?.hash?.slice(0, 8)} — ${latest?.message}`,
       );
       lastSuccessfulSync = new Date();
       syncFailed = false;
@@ -98,13 +100,9 @@ export async function syncRepo(): Promise<void> {
   console.error("[repoSync] Sync failed after all retries:", lastError);
   if (lastSuccessfulSync && Date.now() - lastSuccessfulSync.getTime() > STALE_THRESHOLD_MS) {
     console.warn(
-      `[repoSync] Repo stale for ${Math.round((Date.now() - lastSuccessfulSync.getTime()) / 60_000)}min. Answers may be outdated.`
+      `[repoSync] Repo stale for ${Math.round((Date.now() - lastSuccessfulSync.getTime()) / 60_000)}min. Answers may be outdated.`,
     );
   }
-}
-
-export function getRepoCacheDir(): string {
-  return REPO_CACHE_DIR;
 }
 
 export function isRepoReady(): boolean {
@@ -114,4 +112,3 @@ export function isRepoReady(): boolean {
 export function getLastSyncTime(): Date | null {
   return lastSuccessfulSync;
 }
-
