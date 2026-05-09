@@ -2,6 +2,7 @@ import "dotenv/config";
 import path from "path";
 import { fileURLToPath } from "url";
 import { cleanEnv, str, num, makeValidator } from "envalid";
+import cron from "node-cron";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -11,8 +12,7 @@ const defaultPluginsDir = path.resolve(__dirname, "../data/plugins");
 const defaultBotSrcDir = path.resolve(__dirname, "../src");
 
 const cronValidator = makeValidator((val: string) => {
-  const regex = /^(\*|([0-5]?\d|\*)) (\*|([0-5]?\d|\*)) (\*|([0-2]?\d|\*)) (\*|([0-2]?\d|\*)) (\*|([0-6]|\*))$/;
-  if (!regex.test(val)) throw new Error("Invalid cron expression");
+  if (!cron.validate(val)) throw new Error(`Invalid cron expression: "${val}"`);
   return val;
 });
 

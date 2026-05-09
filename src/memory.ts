@@ -2,16 +2,19 @@ import Database from "better-sqlite3";
 import fs from "fs";
 import path from "path";
 import { singleTurnLlm } from "./agent.js";
-import { EXTRACTOR_SYSTEM, COMPRESSOR_SYSTEM } from "./prompts.js";
-import { SESSION_DIR, SESSION_MAX_AGE_DAYS, DB_PATH, MAX_FACTS, MIN_CONFIDENCE } from "./config.js";
+import { buildExtractorSystem, COMPRESSOR_SYSTEM } from "./prompts.js";
+import { SESSION_DIR, SESSION_MAX_AGE_DAYS, DB_PATH, MAX_FACTS, MIN_CONFIDENCE, REPO_NAME, REPO_DESC } from "./config.js";
 
-const VALID_CATEGORIES = new Set(["vehicle", "hardware", "expertise", "preference", "useCase", "knownIssues", "goals"]);
+// "summary" is an internal-only category written by the compressor — never extracted from LLM output.
+const VALID_CATEGORIES = new Set(["vehicle", "hardware", "expertise", "preference", "useCase", "knownIssues", "goals", "summary"]);
+const EXTRACTOR_CATEGORIES = new Set(["vehicle", "hardware", "expertise", "preference", "useCase", "knownIssues", "goals"]);
 
 function isValidFact(f: unknown): f is { category: string; content: string; confidence: number } {
   if (!f || typeof f !== "object") return false;
   const obj = f as Record<string, unknown>;
+  // Only accept extractor-facing categories from LLM output — not "summary" (internal-only).
   return (
-    VALID_CATEGORIES.has(obj.category as string) &&
+    EXTRACTOR_CATEGORIES.has(obj.category as string) &&
     typeof obj.content === "string" &&
     typeof obj.confidence === "number" &&
     obj.confidence >= MIN_CONFIDENCE
@@ -58,7 +61,13 @@ type Fact = { category: string; content: string; confidence: number };
 function getProfile(userId: string): { facts: Fact[] } {
   const row = getDb().prepare("SELECT facts FROM user_profiles WHERE user_id = ?").get(userId) as { facts: string } | undefined;
   if (!row) return { facts: [] };
-  return { facts: JSON.parse(row.facts) };
+  try {
+    return { facts: JSON.parse(row.facts) };
+  } catch {
+    console.warn(`[memory] Corrupt facts JSON for user ${userId}, resetting profile.`);
+    saveProfile(userId, []);
+    return { facts: [] };
+  }
 }
 
 function saveProfile(userId: string, facts: Fact[]): void {
@@ -69,15 +78,9 @@ function saveProfile(userId: string, facts: Fact[]): void {
   `).run(userId, JSON.stringify(facts), new Date().toISOString());
 }
 
-let sessionDirEnsured = false;
-
+// mkdirSync with recursive:true is idempotent — no need to cache a flag.
 function ensureSessionDir(): void {
-  if (!sessionDirEnsured) {
-    if (!fs.existsSync(SESSION_DIR)) {
-      fs.mkdirSync(SESSION_DIR, { recursive: true });
-    }
-    sessionDirEnsured = true;
-  }
+  fs.mkdirSync(SESSION_DIR, { recursive: true });
 }
 
 export function cleanupOldSessions(): void {
@@ -134,7 +137,7 @@ export async function extractAndUpdateMemory(
     try {
       const profile = getProfile(userId);
       const prompt = `Question from user: ${question}\n\nBot's answer: ${answer}`;
-      const raw = await singleTurnLlm(EXTRACTOR_SYSTEM, prompt);
+      const raw = await singleTurnLlm(buildExtractorSystem(REPO_NAME, REPO_DESC), prompt);
 
       const newFacts = parseFactsFromLLM(raw);
       if (newFacts.length === 0) return;
@@ -148,7 +151,9 @@ export async function extractAndUpdateMemory(
       let finalFacts: Fact[];
       if (merged.length > MAX_FACTS) {
         const summary = await singleTurnLlm(COMPRESSOR_SYSTEM, formatFactsForCompression(merged));
-        finalFacts = [{ category: "preference", content: summary.trim(), confidence: 5 }];
+        // Store as the internal "summary" category so it renders under its own label
+        // and does not pollute the structured category data.
+        finalFacts = [{ category: "summary", content: summary.trim(), confidence: 5 }];
         console.log(`[memory] Compressed ${merged.length} facts for user ${userId}`);
       } else {
         finalFacts = merged;
@@ -172,6 +177,22 @@ export async function extractAndUpdateMemory(
   return currentTask;
 }
 
+const LABELS: Record<string, string> = {
+  vehicle: "Vehicle",
+  hardware: "Hardware",
+  expertise: "Expertise",
+  preference: "Preferences",
+  useCase: "Use Case",
+  knownIssues: "Known Issues",
+  goals: "Goals",
+  summary: "Summary",
+};
+
+// Enforce at module load: every category must have a label.
+for (const cat of VALID_CATEGORIES) {
+  if (!LABELS[cat]) throw new Error(`[memory] Missing label for category: ${cat}`);
+}
+
 export async function buildMemoryContext(userId: string, username: string): Promise<string> {
   const profile = getProfile(userId);
   if (profile.facts.length === 0) return "";
@@ -185,20 +206,10 @@ export async function buildMemoryContext(userId: string, username: string): Prom
     byCategory[fact.category]?.push(fact.content);
   }
 
-  const LABELS: Record<string, string> = {
-    vehicle: "Vehicle",
-    hardware: "Hardware",
-    expertise: "Expertise",
-    preference: "Preferences",
-    useCase: "Use Case",
-    knownIssues: "Known Issues",
-    goals: "Goals",
-  };
-
   const parts: string[] = [`[What you know about ${username}]`];
   for (const cat of VALID_CATEGORIES) {
     const items = byCategory[cat];
-    if (items.length) parts.push(`${LABELS[cat]}: ${items.join(", ")}`);
+    if (items && items.length) parts.push(`${LABELS[cat]}: ${items.join(", ")}`);
   }
 
   return parts.join("\n") + "\n\nUse this context if relevant to their question.\n\n";

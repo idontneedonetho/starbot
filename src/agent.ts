@@ -64,7 +64,7 @@ const memoryExtension = (pi: ExtensionAPI) => {
   });
 };
 
-function getLoader(cwd: string, systemPrompt: string, extensionFactory?: (pi: ExtensionAPI) => void): DefaultResourceLoader {
+function getLoader(cwd: string, systemPrompt: string): DefaultResourceLoader {
   const key = `${cwd}:${systemPrompt}`;
   if (loaderCache.has(key)) {
     return loaderCache.get(key)!;
@@ -72,15 +72,18 @@ function getLoader(cwd: string, systemPrompt: string, extensionFactory?: (pi: Ex
 
   if (loaderCache.size >= MAX_LOADER_CACHE_SIZE) {
     const firstKey = loaderCache.keys().next().value;
-    if (firstKey) loaderCache.delete(firstKey);
+    if (firstKey) {
+      // Dispose the evicted loader if the API supports it, to release any held file handles.
+      const evicted = loaderCache.get(firstKey);
+      (evicted as any)?.dispose?.();
+      loaderCache.delete(firstKey);
+    }
   }
-
-  const extensions = extensionFactory ? [extensionFactory, memoryExtension] : [memoryExtension];
 
   const loader = new DefaultResourceLoader({
     cwd,
     systemPromptOverride: () => systemPrompt,
-    extensionFactories: extensions,
+    extensionFactories: [memoryExtension],
   });
   loaderCache.set(key, loader);
   return loader;

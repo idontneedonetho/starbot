@@ -11,8 +11,9 @@ The codebase is available in your working directory. When answering questions:
 `;
 }
 
-export const EXTRACTOR_SYSTEM = `\
-You are a fact extractor for a Q&A Discord bot about StarPilot (openpilot fork for GM vehicles).
+export function buildExtractorSystem(repoName: string, repoDesc: string): string {
+  return `\
+You are a fact extractor for a Q&A Discord bot about ${repoName} — ${repoDesc}.
 Given a user's question and the bot's answer, extract structured facts about the USER.
 
 Output ONLY a JSON array matching this schema:
@@ -34,15 +35,16 @@ Allowed categories:
 - "hardware": comma device, sensors, modifications (e.g. "Uses Comma 3X", "Has ZSS", "LGS01")
 - "expertise": technical skill level (e.g. "expert developer", "beginner", "can read code")
 - "preference": explicit preferences, settings, driving style (e.g. "prefers aggressive lane changes", "wants relaxed following")
-- "useCase": how they use openpilot (e.g. "daily commute", "highway only", "testing development")
+- "useCase": how they use the project (e.g. "daily commute", "highway only", "testing development")
 - "knownIssues": problems they've hit (e.g. "lateral control unstable", "disengage on curves")
 - "goals": what they want to achieve (e.g. "improve lane keeping", "enable custom longitudinal")
 
 Rules:
-- ONLY extract facts about the USER, not about StarPilot or code
+- ONLY extract facts about the USER, not about ${repoName} or its code
 - Do NOT extract: usernames, typos, questions, meta-statements
 - If no useful facts, return []
 - Return ONLY valid JSON (no extra text)`;
+}
 
 export const COMPRESSOR_SYSTEM = `\
 You are a memory compressor for a Discord bot. Given a list of facts about a user, consolidate them into a concise, accurate paragraph.

@@ -106,6 +106,8 @@ export const manageCommand = {
 
       let loadedCount = 0;
 
+      let needsSync = false;
+
       // Reload a modified plugin (unload stale version first, then load the rewritten file).
       if (plugin) {
         const modifiedFile = `plugin-${plugin}.js`;
@@ -114,9 +116,7 @@ export const manageCommand = {
           try {
             unloadPlugin(plugin);
             await loadPlugin(modifiedPath);
-            if (commands.get(plugin)) {
-              await syncDiscordCommands(getAllCommands());
-            }
+            if (commands.get(plugin)) needsSync = true;
             loadedCount++;
             console.log(`[manage] Reloaded: ${modifiedFile}`);
           } catch (err) {
@@ -135,14 +135,17 @@ export const manageCommand = {
         try {
           await loadPlugin(pluginPath);
           const name = file.replace(/^plugin-/, "").replace(/\.js$/, "");
-          if (commands.get(name)) {
-            await syncDiscordCommands(getAllCommands());
-          }
+          if (commands.get(name)) needsSync = true;
           loadedCount++;
           console.log(`[manage] Loaded: ${file}`);
         } catch (err) {
           console.warn(`[manage] Failed to load ${file}:`, err);
         }
+      }
+
+      // Sync Discord commands once after all plugins are loaded, not once per plugin.
+      if (needsSync) {
+        await syncDiscordCommands(getAllCommands());
       }
 
       if (loadedCount === 0 && (plugin || newFiles.length > 0)) {
