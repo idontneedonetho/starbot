@@ -1,3 +1,4 @@
+import { execSync } from "child_process";
 import { SlashCommandBuilder, type Interaction, type PermissionsBitField, type ChatInputCommandInteraction } from "discord.js";
 import fs from "fs";
 import path from "path";
@@ -6,6 +7,15 @@ import { createPlugin } from "../agent.js";
 import { loadPlugin, unloadPlugin, syncDiscordCommands, commands } from "./loader.js";
 
 const adminUserSet = new Set(ADMIN_USER_IDS);
+
+function checkSyntax(filePath: string): boolean {
+  try {
+    execSync(`node -c ${JSON.stringify(filePath)}`, { stdio: "pipe" });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 async function checkAdmin(interaction: Interaction): Promise<boolean> {
   const userId = interaction.user?.id;
@@ -113,14 +123,18 @@ export const manageCommand = {
         const modifiedFile = `plugin-${plugin}.js`;
         const modifiedPath = path.join(PLUGINS_DIR, modifiedFile);
         if (fs.existsSync(modifiedPath)) {
-          try {
-            unloadPlugin(plugin);
-            await loadPlugin(modifiedPath);
-            if (commands.get(plugin)) needsSync = true;
-            loadedCount++;
-            console.log(`[manage] Reloaded: ${modifiedFile}`);
-          } catch (err) {
-            console.warn(`[manage] Failed to reload ${modifiedFile}:`, err);
+          if (!checkSyntax(modifiedPath)) {
+            console.warn(`[manage] Syntax check failed for ${modifiedFile}, skipping reload`);
+          } else {
+            try {
+              unloadPlugin(plugin);
+              await loadPlugin(modifiedPath);
+              if (commands.get(plugin)) needsSync = true;
+              loadedCount++;
+              console.log(`[manage] Reloaded: ${modifiedFile}`);
+            } catch (err) {
+              console.warn(`[manage] Failed to reload ${modifiedFile}:`, err);
+            }
           }
         }
       }
@@ -132,6 +146,10 @@ export const manageCommand = {
 
       for (const file of newFiles) {
         const pluginPath = path.join(PLUGINS_DIR, file);
+        if (!checkSyntax(pluginPath)) {
+          console.warn(`[manage] Syntax check failed for ${file}, skipping`);
+          continue;
+        }
         try {
           await loadPlugin(pluginPath);
           const name = file.replace(/^plugin-/, "").replace(/\.js$/, "");

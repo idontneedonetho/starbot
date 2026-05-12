@@ -10,7 +10,9 @@ import {
 } from "discord.js";
 import { config, ALLOWED_CHANNEL_IDS, ANSWER_TIMEOUT_SECONDS, REPO_NAME, REPO_CACHE_DIR } from "./config.js";
 import { askAboutRepo } from "./agent.js";
-import { extractAndUpdateMemory, getOrCreateSessionPath, deleteSession } from "./memory.js";
+import { saveRawExchange, updateUserWiki } from "./wiki.js";
+import { getOrCreateSessionPath, deleteSession } from "./memory.js";
+import { TimeoutError } from "./utils/timeout.js";
 import { tryAcquireRateLimit, acquireWithQueuePosition } from "./utils/limits.js";
 import { chunkAnswer } from "./utils/chunking.js";
 import { getAllCommands } from "./plugins/manager.js";
@@ -38,7 +40,7 @@ let applicationId: string | null = null;
 
 const stripMentions = (text: string) => text.replace(/<@!?\d+>/g, "").trim();
 
-const safe = (promise: Promise<unknown>) => promise.catch(() => void 0);
+const safe = (promise: Promise<unknown>) => promise.catch((err) => console.warn("[bot] Reaction error:", err));
 
 async function clearReactions(message: Message): Promise<void> {
   await Promise.all([...message.reactions.cache.values()]
@@ -107,7 +109,7 @@ async function handleQuestion(
     await react(message, EMOJI_DONE);
     return { answer, sessionThreadId: threadId };
   } catch (err) {
-    const isTimeout = err instanceof Error && err.message === "timeout";
+    const isTimeout = err instanceof TimeoutError;
     console.error("[bot] handleQuestion error:", err);
 
     const errMsg = isTimeout
@@ -186,7 +188,8 @@ client.on(Events.MessageCreate, async (message: Message) => {
     }
 
     if (answer) {
-      extractAndUpdateMemory(message.author.id, question, answer).catch(console.error);
+      saveRawExchange(message.author.id, question, answer);
+      updateUserWiki(message.author.id, question, answer).catch(console.error);
     }
   } catch (err) {
     console.error("[bot] Unhandled error in message handler:", err);

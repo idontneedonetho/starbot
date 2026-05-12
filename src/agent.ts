@@ -1,6 +1,4 @@
 import {
-  AuthStorage,
-  ModelRegistry,
   createAgentSession,
   DefaultResourceLoader,
   SessionManager,
@@ -12,23 +10,11 @@ import {
   type ExtensionAPI,
 } from "@mariozechner/pi-coding-agent";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { buildMemoryContext } from "./memory.js";
+import { mainModel, authStorage, modelRegistry } from "./llm.js";
+import { readUserWiki } from "./wiki.js";
 import { config, REPO_NAME, REPO_DESC, PLUGINS_DIR, BOT_SRC_DIR } from "./config.js";
 import { buildSystemPrompt, CREATE_PLUGIN_SYSTEM } from "./prompts.js";
-
-const authStorage = AuthStorage.create();
-authStorage.setRuntimeApiKey(config.LLM_PROVIDER, config.LLM_API_KEY);
-
-const modelRegistry = ModelRegistry.create(authStorage);
-const mainModel = modelRegistry.find(config.LLM_PROVIDER, config.LLM_MODEL);
-
-const memoryModel = config.CHEAP_LLM_PROVIDER && config.CHEAP_LLM_MODEL
-  ? modelRegistry.find(config.CHEAP_LLM_PROVIDER, config.CHEAP_LLM_MODEL) ?? mainModel
-  : mainModel;
-
-if (!mainModel) {
-  console.warn(`[agent] Model ${config.LLM_PROVIDER}/${config.LLM_MODEL} not found; pi will pick first available.`);
-}
+import { createInactivityTimeout } from "./utils/timeout.js";
 
 function createTextCollector(onText: (text: string) => void): AgentSessionEventListener {
   return (event) => {
@@ -38,18 +24,14 @@ function createTextCollector(onText: (text: string) => void): AgentSessionEventL
   };
 }
 
-const MAX_LOADER_CACHE_SIZE = 10;
-const loaderCache: Map<string, DefaultResourceLoader> = new Map();
-
-// Extension that injects per-user memory context before each agent turn.
 const memoryExtension = (pi: ExtensionAPI) => {
   pi.on("before_agent_start", async (event) => {
     const userIdMatch = event.prompt.match(/\[user_id:(\d+)\]/);
     if (userIdMatch) {
       const userId = userIdMatch[1];
-      const memory = await buildMemoryContext(userId, "User");
+      const memory = await readUserWiki(userId);
       const cleanPrompt = event.prompt.replace(new RegExp(`\\[user_id:${userId}\\]`), "").trim();
-      
+
       if (memory) {
         return {
           systemPrompt: event.systemPrompt + "\n\n" + memory,
@@ -64,31 +46,6 @@ const memoryExtension = (pi: ExtensionAPI) => {
   });
 };
 
-function getLoader(cwd: string, systemPrompt: string): DefaultResourceLoader {
-  const key = `${cwd}:${systemPrompt}`;
-  if (loaderCache.has(key)) {
-    return loaderCache.get(key)!;
-  }
-
-  if (loaderCache.size >= MAX_LOADER_CACHE_SIZE) {
-    const firstKey = loaderCache.keys().next().value;
-    if (firstKey) {
-      // Dispose the evicted loader if the API supports it, to release any held file handles.
-      const evicted = loaderCache.get(firstKey);
-      (evicted as any)?.dispose?.();
-      loaderCache.delete(firstKey);
-    }
-  }
-
-  const loader = new DefaultResourceLoader({
-    cwd,
-    systemPromptOverride: () => systemPrompt,
-    extensionFactories: [memoryExtension],
-  });
-  loaderCache.set(key, loader);
-  return loader;
-}
-
 async function createSession(
   cwd: string,
   systemPrompt: string,
@@ -96,8 +53,11 @@ async function createSession(
   sessionPath?: string,
   model = mainModel,
 ): Promise<AgentSession> {
-  const loader = getLoader(cwd, systemPrompt);
-  await loader.reload();
+  const loader = new DefaultResourceLoader({
+    cwd,
+    systemPromptOverride: () => systemPrompt,
+    extensionFactories: [memoryExtension],
+  });
 
   let sessionManager: SessionManager;
   if (sessionPath) {
@@ -128,41 +88,6 @@ async function createSession(
   return session;
 }
 
-// Creates a minimal session with no extensions (used for internal LLM calls like memory extraction).
-async function createRawSession(systemPrompt: string, tools: AgentTool[], model = mainModel): Promise<AgentSession> {
-  const loader = new DefaultResourceLoader({
-    cwd: process.cwd(),
-    systemPromptOverride: () => systemPrompt,
-    extensionFactories: [],
-  });
-  await loader.reload();
-  const sessionManager = SessionManager.inMemory();
-  const { session } = await createAgentSession({
-    cwd: process.cwd(),
-    model,
-    sessionManager,
-    authStorage,
-    modelRegistry,
-    tools: tools as any,
-    resourceLoader: loader,
-  });
-  return session;
-}
-
-export async function singleTurnLlm(systemPrompt: string, userMessage: string, model = memoryModel ?? mainModel): Promise<string> {
-  if (!model) throw new Error("No model configured for LLM operations");
-  // Use a raw session — no memory extension needed for internal LLM calls.
-  const session = await createRawSession(systemPrompt, readOnlyTools as AgentTool[], model);
-  let result = "";
-  session.subscribe(createTextCollector((text) => { result += text; }));
-  try {
-    await session.prompt(userMessage);
-  } finally {
-    session.dispose();
-  }
-  return result.trim();
-}
-
 export async function askAboutRepo(
   botName: string,
   question: string,
@@ -175,39 +100,23 @@ export async function askAboutRepo(
   const session = await createSession(repoCwd, systemPrompt, readOnlyTools as AgentTool[], sessionPath, mainModel);
   let answer = "";
 
-  let inactivityTimer: NodeJS.Timeout;
-  let rejectTimeout!: (err: Error) => void;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    rejectTimeout = reject;
-    inactivityTimer = setTimeout(
-      () => reject(new Error("timeout")),
-      timeoutMs,
-    );
-  });
-
-  const resetTimer = () => {
-    clearTimeout(inactivityTimer);
-    inactivityTimer = setTimeout(
-      () => rejectTimeout(new Error("timeout")),
-      timeoutMs,
-    );
-  };
+  const timeout = createInactivityTimeout(timeoutMs);
 
   const unsubActivity = session.subscribe((event) => {
     if (event.type === "turn_start" || event.type === "tool_execution_start" || event.type === "message_start") {
-      resetTimer();
+      timeout.reset();
     }
   });
   const unsubText = session.subscribe(createTextCollector((text) => {
     answer += text;
-    resetTimer();
+    timeout.reset();
   }));
 
   const fullPrompt = userId ? `[user_id:${userId}]\n\n${question}` : question;
   try {
-    await Promise.race([session.prompt(fullPrompt), timeoutPromise]);
+    await Promise.race([session.prompt(fullPrompt), timeout.promise]);
   } finally {
-    clearTimeout(inactivityTimer!);
+    timeout.clear();
     unsubActivity();
     unsubText();
     session.dispose();
@@ -231,29 +140,14 @@ export async function createPlugin(
   const session = await createSession(cwd, CREATE_PLUGIN_SYSTEM, tools, undefined, mainModel);
   let answer = "";
 
-  // Inactivity timeout: resets whenever the agent produces an event.
-  // Using Promise.race ensures the rejection actually reaches the caller (setInterval throw does not).
-  let inactivityTimer: NodeJS.Timeout;
-  let rejectTimeout!: (err: Error) => void;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    rejectTimeout = reject;
-    inactivityTimer = setTimeout(
-      () => reject(new Error(`Timeout after ${timeout / 1000}s of inactivity`)),
-      timeout,
-    );
-  });
-
-  const resetTimer = () => {
-    clearTimeout(inactivityTimer);
-    inactivityTimer = setTimeout(
-      () => rejectTimeout(new Error(`Timeout after ${timeout / 1000}s of inactivity`)),
-      timeout,
-    );
-  };
+  const inactivityTimeout = createInactivityTimeout(
+    timeout,
+    `Timeout after ${timeout / 1000}s of inactivity`,
+  );
 
   const unsubActivity = session.subscribe((event) => {
     if (event.type === "turn_start" || event.type === "tool_execution_start" || event.type === "message_start") {
-      resetTimer();
+      inactivityTimeout.reset();
       onActivity?.();
     }
   });
@@ -265,12 +159,12 @@ export async function createPlugin(
   }));
 
   try {
-    await Promise.race([session.prompt(prompt), timeoutPromise]);
+    await Promise.race([session.prompt(prompt), inactivityTimeout.promise]);
   } catch (err) {
     console.error("[createPlugin] Session error:", err);
     throw err;
   } finally {
-    clearTimeout(inactivityTimer!);
+    inactivityTimeout.clear();
     unsubActivity();
     unsubText();
     session.dispose();

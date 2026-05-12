@@ -17,7 +17,7 @@ const EVENT_MAP: Record<string, string> = {
 
 export function setupEventHandlers(client: Client): void {
   for (const [handlerName, eventName] of Object.entries(EVENT_MAP)) {
-    client.on(eventName as any, async (...args: any[]) => {
+    client.on(eventName as string, async (...args: unknown[]) => {
       const handlers = getEventHandlers(handlerName);
       if (handlers.length === 0) return;
 
