@@ -5,12 +5,11 @@ import {
   getAgentDir,
   type AgentSession,
   type AgentSessionEventListener,
-  type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { mainModel, authStorage, modelRegistry } from "./llm.js";
-import { readUserWiki } from "./wiki.js";
-import { REPO_NAME, REPO_DESC } from "./config.js";
+import { REPO_NAME, REPO_DESC, WIKI_DIR } from "./config.js";
 import { buildSystemPrompt, CREATE_PLUGIN_SYSTEM } from "./prompts.js";
+import { WIKI_UPDATE_SYSTEM } from "./wiki.js";
 import { createInactivityTimeout } from "./utils/timeout.js";
 
 function createTextCollector(onText: (text: string) => void): AgentSessionEventListener {
@@ -20,28 +19,6 @@ function createTextCollector(onText: (text: string) => void): AgentSessionEventL
     }
   };
 }
-
-const memoryExtension = (pi: ExtensionAPI) => {
-  pi.on("before_agent_start", async (event) => {
-    const userIdMatch = event.prompt.match(/\[user_id:(\d+)\]/);
-    if (userIdMatch) {
-      const userId = userIdMatch[1];
-      const memory = await readUserWiki(userId);
-      const cleanPrompt = event.prompt.replace(new RegExp(`\\[user_id:${userId}\\]`), "").trim();
-
-      if (memory) {
-        return {
-          systemPrompt: event.systemPrompt + "\n\n" + memory,
-          prompt: cleanPrompt,
-        };
-      } else {
-        return {
-          prompt: cleanPrompt,
-        };
-      }
-    }
-  });
-};
 
 async function createSession(
   cwd: string,
@@ -54,7 +31,7 @@ async function createSession(
     cwd,
     agentDir: getAgentDir(),
     systemPromptOverride: () => systemPrompt,
-    extensionFactories: [memoryExtension],
+    extensionFactories: [],
   });
 
   let sessionManager: SessionManager;
@@ -94,7 +71,7 @@ export async function askAboutRepo(
   userId?: string,
   timeoutMs: number = 90000,
 ): Promise<string> {
-  const systemPrompt = buildSystemPrompt(botName, REPO_NAME, REPO_DESC);
+  const systemPrompt = buildSystemPrompt(botName);
   const session = await createSession(repoCwd, systemPrompt, ["read", "grep", "find", "ls"], sessionPath, mainModel);
   let answer = "";
 
@@ -165,4 +142,23 @@ export async function createPlugin(
   }
 
   return answer;
+}
+
+export async function runWikiUpdate(exchange: { threadId: string; userId: string; question: string; answer: string }): Promise<void> {
+  const session = await createSession(WIKI_DIR, WIKI_UPDATE_SYSTEM, ["read", "write", "edit", "grep", "find", "ls"]);
+  const prompt = [
+    `A Q&A exchange just happened.`,
+    `Thread ID: ${exchange.threadId}`,
+    `User ID: ${exchange.userId}`,
+    `Question: ${exchange.question}`,
+    `Answer: ${exchange.answer}`,
+    ``,
+    `The raw conversation is at raw/threads/${exchange.threadId}.md if you need context.`,
+    `Go read the wiki and update it appropriately.`,
+  ].join("\n");
+  try {
+    await session.prompt(prompt);
+  } finally {
+    session.dispose();
+  }
 }

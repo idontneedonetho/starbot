@@ -11,7 +11,7 @@ import {
 import { config, ALLOWED_CHANNEL_IDS, ANSWER_TIMEOUT_SECONDS, REPO_NAME, REPO_CACHE_DIR } from "./config.js";
 import { askAboutRepo } from "./agent.js";
 import { singleTurnLlm } from "./llm.js";
-import { saveRawExchange, updateUserWiki } from "./wiki.js";
+import { saveRawInteraction, afterExchange } from "./wiki.js";
 import { getOrCreateSessionPath, deleteSession } from "./memory.js";
 import { TimeoutError } from "./utils/timeout.js";
 import { tryAcquireRateLimit, acquireWithQueuePosition } from "./utils/limits.js";
@@ -183,8 +183,8 @@ client.on(Events.MessageCreate, async (message: Message) => {
 
     const result = await handleQuestion(message, botName, question, message.author.id);
     if (result) {
-      saveRawExchange(message.author.id, question, result.answer);
-      updateUserWiki(message.author.id, question, result.answer).catch(console.error);
+      saveRawInteraction(result.sessionThreadId, message.author.id, question, result.answer);
+      afterExchange(result.sessionThreadId, message.author.id, question, result.answer).catch(console.error);
     }
   } catch (err) {
     console.error("[bot] Unhandled error in message handler:", err);

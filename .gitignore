@@ -4,10 +4,15 @@ dist/
 .env
 *.js.map
 
+# Wiki: track SCHEMA.md and directory stubs; ignore runtime content
 data/wikis/*
-!data/wikis/.SCHEMA.md
-!data/wikis/INDEX.md
-!data/wikis/LOG.md
+!data/wikis/SCHEMA.md
+!data/wikis/concepts/
+!data/wikis/entities/
+!data/wikis/users/
+!data/wikis/raw/
+!data/wikis/raw/threads/
+data/wikis/raw/threads/*.md
 data/sessions/
 data/plugins/*.js
 data/plugins/*.json
