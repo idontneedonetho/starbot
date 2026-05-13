@@ -1,7 +1,6 @@
 {
-  "tosMessageId": "",
-  "tosChannelId": "",
-  "guildId": "",
-  "verifiedRoleName": "Verified",
-  "kickDelaySeconds": 60
+  "tosChannelId": "1243033582708985926",
+  "guildId": "698205243103641711",
+  "kickDelaySeconds": 60,
+  "tosMessageId": "1503935168581341316"
 }

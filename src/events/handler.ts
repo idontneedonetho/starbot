@@ -2,6 +2,7 @@ import { Client, Events } from "discord.js";
 import { getEventHandlers } from "../plugins/loader.js";
 
 const EVENT_MAP: Record<string, string> = {
+  ready: Events.ClientReady,
   messageCreate: Events.MessageCreate,
   messageDelete: Events.MessageDelete,
   messageUpdate: Events.MessageUpdate,

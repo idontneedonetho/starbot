@@ -177,8 +177,8 @@ export async function updateUserWiki(
     const existing = readUserWiki(userId);
     const schema = readSchema();
     const prompt = existing
-      ? `Existing wiki:\n${existing}\n\nNew Q&A:\nQ: ${question}\nA: ${answer}`
-      : `No existing wiki yet. Create one from this Q&A:\nQ: ${question}\nA: ${answer}`;
+      ? `User ID: ${userId}\nExisting wiki:\n${existing}\n\nNew Q&A:\nQ: ${question}\nA: ${answer}`
+      : `User ID: ${userId}\nNo existing wiki yet. Create one from this Q&A:\nQ: ${question}\nA: ${answer}`;
 
     const updated = await singleTurnLlm(schema, prompt);
     if (!updated) return;

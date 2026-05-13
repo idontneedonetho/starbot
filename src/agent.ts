@@ -2,17 +2,15 @@ import {
   createAgentSession,
   DefaultResourceLoader,
   SessionManager,
-  readOnlyTools,
-  createCodingTools,
-  createReadOnlyTools,
+  getAgentDir,
   type AgentSession,
   type AgentSessionEventListener,
   type ExtensionAPI,
-} from "@mariozechner/pi-coding-agent";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+  type ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import { mainModel, authStorage, modelRegistry } from "./llm.js";
 import { readUserWiki } from "./wiki.js";
-import { config, REPO_NAME, REPO_DESC, PLUGINS_DIR, BOT_SRC_DIR } from "./config.js";
+import { REPO_NAME, REPO_DESC } from "./config.js";
 import { buildSystemPrompt, CREATE_PLUGIN_SYSTEM } from "./prompts.js";
 import { createInactivityTimeout } from "./utils/timeout.js";
 
@@ -49,12 +47,14 @@ const memoryExtension = (pi: ExtensionAPI) => {
 async function createSession(
   cwd: string,
   systemPrompt: string,
-  tools: AgentTool[],
+  toolNames: string[],
+  customTools: ToolDefinition[] = [],
   sessionPath?: string,
   model = mainModel,
 ): Promise<AgentSession> {
   const loader = new DefaultResourceLoader({
     cwd,
+    agentDir: getAgentDir(),
     systemPromptOverride: () => systemPrompt,
     extensionFactories: [memoryExtension],
   });
@@ -82,7 +82,8 @@ async function createSession(
     sessionManager,
     authStorage,
     modelRegistry,
-    tools: tools as any,
+    tools: toolNames,
+    customTools,
     resourceLoader: loader,
   });
   return session;
@@ -97,7 +98,7 @@ export async function askAboutRepo(
   timeoutMs: number = 90000,
 ): Promise<string> {
   const systemPrompt = buildSystemPrompt(botName, REPO_NAME, REPO_DESC);
-  const session = await createSession(repoCwd, systemPrompt, readOnlyTools as AgentTool[], sessionPath, mainModel);
+  const session = await createSession(repoCwd, systemPrompt, ["read", "grep", "find", "ls"], [], sessionPath, mainModel);
   let answer = "";
 
   const timeout = createInactivityTimeout(timeoutMs);
@@ -133,11 +134,7 @@ export async function createPlugin(
   onAnswerUpdate?: (fullAnswer: string) => void,
 ): Promise<string> {
   const timeout = timeoutMs ?? 120_000;
-  const tools = [
-    ...(createCodingTools(PLUGINS_DIR) as AgentTool[]),
-    ...(createReadOnlyTools(BOT_SRC_DIR) as AgentTool[]),
-  ];
-  const session = await createSession(cwd, CREATE_PLUGIN_SYSTEM, tools, undefined, mainModel);
+  const session = await createSession(cwd, CREATE_PLUGIN_SYSTEM, ["read", "bash", "edit", "write", "grep", "find", "ls"], [], undefined, mainModel);
   let answer = "";
 
   const inactivityTimeout = createInactivityTimeout(

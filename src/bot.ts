@@ -10,13 +10,14 @@ import {
 } from "discord.js";
 import { config, ALLOWED_CHANNEL_IDS, ANSWER_TIMEOUT_SECONDS, REPO_NAME, REPO_CACHE_DIR } from "./config.js";
 import { askAboutRepo } from "./agent.js";
+import { singleTurnLlm } from "./llm.js";
 import { saveRawExchange, updateUserWiki } from "./wiki.js";
 import { getOrCreateSessionPath, deleteSession } from "./memory.js";
 import { TimeoutError } from "./utils/timeout.js";
 import { tryAcquireRateLimit, acquireWithQueuePosition } from "./utils/limits.js";
 import { chunkAnswer } from "./utils/chunking.js";
 import { getAllCommands } from "./plugins/manager.js";
-import { initPluginSystem, getCommand, syncDiscordCommands } from "./plugins/loader.js";
+import { initPluginSystem, getCommand, syncDiscordCommands, getEventHandlers } from "./plugins/loader.js";
 import { setupEventHandlers } from "./events/handler.js";
 
 const EMOJI_SEEN = "👀";
@@ -233,6 +234,7 @@ client.once(Events.ClientReady, async (c) => {
   c.user.setActivity(`${REPO_NAME} questions`, { type: ActivityType.Listening });
 
   applicationId = c.user.id;
+  (client as any).singleTurnLlm = singleTurnLlm;
   initPluginSystem(client, rest, applicationId);
   setupEventHandlers(client);
 
@@ -242,6 +244,15 @@ client.once(Events.ClientReady, async (c) => {
     console.log("[bot] Discord commands synchronized");
   } catch (err) {
     console.error("[bot] Failed to sync Discord commands:", err);
+  }
+
+  // Fire plugin ready handlers for the initial connection
+  for (const handler of getEventHandlers("ready")) {
+    try {
+      await handler(client, c);
+    } catch (err) {
+      console.error("[bot] Plugin ready handler error:", err);
+    }
   }
 });
 

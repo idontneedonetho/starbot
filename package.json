@@ -12,7 +12,7 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@mariozechner/pi-coding-agent": "^0.67.1",
+    "@earendil-works/pi-coding-agent": "^0.74.0",
     "@shopify/semaphore": "^3.1.0",
     "discord.js": "^14.16.3",
     "dotenv": "^16.4.7",
