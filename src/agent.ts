@@ -8,8 +8,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { mainModel, authStorage, modelRegistry } from "./llm.js";
 import { REPO_NAME, REPO_DESC, WIKI_DIR } from "./config.js";
-import { buildSystemPrompt, CREATE_PLUGIN_SYSTEM } from "./prompts.js";
-import { WIKI_UPDATE_SYSTEM } from "./wiki.js";
+import { buildSystemPrompt, CREATE_PLUGIN_SYSTEM, WIKI_UPDATE_SYSTEM } from "./prompts.js";
 import { createInactivityTimeout } from "./utils/timeout.js";
 
 function createTextCollector(onText: (text: string) => void): AgentSessionEventListener {
