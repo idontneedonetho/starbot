@@ -17,7 +17,7 @@ import { TimeoutError } from "./utils/timeout.js";
 import { tryAcquireRateLimit, acquireWithQueuePosition } from "./utils/limits.js";
 import { chunkAnswer } from "./utils/chunking.js";
 import { getAllCommands } from "./plugins/manager.js";
-import { initPluginSystem, getCommand, syncDiscordCommands, getEventHandlers } from "./plugins/loader.js";
+import { initPluginSystem, getCommand, syncDiscordCommands } from "./plugins/loader.js";
 import { setupEventHandlers } from "./events/handler.js";
 
 const EMOJI_SEEN = "👀";
@@ -50,6 +50,11 @@ async function clearReactions(message: Message): Promise<void> {
 
 async function react(message: Message, emoji: string): Promise<void> {
   await safe(message.react(emoji));
+}
+
+async function setReaction(message: Message, emoji: string): Promise<void> {
+  await clearReactions(message);
+  await react(message, emoji);
 }
 
 const sanitizeThreadName = (text: string): string => {
@@ -106,8 +111,7 @@ async function handleQuestion(
       lastMsg = await lastMsg.reply(chunks[i]);
     }
 
-    await clearReactions(message);
-    await react(message, EMOJI_DONE);
+    await setReaction(message, EMOJI_DONE);
     return { answer, sessionThreadId: threadId };
   } catch (err) {
     const isTimeout = err instanceof TimeoutError;
@@ -123,8 +127,7 @@ async function handleQuestion(
       await message.reply(errMsg);
     }
 
-    await clearReactions(message);
-    await react(message, EMOJI_ERROR);
+    await setReaction(message, EMOJI_ERROR);
     return null;
   }
 }
@@ -171,26 +174,17 @@ client.on(Events.MessageCreate, async (message: Message) => {
   try {
     if (position >= config.MAX_CONCURRENT) {
       const queuePos = position - config.MAX_CONCURRENT + 1;
-      await clearReactions(message);
-      await react(message, queuePos > 9 ? "🔟" : `${queuePos}⃣`);
+      await setReaction(message, queuePos > 9 ? "🔟" : `${queuePos}⃣`);
     }
 
     await wait;
 
-    await clearReactions(message);
-    await react(message, "⏳");
+    await setReaction(message, "⏳");
 
-    const userId = message.author.id;
-    let answer: string | null = null;
-
-    const result = await handleQuestion(message, botName, question, userId);
+    const result = await handleQuestion(message, botName, question, message.author.id);
     if (result) {
-      answer = result.answer;
-    }
-
-    if (answer) {
-      saveRawExchange(message.author.id, question, answer);
-      updateUserWiki(message.author.id, question, answer).catch(console.error);
+      saveRawExchange(message.author.id, question, result.answer);
+      updateUserWiki(message.author.id, question, result.answer).catch(console.error);
     }
   } catch (err) {
     console.error("[bot] Unhandled error in message handler:", err);
@@ -244,15 +238,6 @@ client.once(Events.ClientReady, async (c) => {
     console.log("[bot] Discord commands synchronized");
   } catch (err) {
     console.error("[bot] Failed to sync Discord commands:", err);
-  }
-
-  // Fire plugin ready handlers for the initial connection
-  for (const handler of getEventHandlers("ready")) {
-    try {
-      await handler(client, c);
-    } catch (err) {
-      console.error("[bot] Plugin ready handler error:", err);
-    }
   }
 });
 

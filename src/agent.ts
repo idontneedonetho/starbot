@@ -6,7 +6,6 @@ import {
   type AgentSession,
   type AgentSessionEventListener,
   type ExtensionAPI,
-  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { mainModel, authStorage, modelRegistry } from "./llm.js";
 import { readUserWiki } from "./wiki.js";
@@ -48,7 +47,6 @@ async function createSession(
   cwd: string,
   systemPrompt: string,
   toolNames: string[],
-  customTools: ToolDefinition[] = [],
   sessionPath?: string,
   model = mainModel,
 ): Promise<AgentSession> {
@@ -83,7 +81,6 @@ async function createSession(
     authStorage,
     modelRegistry,
     tools: toolNames,
-    customTools,
     resourceLoader: loader,
   });
   return session;
@@ -98,7 +95,7 @@ export async function askAboutRepo(
   timeoutMs: number = 90000,
 ): Promise<string> {
   const systemPrompt = buildSystemPrompt(botName, REPO_NAME, REPO_DESC);
-  const session = await createSession(repoCwd, systemPrompt, ["read", "grep", "find", "ls"], [], sessionPath, mainModel);
+  const session = await createSession(repoCwd, systemPrompt, ["read", "grep", "find", "ls"], sessionPath, mainModel);
   let answer = "";
 
   const timeout = createInactivityTimeout(timeoutMs);
@@ -134,7 +131,7 @@ export async function createPlugin(
   onAnswerUpdate?: (fullAnswer: string) => void,
 ): Promise<string> {
   const timeout = timeoutMs ?? 120_000;
-  const session = await createSession(cwd, CREATE_PLUGIN_SYSTEM, ["read", "bash", "edit", "write", "grep", "find", "ls"], [], undefined, mainModel);
+  const session = await createSession(cwd, CREATE_PLUGIN_SYSTEM, ["read", "bash", "edit", "write", "grep", "find", "ls"], undefined, mainModel);
   let answer = "";
 
   const inactivityTimeout = createInactivityTimeout(

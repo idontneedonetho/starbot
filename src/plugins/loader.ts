@@ -1,10 +1,10 @@
-import { Client, SlashCommandBuilder, REST, Routes } from "discord.js";
+import { Client, REST, Routes } from "discord.js";
 import fs from "fs";
 import path from "path";
 import { pathToFileURL } from "url";
 import { PLUGINS_DIR } from "../config.js";
 
-export const commands = new Map<string, { data: SlashCommandBuilder; execute: (interaction: any) => Promise<void> }>();
+export const commands = new Map<string, { data: { name: string; toJSON: () => unknown }; execute: (interaction: any) => Promise<void> }>();
 const eventHandlers = new Map<string, Array<(client: Client, ...args: any[]) => Promise<void>>>();
 
 // Maps plugin name → list of { eventName, handler } pairs so we can surgically
@@ -17,7 +17,7 @@ let applicationId: string | null = null;
 
 interface Plugin {
   command?: {
-    data: SlashCommandBuilder;
+    data: { name: string; toJSON: () => unknown };
     execute: (interaction: any) => Promise<void>;
   };
   events?: Record<string, (client: Client, ...args: any[]) => Promise<void>>;
@@ -107,7 +107,7 @@ export function unloadPlugin(name: string): void {
   }
 }
 
-export function getCommand(name: string): { data: SlashCommandBuilder; execute: (interaction: any) => Promise<void> } | undefined {
+export function getCommand(name: string): { data: { name: string; toJSON: () => unknown }; execute: (interaction: any) => Promise<void> } | undefined {
   return commands.get(name);
 }
 

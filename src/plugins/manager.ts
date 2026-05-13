@@ -31,7 +31,7 @@ async function checkAdmin(interaction: Interaction): Promise<boolean> {
 }
 
 interface CommandDef {
-  data: SlashCommandBuilder;
+  data: { name: string; toJSON: () => unknown };
   execute: (interaction: ChatInputCommandInteraction) => Promise<void>;
 }
 
@@ -187,5 +187,5 @@ const manageCommand = {
 };
 
 export function getAllCommands(): CommandDef[] {
-  return [manageCommand as CommandDef];
+  return [manageCommand];
 }

@@ -27,7 +27,7 @@ if (!mainModel) {
 
 export async function singleTurnLlm(systemPrompt: string, userMessage: string, model = memoryModel ?? mainModel): Promise<string> {
   if (!model) throw new Error("No model configured for LLM operations");
-  const session = await createRawSession(systemPrompt, [], model);
+  const session = await createRawSession(systemPrompt, model);
   let result = "";
   session.subscribe((event) => {
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
@@ -42,7 +42,7 @@ export async function singleTurnLlm(systemPrompt: string, userMessage: string, m
   return result.trim();
 }
 
-async function createRawSession(systemPrompt: string, tools: any[], model = mainModel): Promise<AgentSession> {
+async function createRawSession(systemPrompt: string, model = mainModel): Promise<AgentSession> {
   const loader = new DefaultResourceLoader({
     cwd: process.cwd(),
     agentDir: getAgentDir(),
@@ -57,7 +57,6 @@ async function createRawSession(systemPrompt: string, tools: any[], model = main
     sessionManager,
     authStorage,
     modelRegistry,
-    tools: tools as any,
     resourceLoader: loader,
   });
   return session;
