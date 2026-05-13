@@ -92,7 +92,7 @@ const manageCommand = {
         fullPrompt,
         PLUGINS_DIR,
         (text) => process.stdout.write(`[agent] ${text}`),
-        () => {},
+        undefined,
         undefined,
         (currentAnswer) => {
           const now = Date.now();
