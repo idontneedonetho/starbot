@@ -162,7 +162,7 @@ Mention the bot in any allowed channel:
 | Reaction | Meaning |
 |---|---|
 | 👀 | Received, waiting to start |
-| `#⃣` | Queue position (number + keycap, e.g. `1⃣`, `2⃣`, ..., `🔟`) |
+| 1, 2, ... 🔟 | Queue position (shown when MAX_CONCURRENT exceeded) |
 | ⏳ | Processing |
 | ✅ | Complete |
 | ❌ | Error or timeout |
