@@ -32,6 +32,7 @@ async function createSession(
     systemPromptOverride: () => systemPrompt,
     extensionFactories: [],
   });
+  await loader.reload();
 
   let sessionManager: SessionManager;
   if (sessionPath) {
