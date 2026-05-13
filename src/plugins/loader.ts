@@ -122,14 +122,36 @@ export async function loadAllPlugins(): Promise<void> {
     return;
   }
 
-  const files = fs.readdirSync(PLUGINS_DIR).filter(f => f.endsWith(".js"));
-  console.log(`[plugins] Found ${files.length} plugin(s) to load`);
+  let totalLoaded = 0;
 
-  for (const file of files) {
+  // Load root-level .js files
+  const rootFiles = fs.readdirSync(PLUGINS_DIR).filter(f => f.endsWith(".js"));
+  for (const file of rootFiles) {
     try {
       await loadPlugin(path.join(PLUGINS_DIR, file));
+      totalLoaded++;
     } catch (err) {
       console.warn(`[plugins] Failed to load ${file}:`, err);
     }
+  }
+
+  // Load .js files from one-level-deep subdirectories
+  const entries = fs.readdirSync(PLUGINS_DIR, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const subDir = path.join(PLUGINS_DIR, entry.name);
+    const subFiles = fs.readdirSync(subDir).filter(f => f.endsWith(".js"));
+    for (const file of subFiles) {
+      try {
+        await loadPlugin(path.join(subDir, file));
+        totalLoaded++;
+      } catch (err) {
+        console.warn(`[plugins] Failed to load ${entry.name}/${file}:`, err);
+      }
+    }
+  }
+
+  if (totalLoaded > 0) {
+    console.log(`[plugins] Loaded ${totalLoaded} plugin(s)`);
   }
 }

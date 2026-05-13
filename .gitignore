@@ -4,4 +4,10 @@ dist/
 .env
 *.js.map
 
-data/
+data/wikis/*
+!data/wikis/.SCHEMA.md
+!data/wikis/INDEX.md
+!data/wikis/LOG.md
+data/sessions/
+data/plugins/*.js
+data/plugins/*.json
