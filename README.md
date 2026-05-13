@@ -41,9 +41,8 @@ cp .env.example .env
 Fill in the required values in your `.env` file:
 
 | Variable | Required | Description |
-|---|---|---|
+|---|---|---|---|
 | `DISCORD_TOKEN` | ✅ | Bot token from [Discord Developer Portal](https://discord.com/developers/applications) |
-| `DISCORD_CLIENT_ID` | ✅ | Application ID (same portal) |
 | `LLM_API_KEY` | ✅ | Your LLM provider API key |
 | `LLM_PROVIDER` | | Provider name (default: `anthropic`) |
 | `LLM_MODEL` | | Model ID (default: `claude-sonnet-4-5`) |

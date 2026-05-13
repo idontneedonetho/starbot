@@ -19,7 +19,6 @@ const cronValidator = makeValidator((val: string) => {
 
 export const config = cleanEnv(process.env, {
   DISCORD_TOKEN: str(),
-  DISCORD_CLIENT_ID: str({ default: "" }),
   LLM_PROVIDER: str({ default: "anthropic" }),
   LLM_API_KEY: str(),
   LLM_MODEL: str({ default: "claude-sonnet-4-5" }),

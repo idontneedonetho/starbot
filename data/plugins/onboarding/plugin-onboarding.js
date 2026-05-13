@@ -112,6 +112,11 @@ export const events = {
     if (reaction.partial) {
       try { await reaction.fetch(); } catch { return; }
     }
+    if (reaction.message.partial) {
+      try { await reaction.message.fetch(); } catch { return; }
+    }
+
+    if (reaction.message.id !== config.tosMessageId) return;
 
     const emoji = reaction.emoji.name;
     if (emoji !== "❌") return;

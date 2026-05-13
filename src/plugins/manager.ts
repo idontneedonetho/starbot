@@ -30,7 +30,12 @@ async function checkAdmin(interaction: Interaction): Promise<boolean> {
   return perms.has("Administrator");
 }
 
-export const manageCommand = {
+interface CommandDef {
+  data: SlashCommandBuilder;
+  execute: (interaction: ChatInputCommandInteraction) => Promise<void>;
+}
+
+const manageCommand = {
   data: new SlashCommandBuilder()
     .setName("manage")
     .setDescription("Manage plugins (admin only)")
@@ -181,6 +186,6 @@ export const manageCommand = {
   },
 };
 
-export function getAllCommands(): Array<any> {
-  return [manageCommand];
+export function getAllCommands(): CommandDef[] {
+  return [manageCommand as CommandDef];
 }

@@ -132,7 +132,7 @@ function updateIndex(userId: string, summary: string): void {
     bodyLines.push(entry);
   }
 
-  const header = lines[0] === "# Wiki Index" ? "# Wiki Index" : "# Wiki Index";
+  const header = "# Wiki Index";
   const result = [header, "", tableHeader, tableSep, ...bodyLines, ""];
   fs.writeFileSync(INDEX_PATH, result.join("\n"), "utf-8");
 }
