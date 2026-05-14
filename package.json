@@ -1,0 +1,22 @@
+{
+  "name": "starbot",
+  "version": "0.1.0",
+  "description": "StarPilot Discord bot — identity onboarding and report submission",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "discord.js": "*",
+    "dotenv": "*"
+  },
+  "devDependencies": {
+    "@types/node": "*",
+    "tsx": "*",
+    "typescript": "*"
+  }
+}
