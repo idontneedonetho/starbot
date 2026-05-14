@@ -4,6 +4,8 @@ import {
   ButtonStyle,
   ActionRowBuilder,
   ButtonBuilder,
+  Events,
+  ForumChannel,
   type ButtonInteraction,
   type ModalSubmitInteraction,
   type StringSelectMenuInteraction,
@@ -12,7 +14,7 @@ import {
 } from 'discord.js';
 import { loadConfig } from './config.js';
 import { loadData, saveData } from './data.js';
-import { handleIdentityButton, handleIdentitySubmit } from './handlers/identification.js';
+import { handleIdentityButton, handleIdentityMakeSelect, handleIdentitySubmit } from './handlers/identification.js';
 import { handleReportButton, handleReportTypeSelect, handleBugSubmit, handleFeedbackSubmit } from './handlers/report.js';
 
 const config = loadConfig();
@@ -26,10 +28,15 @@ const client = new Client({
   ],
 });
 
+function buttonRow(label: string, customId: string, style: ButtonStyle, emoji: string) {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(customId).setLabel(label).setStyle(style).setEmoji(emoji),
+  );
+}
+
 async function ensureButtonMessage(
   guild: Guild,
   channelId: string,
-  dataKey: 'identificationMessageId' | 'reportMessageId',
   label: string,
   customId: string,
   style: ButtonStyle,
@@ -42,11 +49,9 @@ async function ensureButtonMessage(
     return;
   }
 
-  const storedId = data[dataKey];
-
-  if (storedId) {
+  if (data.identificationMessageId) {
     try {
-      const message = await channel.messages.fetch(storedId);
+      const message = await channel.messages.fetch(data.identificationMessageId);
       if (message.author.id === client.user!.id) {
         return;
       }
@@ -55,20 +60,64 @@ async function ensureButtonMessage(
     }
   }
 
-  const button = new ButtonBuilder()
-    .setCustomId(customId)
-    .setLabel(label)
-    .setStyle(style)
-    .setEmoji(emoji);
-
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(button);
-
-  const message = await channel.send({ content, components: [row] });
-  data[dataKey] = message.id;
+  const message = await channel.send({ content, components: [buttonRow(label, customId, style, emoji)] });
+  data.identificationMessageId = message.id;
   saveData(data);
 }
 
-client.once('clientReady', async () => {
+async function ensureButtonThread(
+  guild: Guild,
+  forumId: string,
+  threadName: string,
+  label: string,
+  customId: string,
+  style: ButtonStyle,
+  emoji: string,
+  content?: string,
+) {
+  const forum = await guild.channels.fetch(forumId);
+  if (!(forum instanceof ForumChannel)) {
+    console.error(`Forum channel ${forumId} not found`);
+    return;
+  }
+
+  if (data.reportThreadId) {
+    try {
+      const thread = await forum.threads.fetch(data.reportThreadId);
+      if (thread && thread.ownerId === client.user!.id) {
+        if (thread.archived) await thread.setArchived(false);
+        return;
+      }
+    } catch {
+      // deleted — create new below
+    }
+  }
+
+  // Create forum post for the report button
+  const row = buttonRow(label, customId, style, emoji);
+  const raw = await client.rest.post(`/channels/${forum.id}/threads`, {
+    body: {
+      name: threadName,
+      message: { content, components: [row.toJSON()] },
+    },
+  }) as { id: string };
+
+  const thread = await forum.threads.fetch(raw.id);
+  if (!thread) {
+    console.error('Failed to resolve created thread');
+    return;
+  }
+
+  // Lock thread so members can't reply in it
+  await thread.setLocked(true).catch(err => console.error('Failed to lock report thread:', err));
+
+  await thread.pin().catch(err => console.error('Failed to pin report thread:', err));
+
+  data.reportThreadId = thread.id;
+  saveData(data);
+}
+
+client.once(Events.ClientReady, async () => {
   console.log(`Logged in as ${client.user!.tag}`);
 
   const guild = client.guilds.cache.get(config.guildId);
@@ -80,7 +129,6 @@ client.once('clientReady', async () => {
   await ensureButtonMessage(
     guild,
     config.identificationChannelId,
-    'identificationMessageId',
     'Set Nickname & Vehicle',
     'set_identity',
     ButtonStyle.Primary,
@@ -91,10 +139,10 @@ client.once('clientReady', async () => {
     ].join('\n\n'),
   ).catch(err => console.error('Failed to set up identification button:', err));
 
-  await ensureButtonMessage(
+  await ensureButtonThread(
     guild,
-    config.reportChannelId,
-    'reportMessageId',
+    config.forumChannelId,
+    '📋 Submit a Report',
     'Submit a Report',
     'submit_report',
     ButtonStyle.Success,
@@ -103,7 +151,7 @@ client.once('clientReady', async () => {
       'Encountered an issue with navigation? Have an idea for a new feature? Let us know!',
       'Click the button below to fill out a structured report. Bugs will require a Route ID.',
     ].join('\n\n'),
-  ).catch(err => console.error('Failed to set up report button:', err));
+  ).catch(err => console.error('Failed to set up report button thread:', err));
 
   console.log('StarPilot bot is ready');
 });
@@ -150,16 +198,21 @@ async function handleSelectMenu(interaction: StringSelectMenuInteraction) {
     case 'report_type_select':
       await handleReportTypeSelect(interaction);
       break;
+    case 'identity_make_select':
+      await handleIdentityMakeSelect(interaction);
+      break;
     default:
       await interaction.reply({ content: 'Unknown selection.', flags: MessageFlags.Ephemeral });
   }
 }
 
 async function handleModalSubmit(interaction: ModalSubmitInteraction) {
+  if (interaction.customId.startsWith('identity_modal:')) {
+    await handleIdentitySubmit(interaction);
+    return;
+  }
+
   switch (interaction.customId) {
-    case 'identity_modal':
-      await handleIdentitySubmit(interaction);
-      break;
     case 'bug_modal':
       await handleBugSubmit(interaction);
       break;
@@ -181,6 +234,10 @@ function shutdown() {
   client.destroy();
   process.exit(0);
 }
+
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled rejection:', err);
+});
 
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);

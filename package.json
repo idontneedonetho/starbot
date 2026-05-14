@@ -5,8 +5,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "start": "tsx src/index.ts",
+    "dev": "NODE_NO_WARNINGS=1 tsx watch src/index.ts",
+    "start": "NODE_NO_WARNINGS=1 tsx src/index.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit"
   },

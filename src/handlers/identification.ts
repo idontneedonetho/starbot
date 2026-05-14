@@ -1,9 +1,11 @@
 import {
   type ButtonInteraction,
+  type StringSelectMenuInteraction,
   type ModalSubmitInteraction,
   GuildMember,
   ModalBuilder,
   ActionRowBuilder,
+  StringSelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle,
   MessageFlags,
@@ -15,8 +17,30 @@ import { loadConfig } from '../config.js';
 const config = loadConfig();
 
 export async function handleIdentityButton(interaction: ButtonInteraction) {
+  const makeRoles = getAvailableMakeRoles(interaction.guild!, config.ignoredRoles);
+
+  if (makeRoles.length === 0) {
+    await interaction.reply({ content: 'No vehicle makes available.', flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  const select = new StringSelectMenuBuilder()
+    .setCustomId('identity_make_select')
+    .setPlaceholder('Select your vehicle make...')
+    .addOptions(...makeRoles.map(r => ({ label: r.name, value: r.name })));
+
+  await interaction.reply({
+    content: 'What is your vehicle make?',
+    components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select)],
+    flags: MessageFlags.Ephemeral,
+  });
+}
+
+export async function handleIdentityMakeSelect(interaction: StringSelectMenuInteraction) {
+  const make = interaction.values[0];
+
   const modal = new ModalBuilder()
-    .setCustomId('identity_modal')
+    .setCustomId(`identity_modal:${make}`)
     .setTitle('Update Your Identity');
 
   const yearInput = new TextInputBuilder()
@@ -28,17 +52,9 @@ export async function handleIdentityButton(interaction: ButtonInteraction) {
     .setMaxLength(4)
     .setMinLength(4);
 
-  const makeInput = new TextInputBuilder()
-    .setCustomId('identity_make')
-    .setLabel('Make')
-    .setStyle(TextInputStyle.Short)
-    .setPlaceholder('e.g. Tesla, Ford, Chevrolet')
-    .setRequired(true)
-    .setMaxLength(50);
-
   const modelInput = new TextInputBuilder()
     .setCustomId('identity_model')
-    .setLabel('Model (Manual Entry)')
+    .setLabel('Model')
     .setStyle(TextInputStyle.Short)
     .setPlaceholder('e.g. Bolt, Model 3, F-150')
     .setRequired(true)
@@ -46,15 +62,14 @@ export async function handleIdentityButton(interaction: ButtonInteraction) {
 
   const nameInput = new TextInputBuilder()
     .setCustomId('identity_name')
-    .setLabel('Your First Name')
+    .setLabel('Your Chosen Name')
     .setStyle(TextInputStyle.Short)
-    .setPlaceholder('e.g. Jane')
+    .setPlaceholder('e.g. Alex')
     .setRequired(true)
     .setMaxLength(32);
 
   modal.addComponents(
     new ActionRowBuilder<TextInputBuilder>().addComponents(yearInput),
-    new ActionRowBuilder<TextInputBuilder>().addComponents(makeInput),
     new ActionRowBuilder<TextInputBuilder>().addComponents(modelInput),
     new ActionRowBuilder<TextInputBuilder>().addComponents(nameInput),
   );
@@ -63,10 +78,17 @@ export async function handleIdentityButton(interaction: ButtonInteraction) {
 }
 
 export async function handleIdentitySubmit(interaction: ModalSubmitInteraction) {
+  const colonIdx = interaction.customId.indexOf(':');
+  const make = colonIdx !== -1 ? interaction.customId.slice(colonIdx + 1).trim() : '';
+
   const year = interaction.fields.getTextInputValue('identity_year');
-  const make = interaction.fields.getTextInputValue('identity_make');
   const model = interaction.fields.getTextInputValue('identity_model');
   const name = interaction.fields.getTextInputValue('identity_name');
+
+  if (!make) {
+    await interaction.reply({ content: 'Could not determine vehicle make. Please start over.', flags: MessageFlags.Ephemeral });
+    return;
+  }
 
   const currentYear = new Date().getFullYear();
   const yearNum = Number(year);
@@ -80,9 +102,8 @@ export async function handleIdentitySubmit(interaction: ModalSubmitInteraction) 
     r => r.name.toLowerCase() === make.trim().toLowerCase(),
   );
   if (!matchedRole) {
-    const names = makeRoles.map(r => `\`${r.name}\``).join(', ');
     await interaction.reply({
-      content: `Make "${make}" not found. Available makes: ${names}`,
+      content: `Make "${make}" is no longer available. Please start over.`,
       flags: MessageFlags.Ephemeral,
     });
     return;

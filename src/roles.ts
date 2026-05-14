@@ -1,6 +1,6 @@
-import type { Guild, GuildMember, Role } from 'discord.js';
+import type { Guild, GuildMember } from 'discord.js';
 
-export function getAvailableMakeRoles(guild: Guild, ignoredRoles: string[]): Role[] {
+export function getAvailableMakeRoles(guild: Guild, ignoredRoles: string[]) {
   return [...guild.roles.cache.values()]
     .filter(r => !ignoredRoles.includes(r.name) && !r.managed && r.name !== '@everyone')
     .sort((a, b) => a.name.localeCompare(b.name));

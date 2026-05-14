@@ -1,11 +1,12 @@
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
-const DATA_PATH = path.join(import.meta.dirname, '..', 'data', 'messages.json');
+const DATA_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'messages.json');
 
 export interface StoredData {
   identificationMessageId: string | null;
-  reportMessageId: string | null;
+  reportThreadId: string | null;
 }
 
 export function loadData(): StoredData {
@@ -13,7 +14,7 @@ export function loadData(): StoredData {
     const raw = fs.readFileSync(DATA_PATH, 'utf-8');
     return JSON.parse(raw);
   } catch {
-    return { identificationMessageId: null, reportMessageId: null };
+    return { identificationMessageId: null, reportThreadId: null };
   }
 }
 

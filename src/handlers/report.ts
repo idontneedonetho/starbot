@@ -10,10 +10,10 @@ import {
   EmbedBuilder,
   MessageFlags,
   ForumChannel,
-  GuildMember,
   type Guild,
 } from 'discord.js';
 import { loadConfig } from '../config.js';
+import { getMemberDisplayName } from './util.js';
 
 const config = loadConfig();
 
@@ -60,9 +60,9 @@ async function showBugModal(interaction: StringSelectMenuInteraction) {
 
   const routeIdInput = new TextInputBuilder()
     .setCustomId('route_id')
-    .setLabel('Route ID (Mod-Only)')
+    .setLabel('Route Name (Mod-Only)')
     .setStyle(TextInputStyle.Short)
-    .setPlaceholder('e.g. RT-849302')
+    .setPlaceholder('e.g. a1b2c3d4e5f6a7b8/0000aaaa--98c2d4e6f8')
     .setRequired(true);
 
   const observedInput = new TextInputBuilder()
@@ -129,9 +129,15 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
   const reproIntent = interaction.fields.getTextInputValue('reproducibility_intent');
   const details = interaction.fields.getTextInputValue('details');
 
-  const nickname = interaction.member instanceof GuildMember
-    ? (interaction.member.nickname || interaction.user.displayName)
-    : interaction.user.displayName;
+  if (!/^[a-f0-9]{16}\/[a-zA-Z0-9_.-]+(?:\/\d+)?$/.test(routeId)) {
+    await interaction.reply({
+      content: 'Invalid route name. Use the format `dongle_id/route_signature` (e.g. `a1b2c3d4e5f6a7b8/0000aaaa--98c2d4e6f8`).',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const nickname = getMemberDisplayName(interaction);
 
   const guild = interaction.guild;
   if (!guild) {
@@ -167,12 +173,14 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
   const routesForum = getForum(guild, config.routesChannelId);
 
   if (routesForum) {
+    const routeUrl = `https://connect.comma.ai/${routeId}`;
+
     const routeEmbed = new EmbedBuilder()
       .setColor(0xf0b132)
       .setTitle('New Route Issue Flagged')
       .addFields(
         { name: 'User', value: nickname, inline: true },
-        { name: 'Route ID', value: `\`${routeId}\``, inline: false },
+        { name: 'Route', value: `[${routeId}](${routeUrl})`, inline: false },
       )
       .setTimestamp();
 
@@ -209,9 +217,7 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
 export async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, type: 'feedback' | 'feature') {
   const content = interaction.fields.getTextInputValue('content');
 
-  const nickname = interaction.member instanceof GuildMember
-    ? (interaction.member.nickname || interaction.user.displayName)
-    : interaction.user.displayName;
+  const nickname = getMemberDisplayName(interaction);
 
   const guild = interaction.guild;
   if (!guild) {
