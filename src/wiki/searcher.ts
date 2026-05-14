@@ -1,18 +1,35 @@
 import { type WikiResult } from './types.js';
 import { type WikiIndex } from './indexer.js';
-import { embed } from './embedder.js';
+import { embedBatch } from './embedder.js';
 import { rerank } from './reranker.js';
+import { chunkTextByTokens } from './chunker.js';
 
 const QUERY_PREFIX = 'Represent this sentence for searching relevant passages: ';
-const RRF_K = 60;
+
+// Fusion / reranking parameters (tuned for top-1 accuracy).
+const RRF_K = 20;
+const BM25_TOP_PER_CHUNK = 100;
+const MAX_BM25_CANDIDATES = 2000;
+const COSINE_TOP = 500;
+const FUSION_TOP_CUTOFF_RANK = 100;
+const FUSION_P = 1.6;
+const FUSION_W_BM25 = 1.0;
+const FUSION_W_COS = 1.2;
+
+const CHUNK_TOKENS = 512;
+const CHUNK_OVERLAP = 64;
 
 function cosine(a: number[], b: number[]): number {
-  let dot = 0, na = 0, nb = 0;
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+
   for (let i = 0; i < a.length; i++) {
     dot += a[i] * b[i];
     na += a[i] * a[i];
     nb += b[i] * b[i];
   }
+
   const denom = Math.sqrt(na) * Math.sqrt(nb);
   return denom === 0 ? 0 : dot / denom;
 }
@@ -22,46 +39,95 @@ export async function searchWiki(
   query: string,
   topK: number = 3,
 ): Promise<WikiResult[]> {
-  const queryEmbedding = await embed(QUERY_PREFIX + query);
+  const chunks = await chunkTextByTokens(query, CHUNK_TOKENS, CHUNK_OVERLAP);
+  if (chunks.length === 0) return [];
 
-  // BM25 lexical search — top 10
-  const bm25Results = index.search(query).slice(0, 10);
-  const bm25Rank = new Map(bm25Results.map((r, i) => [r.id, i + 1]));
+  // BM25 over query chunks.
+  // Track the best (lowest) rank per candidate chunk id.
+  const bm25Rank = new Map<string, number>();
+  const candidateChunkIds = new Set<string>();
 
-  // Dense cosine search — top 10
-  const pages = [...index.pages.values()];
-  const cosPairs: Array<{ id: string; cos: number }> = [];
-  for (const p of pages) {
-    const emb = index.getContentEmbedding(p.path);
-    if (emb) cosPairs.push({ id: p.path, cos: cosine(queryEmbedding, emb) });
+  for (const qChunk of chunks) {
+    const bm25Results = index.search(qChunk).slice(0, BM25_TOP_PER_CHUNK);
+    for (let i = 0; i < bm25Results.length; i++) {
+      const id = bm25Results[i].id; // chunkId
+      const rank = i + 1;
+
+      candidateChunkIds.add(id);
+
+      const prev = bm25Rank.get(id);
+      if (prev == null || rank < prev) bm25Rank.set(id, rank);
+    }
   }
-  cosPairs.sort((a, b) => b.cos - a.cos);
-  const cosTop10 = cosPairs.slice(0, 10);
-  const cosRank = new Map(cosTop10.map((r, i) => [r.id, i + 1]));
 
-  // RRF: merge into top 10 unique
-  const rrfScores = new Map<string, number>();
-  const addRank = (id: string, rank: number) => {
-    rrfScores.set(id, (rrfScores.get(id) ?? 0) + 1 / (RRF_K + rank));
-  };
-  for (const [id, rank] of bm25Rank) addRank(id, rank);
-  for (const [id, rank] of cosRank) addRank(id, rank);
+  if (candidateChunkIds.size === 0) return [];
 
-  const rrfTop = [...rrfScores.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 10)
-    .map(([id]) => id);
+  // Keep dense scoring bounded.
+  const bm25Entries = [...bm25Rank.entries()].sort((a, b) => a[1] - b[1]).slice(0, MAX_BM25_CANDIDATES);
+  const bm25RankLimited = new Map<string, number>(bm25Entries);
+  if (bm25RankLimited.size === 0) return [];
 
-  // Stage 2: cross-encoder rerank
-  const candidates = rrfTop.map(id => index.getPage(id)).filter(Boolean) as NonNullable<ReturnType<WikiIndex['getPage']>>[];
+  // Dense cosine: embed each query chunk, then for each BM25 candidate chunk take max cosine.
+  const queryEmbeddings = await embedBatch(chunks.map(c => QUERY_PREFIX + c));
 
-  const reranked = await rerank(query, candidates, topK);
+  const cosinePairs: Array<{ id: string; cos: number }> = [];
+  for (const id of bm25Entries.map(([chunkId]) => chunkId)) {
+    const candidateEmb = index.getContentEmbedding(id);
+    if (!candidateEmb) continue;
 
-  return reranked.map(p => ({
-    title: p.title,
-    url: p.url,
-    score: 1,
-  }));
+    let bestCos = -Infinity;
+    for (const qEmb of queryEmbeddings) {
+      bestCos = Math.max(bestCos, cosine(qEmb, candidateEmb));
+    }
+
+    cosinePairs.push({ id, cos: bestCos });
+  }
+
+  cosinePairs.sort((a, b) => b.cos - a.cos);
+  const cosRank = new Map<string, number>(cosinePairs.slice(0, COSINE_TOP).map((r, i) => [r.id, i + 1]));
+
+  // Candidate chunks to fuse.
+  const rankIds = new Set<string>([...bm25RankLimited.keys(), ...cosRank.keys()]);
+  const candidates = [...rankIds]
+    .map(id => index.getChunk(id))
+    .filter((c): c is NonNullable<typeof c> => c != null);
+
+  // Rerank chunks using improved (top-1 oriented) weighted RRF.
+  const scoredChunks = await rerank('', candidates, bm25RankLimited, cosRank, {
+    k: RRF_K,
+    p: FUSION_P,
+    wBm25: FUSION_W_BM25,
+    wCos: FUSION_W_COS,
+    cutoffRank: FUSION_TOP_CUTOFF_RANK,
+    // Score ALL fused candidates so we can safely select the best parent.
+    topK: candidates.length,
+  });
+
+  // Map chunk scores → parent page scores (max over chunks).
+  const bestByParent = new Map<string, { result: WikiResult; score: number }>();
+  for (const { chunk, score } of scoredChunks) {
+    const parent = index.getParentPageFromChunk(chunk.path);
+    if (!parent) continue;
+
+    const key = parent.path;
+    const existing = bestByParent.get(key);
+
+    if (!existing || score > existing.score) {
+      bestByParent.set(key, {
+        score,
+        result: {
+          title: parent.title,
+          url: parent.url,
+          score,
+        },
+      });
+    }
+  }
+
+  return [...bestByParent.values()]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topK)
+    .map(v => v.result);
 }
 
 export function formatWikiResults(results: WikiResult[]): string {

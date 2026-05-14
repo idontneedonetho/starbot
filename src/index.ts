@@ -261,16 +261,32 @@ client.on(Events.MessageCreate, async (message: Message) => {
     return;
   }
 
+  const reactionEmoji = '⏳';
+  let reactionAdded = false;
+
+  try {
+    await message.react(reactionEmoji);
+    reactionAdded = true;
+  } catch {
+    // Ignore if we can't add reactions (missing permissions, etc.)
+  }
+
   try {
     const result = await autoSearchWiki(index, query);
-    if (result) {
-      await message.reply(result);
-    } else {
-      await message.reply("I couldn't find a relevant wiki page.");
-    }
+    const finalText = result ?? "I couldn't find a relevant wiki page.";
+    await message.reply(finalText);
   } catch (err) {
     console.error('Wiki search error:', err);
     await message.reply('Something went wrong while searching the wiki.');
+  } finally {
+    if (reactionAdded) {
+      try {
+        const reaction = message.reactions.cache.get(reactionEmoji);
+        if (reaction) await reaction.users.remove(client.user!.id);
+      } catch {
+        // Ignore reaction cleanup failures
+      }
+    }
   }
 });
 

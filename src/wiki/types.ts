@@ -5,6 +5,15 @@ export interface WikiPage {
   url: string;
 }
 
+export interface WikiChunk {
+  /** Stable identifier for the chunk. */
+  path: string;
+  parentPath: string;
+  title: string;
+  content: string;
+  url: string;
+}
+
 export interface WikiResult {
   title: string;
   url: string;

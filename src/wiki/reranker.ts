@@ -1,42 +1,52 @@
-import { AutoTokenizer, AutoModelForSequenceClassification } from '@huggingface/transformers';
-import { type WikiPage } from './types.js';
+import { type WikiChunk } from './types.js';
 
-let model: any = null;
-let tokenizer: any = null;
-
-async function getReranker() {
-  if (!model) {
-    model = await AutoModelForSequenceClassification.from_pretrained('Xenova/ms-marco-MiniLM-L-6-v2');
-    tokenizer = await AutoTokenizer.from_pretrained('Xenova/ms-marco-MiniLM-L-6-v2');
-  }
-  return { model, tokenizer };
+export interface ScoredWikiChunk {
+  chunk: WikiChunk;
+  score: number;
 }
 
+/**
+ * Model-free (no cross-encoder) fusion of BM25 ranks + dense cosine ranks.
+ *
+ * For a chunk d:
+ *   score(d) = wBm25/(k + rankBm25(d))^p + wCos/(k + rankCos(d))^p
+ */
 export async function rerank(
-  query: string,
-  pages: WikiPage[],
-  topK: number = 3,
-): Promise<WikiPage[]> {
-  if (pages.length === 0) return [];
+  _query: string,
+  chunks: WikiChunk[],
+  bm25Rank: Map<string, number>,
+  cosineRank: Map<string, number>,
+  opts?: {
+    k?: number;
+    p?: number;
+    wBm25?: number;
+    wCos?: number;
+    cutoffRank?: number;
+    topK?: number;
+  },
+): Promise<ScoredWikiChunk[]> {
+  if (chunks.length === 0) return [];
 
-  const { model, tokenizer } = await getReranker();
-  const queries = pages.map(() => query);
-  const docs = pages.map(p => p.content);
+  const k = opts?.k ?? 50;
+  const p = opts?.p ?? 2;
+  const wBm25 = opts?.wBm25 ?? 1.2;
+  const wCos = opts?.wCos ?? 1.0;
+  const cutoffRank = opts?.cutoffRank ?? 30;
+  const topK = opts?.topK;
 
-  const features = tokenizer(queries, {
-    text_pair: docs,
-    padding: true,
-    truncation: true,
+  const scored: ScoredWikiChunk[] = chunks.map(chunk => {
+    const bm25 = bm25Rank.get(chunk.path);
+    const cos = cosineRank.get(chunk.path);
+
+    const bm25Contrib = bm25 == null || bm25 > cutoffRank ? 0 : wBm25 / Math.pow(k + bm25, p);
+    const cosContrib = cos == null || cos > cutoffRank ? 0 : wCos / Math.pow(k + cos, p);
+
+    return {
+      chunk,
+      score: bm25Contrib + cosContrib,
+    };
   });
 
-  const output = await model(features);
-  const logits: Float32Array = output.logits?.data ?? output.data ?? output;
-
-  const scored = pages.map((page, i) => ({
-    page,
-    score: logits[i * 2],
-  }));
-
   scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, topK).map(s => s.page);
+  return typeof topK === 'number' ? scored.slice(0, topK) : scored;
 }
