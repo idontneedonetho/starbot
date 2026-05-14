@@ -4,12 +4,13 @@ export interface NickResult {
   error?: string;
 }
 
-export function computeNickname(name: string, year: string, make: string, model: string): NickResult {
-  const suffix = ` ('${year.slice(-2)} ${make} ${model})`;
+export function computeNickname(username: string, year: string, model: string): NickResult {
+  const yearShort = year.slice(-2);
+  const suffix = ` ('${yearShort} ${model})`;
   if (suffix.length > 32) {
     return { nickname: '', valid: false, error: 'Vehicle details are too long for a Discord nickname.' };
   }
   const maxNameLen = 32 - suffix.length;
-  const truncatedName = name.slice(0, maxNameLen);
+  const truncatedName = username.slice(0, maxNameLen);
   return { nickname: `${truncatedName}${suffix}`, valid: true };
 }

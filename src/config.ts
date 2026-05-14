@@ -8,6 +8,7 @@ export interface BotConfig {
   forumChannelId: string;
   routesChannelId: string;
   ignoredRoles: string[];
+  verifiedRole: string;
   wikiCloneUrl: string;
   wikiClonePath: string;
 }
@@ -33,6 +34,9 @@ export function loadConfig(): BotConfig {
     .map(s => s.trim())
     .filter(Boolean);
 
+  const verifiedRole = process.env.VERIFIED_ROLE;
+  if (!verifiedRole) throw new Error('VERIFIED_ROLE is required');
+
   const wikiCloneUrl = process.env.WIKI_CLONE_URL || 'https://github.com/StarPilot-Docs/docs.git';
   const wikiClonePath = process.env.WIKI_CLONE_PATH || 'data/docs';
 
@@ -43,6 +47,7 @@ export function loadConfig(): BotConfig {
     forumChannelId,
     routesChannelId,
     ignoredRoles,
+    verifiedRole,
     wikiCloneUrl,
     wikiClonePath,
   };

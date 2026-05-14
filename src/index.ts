@@ -15,7 +15,7 @@ import {
 } from 'discord.js';
 import { loadConfig } from './config.js';
 import { loadData, saveData } from './data.js';
-import { handleIdentityButton, handleIdentityMakeSelect, handleIdentitySubmit } from './handlers/identification.js';
+import { handleIdentityButton, handleIdentitySubmit } from './handlers/identification.js';
 import { handleReportButton, handleReportTypeSelect, handleBugSubmit, handleFeedbackSubmit } from './handlers/report.js';
 import { ensureWikiClone, readWikiPages } from './wiki/fetcher.js';
 import { buildIndex } from './wiki/indexer.js';
@@ -184,10 +184,7 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
-    if (interaction.isStringSelectMenu()) {
-      await handleSelectMenu(interaction);
-      return;
-    }
+
 
     if (interaction.isModalSubmit()) {
       await handleModalSubmit(interaction);
@@ -214,21 +211,8 @@ async function handleButton(interaction: ButtonInteraction) {
   }
 }
 
-async function handleSelectMenu(interaction: StringSelectMenuInteraction) {
-  switch (interaction.customId) {
-    case 'report_type_select':
-      await handleReportTypeSelect(interaction);
-      break;
-    case 'identity_make_select':
-      await handleIdentityMakeSelect(interaction);
-      break;
-    default:
-      await interaction.reply({ content: 'Unknown selection.', flags: MessageFlags.Ephemeral });
-  }
-}
-
 async function handleModalSubmit(interaction: ModalSubmitInteraction) {
-  if (interaction.customId.startsWith('identity_modal:')) {
+  if (interaction.customId === 'identity_modal') {
     await handleIdentitySubmit(interaction);
     return;
   }
