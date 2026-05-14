@@ -7,7 +7,6 @@ export interface BotConfig {
   identificationChannelId: string;
   forumChannelId: string;
   routesChannelId: string;
-  ignoredRoles: string[];
   verifiedRole: string;
   wikiCloneUrl: string;
   wikiClonePath: string;
@@ -29,11 +28,6 @@ export function loadConfig(): BotConfig {
   const routesChannelId = process.env.ROUTES_CHANNEL_ID;
   if (!routesChannelId) throw new Error('ROUTES_CHANNEL_ID is required');
 
-  const ignoredRoles = (process.env.IGNORED_ROLES || '')
-    .split(',')
-    .map(s => s.trim())
-    .filter(Boolean);
-
   const verifiedRole = process.env.VERIFIED_ROLE;
   if (!verifiedRole) throw new Error('VERIFIED_ROLE is required');
 
@@ -46,7 +40,6 @@ export function loadConfig(): BotConfig {
     identificationChannelId,
     forumChannelId,
     routesChannelId,
-    ignoredRoles,
     verifiedRole,
     wikiCloneUrl,
     wikiClonePath,
