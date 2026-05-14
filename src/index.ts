@@ -8,7 +8,6 @@ import {
   ForumChannel,
   type ButtonInteraction,
   type ModalSubmitInteraction,
-  type StringSelectMenuInteraction,
   type Message,
   type Guild,
   MessageFlags,
@@ -183,8 +182,6 @@ client.on('interactionCreate', async (interaction) => {
       await handleButton(interaction);
       return;
     }
-
-
 
     if (interaction.isModalSubmit()) {
       await handleModalSubmit(interaction);
