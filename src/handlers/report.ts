@@ -173,6 +173,8 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
   });
 
   const routesForum = getForum(guild, config.routesChannelId);
+  let routeTrackerUrl: string | null = null;
+  let extraFieldsAdded = false;
 
   if (routesForum) {
     const routeUrl = `https://connect.comma.ai/${routeId}`;
@@ -191,14 +193,7 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
       message: { embeds: [routeEmbed] },
     });
 
-    // Cross-link: update public thread → routes thread
-    const publicStarter = await publicThread.fetchStarterMessage();
-    if (publicStarter) {
-      reportEmbed.addFields(
-        { name: '\u200B', value: `[Route Tracker (Mods Only)](${routesThread.url})` },
-      );
-      await publicStarter.edit({ embeds: [reportEmbed] });
-    }
+    routeTrackerUrl = routesThread.url;
 
     // Cross-link: update routes thread → public thread
     const routesStarter = await routesThread.fetchStarterMessage();
@@ -217,13 +212,23 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
       const wikiQuery = `${observed} ${expected}`;
       const wikiResult = await autoSearchWiki(wikiIndex, wikiQuery);
       if (wikiResult) {
-        reportEmbed.addFields({ name: '📖 Potential Related Wiki Articles', value: wikiResult });
-        const starter = await publicThread.fetchStarterMessage();
-        if (starter) await starter.edit({ embeds: [reportEmbed] });
+        reportEmbed.addFields({ name: '📖 Potentially Related Wiki Articles', value: wikiResult });
+        extraFieldsAdded = true;
       }
     }
   } catch (err) {
     console.error('Failed to fetch wiki suggestions:', err);
+  }
+
+  // Append the route tracker link last so it stays at the bottom of the public embed.
+  if (routeTrackerUrl) {
+    reportEmbed.addFields({ name: '\u200B', value: `[Route Tracker (Mods Only)](${routeTrackerUrl})` });
+    extraFieldsAdded = true;
+  }
+
+  if (extraFieldsAdded) {
+    const starter = await publicThread.fetchStarterMessage();
+    if (starter) await starter.edit({ embeds: [reportEmbed] });
   }
 
   await interaction.reply({

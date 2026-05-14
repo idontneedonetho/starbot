@@ -141,5 +141,6 @@ export async function autoSearchWiki(
 ): Promise<string | null> {
   const results = await searchWiki(index, query, topK);
   if (results.length === 0) return null;
-  return `📖 **Potential matches:**\n${formatWikiResults(results)}`;
+  // Caller provides the label/emoji; keep the value to the list only.
+  return formatWikiResults(results);
 }

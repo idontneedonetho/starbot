@@ -148,14 +148,14 @@ client.once(Events.ClientReady, async () => {
   await ensureButtonThread(
     guild,
     config.forumChannelId,
-    '📋 Submit a Report',
+    'Click Here to Submit a Report',
     'Submit a Report',
     'submit_report',
     ButtonStyle.Success,
     '🐛',
     [
+      'Click the button below to submit a structured report. Bugs will require a Route ID.',
       'Encountered an issue with navigation? Have an idea for a new feature? Let us know!',
-      'Click the button below to fill out a structured report. Bugs will require a Route ID.',
     ].join('\n\n'),
   ).catch(err => console.error('Failed to set up report button thread:', err));
 
