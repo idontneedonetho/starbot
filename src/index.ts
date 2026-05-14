@@ -9,6 +9,7 @@ import {
   type ButtonInteraction,
   type ModalSubmitInteraction,
   type StringSelectMenuInteraction,
+  type Message,
   type Guild,
   MessageFlags,
 } from 'discord.js';
@@ -16,6 +17,10 @@ import { loadConfig } from './config.js';
 import { loadData, saveData } from './data.js';
 import { handleIdentityButton, handleIdentityMakeSelect, handleIdentitySubmit } from './handlers/identification.js';
 import { handleReportButton, handleReportTypeSelect, handleBugSubmit, handleFeedbackSubmit } from './handlers/report.js';
+import { ensureWikiClone, readWikiPages } from './wiki/fetcher.js';
+import { buildIndex } from './wiki/indexer.js';
+import { setIndex, getIndex } from './wiki/wiki.js';
+import { autoSearchWiki } from './wiki/searcher.js';
 
 const config = loadConfig();
 const data = loadData();
@@ -25,6 +30,7 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
   ],
 });
 
@@ -153,6 +159,21 @@ client.once(Events.ClientReady, async () => {
     ].join('\n\n'),
   ).catch(err => console.error('Failed to set up report button thread:', err));
 
+  // Initialize wiki search
+  try {
+    await ensureWikiClone(config.wikiCloneUrl, config.wikiClonePath);
+    const wikiPages = readWikiPages(config.wikiClonePath);
+    if (wikiPages.length > 0) {
+      const idx = await buildIndex(wikiPages, config.wikiClonePath);
+      setIndex(idx);
+      console.log(`Wiki initialized with ${wikiPages.length} pages`);
+    } else {
+      console.log('Wiki clone empty — no pages found');
+    }
+  } catch (err) {
+    console.error('Failed to initialize wiki:', err);
+  }
+
   console.log('StarPilot bot is ready');
 });
 
@@ -226,6 +247,32 @@ async function handleModalSubmit(interaction: ModalSubmitInteraction) {
       await interaction.reply({ content: 'Unknown modal submission.', flags: MessageFlags.Ephemeral });
   }
 }
+
+client.on(Events.MessageCreate, async (message: Message) => {
+  if (message.author.bot) return;
+  if (!message.mentions.has(client.user!.id)) return;
+
+  const query = message.content.replace(/<@!?\d+>/g, '').trim();
+  if (!query) return;
+
+  const index = getIndex();
+  if (!index) {
+    await message.reply('Wiki search is not available right now.');
+    return;
+  }
+
+  try {
+    const result = await autoSearchWiki(index, query);
+    if (result) {
+      await message.reply(result);
+    } else {
+      await message.reply("I couldn't find a relevant wiki page.");
+    }
+  } catch (err) {
+    console.error('Wiki search error:', err);
+    await message.reply('Something went wrong while searching the wiki.');
+  }
+});
 
 client.login(config.token);
 

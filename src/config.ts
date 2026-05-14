@@ -8,6 +8,8 @@ export interface BotConfig {
   forumChannelId: string;
   routesChannelId: string;
   ignoredRoles: string[];
+  wikiCloneUrl: string;
+  wikiClonePath: string;
 }
 
 export function loadConfig(): BotConfig {
@@ -31,6 +33,9 @@ export function loadConfig(): BotConfig {
     .map(s => s.trim())
     .filter(Boolean);
 
+  const wikiCloneUrl = process.env.WIKI_CLONE_URL || 'https://github.com/StarPilot-Docs/docs.git';
+  const wikiClonePath = process.env.WIKI_CLONE_PATH || 'data/docs';
+
   return {
     token,
     guildId,
@@ -38,5 +43,7 @@ export function loadConfig(): BotConfig {
     forumChannelId,
     routesChannelId,
     ignoredRoles,
+    wikiCloneUrl,
+    wikiClonePath,
   };
 }

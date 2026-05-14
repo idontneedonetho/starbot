@@ -14,6 +14,8 @@ import {
 } from 'discord.js';
 import { loadConfig } from '../config.js';
 import { getMemberDisplayName } from './util.js';
+import { getIndex } from '../wiki/wiki.js';
+import { autoSearchWiki } from '../wiki/searcher.js';
 
 const config = loadConfig();
 
@@ -206,6 +208,22 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
       );
       await routesStarter.edit({ embeds: [routeEmbed] });
     }
+  }
+
+  // Wiki suggestions on public thread
+  try {
+    const wikiIndex = getIndex();
+    if (wikiIndex) {
+      const wikiQuery = `${observed} ${expected}`;
+      const wikiResult = await autoSearchWiki(wikiIndex, wikiQuery);
+      if (wikiResult) {
+        reportEmbed.addFields({ name: '📖 Potential Related Wiki Articles', value: wikiResult });
+        const starter = await publicThread.fetchStarterMessage();
+        if (starter) await starter.edit({ embeds: [reportEmbed] });
+      }
+    }
+  } catch (err) {
+    console.error('Failed to fetch wiki suggestions:', err);
   }
 
   await interaction.reply({

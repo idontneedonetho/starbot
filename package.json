@@ -11,8 +11,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@huggingface/transformers": "*",
     "discord.js": "*",
-    "dotenv": "*"
+    "dotenv": "*",
+    "minisearch": "*",
+    "simple-git": "*"
   },
   "devDependencies": {
     "@types/node": "*",
