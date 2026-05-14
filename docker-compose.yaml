@@ -1,0 +1,11 @@
+services:
+  starbot:
+    build: .
+    container_name: starbot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data:rw
+    environment:
+      - NODE_ENV=production
