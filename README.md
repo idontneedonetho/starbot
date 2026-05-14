@@ -9,7 +9,7 @@ A persistent Discord AI assistant for [StarPilot](https://github.com/firestar568
 - **Mention interface** — ping the bot in any channel to ask a question
 - **Thread-backed sessions** — each thread gets its own persistent agent session; continue conversations naturally
 - **Plugin system** — hot-reloadable plugins can add slash commands (`command`) or event handlers (`events`). Admins create/modify plugins via `/manage` using natural language — an AI agent writes the code
-- **Wiki knowledge base** — Q&A exchanges are automatically distilled into a markdown wiki (concepts, entities, users) that the agent reads alongside source code
+- **Self-maintaining wiki** — every Q&A exchange is distilled into a structured markdown wiki (concepts, entities, user profiles) that future answers reference via `[[wiki-link]]`. The bot reads the wiki before touching source code, so knowledge accumulates over time
 - **Auto-synced repo** — shallow-clones the target branch and syncs on a cron schedule with retry logic
 - **Rate limiting & concurrency** — per-user rate limiter + semaphore-based queue with visual position indicators
 - **Code-aware chunking** — splits long responses at Discord's 2000-char limit without breaking code blocks
@@ -149,6 +149,110 @@ The bot delegates to an AI agent that writes the plugin file, syntax-checks it w
 
 ---
 
+## Wiki Knowledge Base
+
+Every Q&A exchange is automatically distilled into a persistent markdown wiki that the agent reads alongside source code. The wiki grows smarter with every interaction — no manual curation required.
+
+### Lifecycle
+
+```mermaid
+flowchart LR
+  subgraph Query[On question]
+    A[User asks question] --> B[Agent reads SCHEMA.md]
+    B --> C[Agent reads index.md]
+    C --> D[Agent reads relevant wiki pages]
+    D --> E[Agent reads repo source code]
+    E --> F[Agent synthesizes answer<br>with [[wiki-link]] references]
+  end
+
+  F --> G[afterExchange]
+
+  subgraph Ingest[After answering]
+    G --> H[Raw interaction saved<br>to raw/threads/]
+    H --> I[Wiki update agent triggered]
+    I --> J[Reads raw thread]
+    J --> K[Creates/updates concept,<br>entity, and user pages]
+    K --> L[Cross-references pages<br>with [[wiki-link]]]
+    L --> M[Updates index.md]
+    M --> N[Appends to log.md]
+  end
+
+  N --> O[Future answers<br>read new pages]
+  O -.-> B
+```
+
+### Three-layer architecture
+
+```
+wikis/                      # One wiki per bot deployment
+├── SCHEMA.md               # Governance rules — read first
+├── index.md                # Table of contents — updated on every change
+├── log.md                  # Append-only operation log
+├── concepts/               # Codebase concepts (fingerprinting, CAN bus, safety model)
+├── entities/               # Physical things (car models, hardware, devices)
+├── users/                  # Community member profiles
+└── raw/threads/            # Immutable Q&A exchanges, one .md per thread
+```
+
+| Layer | Path | Editable? | Purpose |
+|---|---|---|---|
+| **Raw sources** | `raw/threads/` | No (immutable) | Full Q&A text for context |
+| **The wiki** | `concepts/`, `entities/`, `users/` | Yes (LLM-maintained) | Curated, cross-referenced knowledge |
+| **Schema** | `SCHEMA.md` | Yes (co-evolved) | Rules for structure, naming, operations |
+
+### Page conventions
+
+Every wiki page starts with YAML frontmatter:
+
+```yaml
+---
+title: "Fingerprinting"
+type: concept
+created: 2026-05-01
+updated: 2026-05-12
+tags: [can-bus, identification, panda]
+sources: [raw/threads/1493797593849790584.md]
+---
+```
+
+- **Naming**: concepts/entities use PascalCase (`Fingerprinting.md`, `HyundaiSonata2020.md`), users use Discord IDs
+- **Cross-references**: every page links to at least one other using `[[wiki-link]]` notation — no orphan pages
+- **Contradictions**: if new info contradicts an existing page, a `## Conflicts` section is added instead of silent overwrite
+
+### index.md
+
+The table of contents the LLM reads first to navigate the wiki. Updated automatically after every ingest:
+
+```markdown
+## Concepts
+- [[Fingerprinting]] — how StarPilot identifies car models via CAN messages
+- [[SafetyModel]] — the openpilot safety model and stock ECU limitations
+
+## Entities
+- [[CommaThree]] — Snapdragon-based comma device
+- [[HyundaiSonata2020]] — 2020 Hyundai Sonata, common test platform
+```
+
+### log.md
+
+Append-only record of every wiki operation, parsed later for audit/recovery:
+
+```
+## [2026-05-12] ingest | Created [[Fingerprinting]] from thread 1493797593849790584
+## [2026-05-12] query  | Answered "what vehicles are supported?" from [[CarParams]]
+## [2026-05-12] update | Updated [[HyundaiSonata2020]] with new CAN fingerprint
+```
+
+Prefixes: `ingest`, `update`, `query`, `lint`.
+
+### Agent integration
+
+- **On question**: the Q&A agent reads `SCHEMA.md` and `index.md` first to orient itself, then loads relevant wiki pages before touching source code. Answers include `[[wiki-link]]` references back to the wiki.
+- **After answer**: a second LLM agent (`runWikiUpdate`) reads the raw exchange and ingests new knowledge into the wiki — creating pages, cross-referencing, updating index and log.
+- **Over time**: the wiki accumulates structured knowledge about the codebase. The agent relies on it increasingly, reducing redundant reads of the same source files.
+
+---
+
 ## Usage
 
 Mention the bot in any allowed channel:
@@ -180,12 +284,29 @@ Discord
 bot.ts (discord.js client)
    ├── rate limiter & semaphore (limits.ts)
    ├── thread session (memory.ts → ./data/sessions/)
-   ├── handleQuestion() ──► agent.ts (pi-coding-agent)
-   │                          ├── cwd = repo-cache/starpilot (synced by repoSync.ts)
-   │                          └── reads wiki/ + source code via SDK tools
+   │
+   ├── handleQuestion() ──► agent.ts (Q&A)
+   │   ┌──────────────────────────────────────┐
+   │   │  1. Read SCHEMA.md + index.md        │
+   │   │  2. Read relevant wiki pages         │
+   │   │  3. Read source code (repo-cache/)   │
+   │   │  4. Synthesize answer w/ [[links]]   │
+   │   └──────────────────────────────────────┘
+   │   cwd = repo-cache/starpilot (synced by repoSync.ts)
+   │
    ├── chunkAnswer() ──► chunking.ts → reply in thread
-   └── afterExchange() ──► wiki.ts (save raw, trigger wiki agent update)
-                              └── agent.ts (runWikiUpdate → creates/updates wiki pages)
+   │
+   └── afterExchange() ──► wiki.ts
+       │   save raw interaction → raw/threads/
+       │   trigger wiki update agent
+       ▼
+   agent.ts (runWikiUpdate)
+       ┌──────────────────────────────────────┐
+       │  1. Read raw thread                   │
+       │  2. Create/update wiki pages          │
+       │  3. Cross-reference w/ [[wiki-link]]  │
+       │  4. Update index.md + log.md          │
+       └──────────────────────────────────────┘
 
 /plugins/loader.ts  ← loads plugin-*.js files from data/plugins/
 /plugins/manager.ts ← /manage command (admin-only AI plugin creation)

@@ -4,6 +4,8 @@ import { WIKI_DIR } from "./config.js";
 import { runWikiUpdate } from "./agent.js";
 
 const RAW_THREADS_DIR = path.join(WIKI_DIR, "raw", "threads");
+const DEBOUNCE_DELAY = 30_000;
+const pendingUpdates = new Map<string, NodeJS.Timeout>();
 
 function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
@@ -17,12 +19,25 @@ export function saveRawInteraction(threadId: string, userId: string, question: s
   fs.appendFileSync(filePath, entry, "utf-8");
 }
 
-export async function afterExchange(threadId: string, userId: string, question: string, answer: string): Promise<void> {
-  try {
-    await runWikiUpdate({ threadId, userId, question, answer });
-  } catch (err) {
-    console.warn(`[wiki] Update failed:`, err);
+export function cancelPendingWikiUpdate(threadId: string): void {
+  const timer = pendingUpdates.get(threadId);
+  if (timer) {
+    clearTimeout(timer);
+    pendingUpdates.delete(threadId);
   }
+}
+
+export function afterExchange(threadId: string): void {
+  cancelPendingWikiUpdate(threadId);
+  const timer = setTimeout(async () => {
+    pendingUpdates.delete(threadId);
+    try {
+      await runWikiUpdate({ threadId });
+    } catch (err) {
+      console.warn(`[wiki] Update failed:`, err);
+    }
+  }, DEBOUNCE_DELAY);
+  pendingUpdates.set(threadId, timer);
 }
 
 export function ensureWikiStructure(): void {

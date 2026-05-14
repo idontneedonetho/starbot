@@ -2,7 +2,7 @@ import { execSync } from "child_process";
 import { SlashCommandBuilder, type Interaction, type PermissionsBitField, type ChatInputCommandInteraction } from "discord.js";
 import fs from "fs";
 import path from "path";
-import { PLUGINS_DIR, ADMIN_USER_IDS } from "../config.js";
+import { PLUGINS_DIR, DATA_DIR, ADMIN_USER_IDS } from "../config.js";
 import { createPlugin } from "../agent.js";
 import { loadPlugin, unloadPlugin, syncDiscordCommands, commands } from "./loader.js";
 
@@ -90,7 +90,7 @@ const manageCommand = {
 
       const result = await createPlugin(
         fullPrompt,
-        PLUGINS_DIR,
+        DATA_DIR,
         (text) => process.stdout.write(`[agent] ${text}`),
         undefined,
         undefined,

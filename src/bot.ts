@@ -8,7 +8,7 @@ import {
   ActivityType,
   REST,
 } from "discord.js";
-import { config, ALLOWED_CHANNEL_IDS, ANSWER_TIMEOUT_SECONDS, REPO_NAME, REPO_CACHE_DIR } from "./config.js";
+import { config, ALLOWED_CHANNEL_IDS, ANSWER_TIMEOUT_SECONDS, REPO_CACHE_DIR, loadRepos } from "./config.js";
 import { askAboutRepo } from "./agent.js";
 import { singleTurnLlm } from "./llm.js";
 import { saveRawInteraction, afterExchange } from "./wiki.js";
@@ -19,6 +19,7 @@ import { chunkAnswer } from "./utils/chunking.js";
 import { getAllCommands } from "./plugins/manager.js";
 import { initPluginSystem, getCommand, syncDiscordCommands } from "./plugins/loader.js";
 import { setupEventHandlers } from "./events/handler.js";
+import { cancelPendingWikiUpdate } from "./wiki.js";
 
 const EMOJI_SEEN = "👀";
 const EMOJI_DONE = "✅";
@@ -150,8 +151,10 @@ client.on(Events.MessageCreate, async (message: Message) => {
   const question = stripMentions(content);
 
   if (!question) {
+    const repos = loadRepos();
+    const repoHelp = repos.map(r => `  \`${r.name}\``).join(", ");
     await message.reply(
-      `Hey! Ask me anything about the ${REPO_NAME} codebase.\n` +
+      `Hey! Ask me about any of these repos: ${repoHelp}\n` +
       `Example: \`@${botName} what vehicles are supported?\`\n\n` +
       `💡 I will create a thread to answer your question. You can continue the conversation there!\n` +
       `🧠 I'll also pick up on things you mention about your setup and remember them.`,
@@ -184,7 +187,7 @@ client.on(Events.MessageCreate, async (message: Message) => {
     const result = await handleQuestion(message, botName, question, message.author.id);
     if (result) {
       saveRawInteraction(result.sessionThreadId, message.author.id, question, result.answer);
-      afterExchange(result.sessionThreadId, message.author.id, question, result.answer).catch(console.error);
+      afterExchange(result.sessionThreadId);
     }
   } catch (err) {
     console.error("[bot] Unhandled error in message handler:", err);
@@ -225,7 +228,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 client.once(Events.ClientReady, async (c) => {
   console.log(`[bot] Logged in as ${c.user.tag}`);
-  c.user.setActivity(`${REPO_NAME} questions`, { type: ActivityType.Listening });
+  const repos = loadRepos();
+  const activity = repos.length === 1 ? `${repos[0].name} questions` : `${repos.length} codebases`;
+  c.user.setActivity(activity, { type: ActivityType.Listening });
 
   applicationId = c.user.id;
   (client as any).singleTurnLlm = singleTurnLlm;
@@ -255,6 +260,7 @@ client.on(Events.ShardReconnecting, (id) => {
 
 client.on(Events.ThreadDelete, (thread) => {
   deleteSession(thread.id);
+  cancelPendingWikiUpdate(thread.id);
 });
 
 export const isBotReady = () => client.isReady();

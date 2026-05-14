@@ -1,3 +1,4 @@
+import path from "path";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -7,7 +8,7 @@ import {
   type AgentSessionEventListener,
 } from "@earendil-works/pi-coding-agent";
 import { mainModel, authStorage, modelRegistry } from "./llm.js";
-import { REPO_NAME, REPO_DESC, WIKI_DIR } from "./config.js";
+import { SESSION_DIR, WIKI_DIR } from "./config.js";
 import { buildSystemPrompt, CREATE_PLUGIN_SYSTEM, WIKI_UPDATE_SYSTEM } from "./prompts.js";
 import { createInactivityTimeout } from "./utils/timeout.js";
 
@@ -144,21 +145,29 @@ export async function createPlugin(
   return answer;
 }
 
-export async function runWikiUpdate(exchange: { threadId: string; userId: string; question: string; answer: string }): Promise<void> {
-  const session = await createSession(WIKI_DIR, WIKI_UPDATE_SYSTEM, ["read", "write", "edit", "grep", "find", "ls"]);
+const WIKI_UPDATE_TIMEOUT = 120_000;
+
+export async function runWikiUpdate(exchange: { threadId: string }): Promise<void> {
+  const sessionPath = path.join(SESSION_DIR, exchange.threadId, "wiki");
+  const session = await createSession(WIKI_DIR, WIKI_UPDATE_SYSTEM, ["read", "write", "edit", "grep", "find", "ls"], sessionPath);
+
+  const timeout = createInactivityTimeout(WIKI_UPDATE_TIMEOUT, `Wiki update timeout after ${WIKI_UPDATE_TIMEOUT / 1000}s`);
+  const unsub = session.subscribe((event) => {
+    if (event.type === "turn_start" || event.type === "tool_execution_start" || event.type === "message_start") {
+      timeout.reset();
+    }
+  });
+
   const prompt = [
-    `A Q&A exchange just happened.`,
-    `Thread ID: ${exchange.threadId}`,
-    `User ID: ${exchange.userId}`,
-    `Question: ${exchange.question}`,
-    `Answer: ${exchange.answer}`,
-    ``,
-    `The raw conversation is at raw/threads/${exchange.threadId}.md if you need context.`,
-    `Go read the wiki and update it appropriately.`,
+    `A Q&A exchange just happened in thread ${exchange.threadId}.`,
+    `The raw full conversation is at raw/threads/${exchange.threadId}.md.`,
+    `Go read the wiki and update it appropriately with any new information.`,
   ].join("\n");
   try {
-    await session.prompt(prompt);
+    await Promise.race([session.prompt(prompt), timeout.promise]);
   } finally {
+    timeout.clear();
+    unsub();
     session.dispose();
   }
 }

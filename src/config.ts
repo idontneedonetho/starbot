@@ -6,7 +6,7 @@ import cron from "node-cron";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const defaultRepoCacheDir = path.resolve(__dirname, "../repo-cache/starpilot");
+const defaultRepoCacheDir = path.resolve(__dirname, "../repo-cache");
 const defaultSessionDir = path.resolve(__dirname, "../data/sessions");
 const defaultPluginsDir = path.resolve(__dirname, "../data/plugins");
 const defaultBotSrcDir = path.resolve(__dirname, "../src");
@@ -17,6 +17,13 @@ const cronValidator = makeValidator((val: string) => {
   return val;
 });
 
+export interface RepoDef {
+  name: string;
+  url: string;
+  branch: string;
+  desc: string;
+}
+
 export const config = cleanEnv(process.env, {
   DISCORD_TOKEN: str(),
   LLM_PROVIDER: str({ default: "anthropic" }),
@@ -24,6 +31,7 @@ export const config = cleanEnv(process.env, {
   LLM_MODEL: str({ default: "claude-sonnet-4-5" }),
   CHEAP_LLM_PROVIDER: str({ default: "" }),
   CHEAP_LLM_MODEL: str({ default: "" }),
+  REPOS: str({ default: "" }),
   REPO_NAME: str({ default: "StarPilot" }),
   REPO_DESC: str({ default: "a custom fork of comma.ai's openpilot driving assistance system with special support for GM vehicles" }),
   STARPILOT_REPO_URL: str({ default: "https://github.com/firestar5683/starpilot" }),
@@ -56,9 +64,8 @@ export const ADMIN_USER_IDS = config.ADMIN_USER_IDS
 export const ANSWER_TIMEOUT_SECONDS = config.ANSWER_TIMEOUT_SECONDS;
 export const REPO_CACHE_DIR = config.REPO_CACHE_DIR;
 export const SESSION_DIR = config.SESSION_DIR;
-export const REPO_NAME = config.REPO_NAME;
-export const REPO_DESC = config.REPO_DESC;
 export const PLUGINS_DIR = config.PLUGINS_DIR;
+export const DATA_DIR = path.resolve(PLUGINS_DIR, "..");
 export const BOT_SRC_DIR = config.BOT_SRC_DIR;
 export const WIKI_DIR = config.WIKI_DIR;
 export const RATE_LIMIT_WINDOW_SEC = config.RATE_LIMIT_WINDOW_SEC;
@@ -67,6 +74,22 @@ export const MAX_CONCURRENT = config.MAX_CONCURRENT;
 export const STALE_THRESHOLD_MS = config.STALE_THRESHOLD_MS;
 export const SYNC_MAX_RETRIES = config.SYNC_MAX_RETRIES;
 export const SYNC_RETRY_DELAY_MS = config.SYNC_RETRY_DELAY_MS;
+
+export function loadRepos(): RepoDef[] {
+  if (config.REPOS) {
+    try {
+      return JSON.parse(config.REPOS);
+    } catch {
+      throw new Error(`[config] Invalid REPOS JSON: ${config.REPOS}`);
+    }
+  }
+  return [{
+    name: config.REPO_NAME,
+    url: config.STARPILOT_REPO_URL,
+    branch: config.STARPILOT_BRANCH,
+    desc: config.REPO_DESC,
+  }];
+}
 
 export function validateConfig(): void {
   if (!config.LLM_MODEL || !REPO_CACHE_DIR || !SESSION_DIR || !PLUGINS_DIR) {

@@ -1,10 +1,17 @@
-import { REPO_CACHE_DIR, WIKI_DIR, REPO_NAME, REPO_DESC } from "./config.js";
+import { REPO_CACHE_DIR, WIKI_DIR, loadRepos } from "./config.js";
 
 export function buildSystemPrompt(botName: string): string {
-  return `\
-You are ${botName}, an expert assistant for the ${REPO_NAME} project — ${REPO_DESC}.
+  const repos = loadRepos();
+  const repoList = repos.map(r =>
+    `  - ${r.name} (repo-cache/${r.name}/) — ${r.desc}`
+  ).join("\n");
 
-The codebase is at ${REPO_CACHE_DIR}. You also have access to a wiki at ${WIKI_DIR} that contains curated knowledge about the codebase, its concepts, hardware entities, and community members.
+  return `\
+You are ${botName}, an expert assistant with access to the following code repositories:
+
+${repoList}
+
+The codebases are at ${REPO_CACHE_DIR}. Use \`ls\` to see available repos, then navigate into the one you need. You also have access to a wiki at ${WIKI_DIR} that contains curated knowledge about codebase concepts, hardware entities, and community members.
 
 Before answering, read ${WIKI_DIR}/SCHEMA.md and ${WIKI_DIR}/index.md to understand the wiki structure and find relevant pages. Use your tools to read any wiki pages that may help.
 
@@ -42,6 +49,7 @@ Read index.md to see what pages already exist.
 Read any existing pages that are relevant to the exchange.
 Read the raw conversation at raw/threads/{threadId}.md for full context.
 
+Your session persists across multiple turns in this thread. Check your previous turns to see what you've already done — don't re-process old exchanges.
 Your job is to update the wiki to reflect the new knowledge:
 - Create or update concept pages in concepts/ for codebase ideas and mechanisms
 - Create or update entity pages in entities/ for car models, hardware, devices, people
