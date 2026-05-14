@@ -1,20 +1,8 @@
-FROM node:22-alpine
-
+FROM node:22-alpine AS builder
 WORKDIR /app
 
-# Install dependencies
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+COPY package.json package-lock.json tsconfig.json ./
+RUN npm ci
 
-# Copy source
-COPY tsconfig.json ./
 COPY src/ ./src/
-
-# Copy .env.example for reference
-COPY .env.example .env.example
-
-# Data directory for wiki clone and persistence
-RUN mkdir -p data/docs data/data
-
-# Run the bot
-CMD ["node", "--no-warnings", "--import=tsx", "src/index.ts"]
+RUN npm run build
