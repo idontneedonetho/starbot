@@ -227,10 +227,6 @@ export async function handleBugSubmit(
     reportEmbed.addFields({ name: 'Additional Details', value: details });
   }
 
-  if (routePublic) {
-    reportEmbed.addFields({ name: 'Route', value: `[${dongleId}/${routeName}](${routeUrl})` });
-  }
-
   let publicThread: Awaited<typeof publicForum.threads>['create'] extends (...args: infer A) => Promise<infer R> ? R : never;
   try {
     publicThread = await publicForum.threads.create({
@@ -253,7 +249,7 @@ export async function handleBugSubmit(
         .setTitle(`Route Issue #${ticketNumber}`)
         .addFields(
           { name: 'User', value: nickname, inline: true },
-          { name: 'Route', value: `[${dongleId}/${routeName}](${routeUrl})`, inline: false },
+          { name: 'Route (for Mods)', value: `[${dongleId}/${routeName}](${routeUrl})`, inline: false },
         )
         .setTimestamp();
 
@@ -393,10 +389,6 @@ export async function handleConfirmRoute(
 
   const updated = EmbedBuilder.from(embed);
 
-  if (!embed.fields?.some(f => f.name === 'Route')) {
-    updated.addFields({ name: 'Route', value: `[${dongleId}/${routeName}](${routeUrl})` });
-  }
-
   // Create routes forum thread and cross-link.
   const guild = interaction.guild;
   let routesThreadUrl: string | null = null;
@@ -409,7 +401,7 @@ export async function handleConfirmRoute(
         .setTitle(`Route Issue #${ticketNumber}`)
         .addFields(
           { name: 'User', value: nickname, inline: true },
-          { name: 'Route', value: `[${dongleId}/${routeName}](${routeUrl})`, inline: false },
+          { name: 'Route (for Mods)', value: `[${dongleId}/${routeName}](${routeUrl})`, inline: false },
         )
         .setTimestamp();
 
