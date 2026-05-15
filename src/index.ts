@@ -4,9 +4,11 @@ import {
   ButtonStyle,
   ActionRowBuilder,
   ButtonBuilder,
+  EmbedBuilder,
   Events,
   ForumChannel,
   type ButtonInteraction,
+  type StringSelectMenuInteraction,
   type ModalSubmitInteraction,
   type Message,
   type Guild,
@@ -15,11 +17,12 @@ import {
 import { loadConfig } from './config.js';
 import { loadData, saveData } from './data.js';
 import { handleIdentityButton, handleIdentitySubmit } from './handlers/identification.js';
-import { handleReportButton, handleReportTypeSelect, handleBugSubmit, handleFeedbackSubmit } from './handlers/report.js';
+import { handleReportButton, handleReportTypeSelect, handleBugSubmit, handleFeedbackSubmit, handleConfirmRoute, pendingRoutes } from './handlers/report.js';
+import { getNextTicketNumber } from './data.js';
 import { ensureWikiClone, readWikiPages } from './wiki/fetcher.js';
 import { buildIndex } from './wiki/indexer.js';
-import { setIndex, getIndex } from './wiki/wiki.js';
-import { autoSearchWiki } from './wiki/searcher.js';
+import { setIndex, getIndex, setInitFailed, getInitStatus } from './wiki/wiki.js';
+import { autoSearchWiki, formatWikiResults } from './wiki/searcher.js';
 
 const config = loadConfig();
 const data = loadData();
@@ -32,6 +35,10 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
   ],
 });
+
+// Per-user rate limit for wiki mentions (cooldown in ms).
+const WIKI_COOLDOWN_MS = 10_000;
+const wikiCooldowns = new Map<string, number>();
 
 function buttonRow(label: string, customId: string, style: ButtonStyle, emoji: string) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -61,8 +68,22 @@ async function ensureButtonMessage(
         return;
       }
     } catch {
-      // deleted — create new below
+      // deleted or inaccessible — fall through to create
     }
+  }
+
+  // Try to find an existing message by this bot in the channel (fallback if stored ID is stale).
+  try {
+    const existing = await channel.messages.fetch({ limit: 50 }).then(msgs =>
+      msgs.find(m => m.author.id === client.user!.id && m.components.length > 0),
+    );
+    if (existing) {
+      data.identificationMessageId = existing.id;
+      saveData(data);
+      return;
+    }
+  } catch {
+    // fetch failed — create new below
   }
 
   const message = await channel.send({ content, components: [buttonRow(label, customId, style, emoji)] });
@@ -94,8 +115,22 @@ async function ensureButtonThread(
         return;
       }
     } catch {
-      // deleted — create new below
+      // deleted or inaccessible — fall through to create
     }
+  }
+
+  // Try to find an existing thread by this bot (fallback if stored ID is stale).
+  try {
+    const existingThreads = await forum.threads.fetchActive();
+    const existing = existingThreads.threads.find(t => t.ownerId === client.user!.id && t.name === threadName);
+    if (existing) {
+      if (existing.archived) await existing.setArchived(false);
+      data.reportThreadId = existing.id;
+      saveData(data);
+      return;
+    }
+  } catch {
+    // fetch failed — create new below
   }
 
   // Create forum post for the report button
@@ -168,11 +203,23 @@ client.once(Events.ClientReady, async () => {
       console.log(`Wiki initialized with ${wikiPages.length} pages`);
     } else {
       console.log('Wiki clone empty — no pages found');
+      setInitFailed();
     }
   } catch (err) {
     console.error('Failed to initialize wiki:', err);
+    setInitFailed();
   }
 
+  // Reload pending route confirmations from disk.
+  for (const [key, val] of Object.entries(data.pendingRoutes)) {
+    pendingRoutes.set(parseInt(key), val);
+  }
+  if (Object.keys(data.pendingRoutes).length > 0) {
+    console.log(`Loaded ${Object.keys(data.pendingRoutes).length} pending route confirmations`);
+  }
+
+  const status = getInitStatus();
+  console.log(`Wiki status: ${status}`);
   console.log('StarPilot bot is ready');
 });
 
@@ -180,6 +227,11 @@ client.on('interactionCreate', async (interaction) => {
   try {
     if (interaction.isButton()) {
       await handleButton(interaction);
+      return;
+    }
+
+    if (interaction.isStringSelectMenu()) {
+      await handleSelectMenu(interaction);
       return;
     }
 
@@ -196,33 +248,48 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 async function handleButton(interaction: ButtonInteraction) {
+  if (interaction.customId.startsWith('confirm_route_')) {
+    await handleConfirmRoute(config, interaction, data);
+    return;
+  }
+
   switch (interaction.customId) {
     case 'set_identity':
-      await handleIdentityButton(interaction);
+      await handleIdentityButton(config, interaction);
       break;
     case 'submit_report':
-      await handleReportButton(interaction);
+      await handleReportButton(config, interaction);
       break;
     default:
       await interaction.reply({ content: 'Unknown button.', flags: MessageFlags.Ephemeral });
   }
 }
 
+async function handleSelectMenu(interaction: StringSelectMenuInteraction) {
+  switch (interaction.customId) {
+    case 'report_type_select':
+      await handleReportTypeSelect(config, interaction);
+      break;
+    default:
+      await interaction.reply({ content: 'Unknown select menu.', flags: MessageFlags.Ephemeral });
+  }
+}
+
 async function handleModalSubmit(interaction: ModalSubmitInteraction) {
   if (interaction.customId === 'identity_modal') {
-    await handleIdentitySubmit(interaction);
+    await handleIdentitySubmit(config, interaction);
     return;
   }
 
   switch (interaction.customId) {
     case 'bug_modal':
-      await handleBugSubmit(interaction);
+      await handleBugSubmit(config, interaction, data, getNextTicketNumber);
       break;
     case 'feedback_modal':
-      await handleFeedbackSubmit(interaction, 'feedback');
+      await handleFeedbackSubmit(config, interaction, 'feedback');
       break;
     case 'feature_modal':
-      await handleFeedbackSubmit(interaction, 'feature');
+      await handleFeedbackSubmit(config, interaction, 'feature');
       break;
     default:
       await interaction.reply({ content: 'Unknown modal submission.', flags: MessageFlags.Ephemeral });
@@ -234,11 +301,39 @@ client.on(Events.MessageCreate, async (message: Message) => {
   if (!message.mentions.has(client.user!.id)) return;
 
   const query = message.content.replace(/<@!?\d+>/g, '').trim();
-  if (!query) return;
+  if (!query) {
+    await message.reply('Mention me with a question to search the wiki.');
+    return;
+  }
+
+  // Rate limit: one wiki search per user every 10 seconds.
+  const now = Date.now();
+  const lastUsed = wikiCooldowns.get(message.author.id) ?? 0;
+  if (now - lastUsed < WIKI_COOLDOWN_MS) {
+    const remaining = Math.ceil((WIKI_COOLDOWN_MS - (now - lastUsed)) / 1000);
+    await message.reply(`Please wait ${remaining}s before searching again.`);
+    return;
+  }
+  wikiCooldowns.set(message.author.id, now);
+
+  // Prune stale cooldown entries (older than 2x the cooldown window).
+  if (wikiCooldowns.size > 1000) {
+    const cutoff = now - WIKI_COOLDOWN_MS * 2;
+    for (const [userId, timestamp] of wikiCooldowns) {
+      if (timestamp < cutoff) wikiCooldowns.delete(userId);
+    }
+  }
 
   const index = getIndex();
   if (!index) {
-    await message.reply('Wiki search is not available right now.');
+    const status = getInitStatus();
+    if (status === 'failed') {
+      await message.reply('Wiki search is currently unavailable (initialization failed). Please try again later.');
+    } else if (status === 'not_started') {
+      await message.reply('Wiki search is still loading. Please try again in a moment.');
+    } else {
+      await message.reply('Wiki search is not available right now.');
+    }
     return;
   }
 
@@ -253,9 +348,17 @@ client.on(Events.MessageCreate, async (message: Message) => {
   }
 
   try {
-    const result = await autoSearchWiki(index, query);
-    const finalText = result ?? "I couldn't find a relevant wiki page.";
-    await message.reply(finalText);
+    const results = await autoSearchWiki(index, query);
+    if (results.length > 0) {
+      const embed = new EmbedBuilder()
+        .setTitle('📖 Wiki Results')
+        .setDescription(formatWikiResults(results))
+        .setColor(0x5865f2)
+        .setTimestamp();
+      await message.reply({ embeds: [embed] });
+    } else {
+      await message.reply("I couldn't find a relevant wiki page.");
+    }
   } catch (err) {
     console.error('Wiki search error:', err);
     await message.reply('Something went wrong while searching the wiki.');
@@ -275,12 +378,16 @@ client.login(config.token);
 
 function shutdown() {
   console.log('Shutting down...');
+  saveData(data);
   client.destroy();
   process.exit(0);
 }
 
 process.on('unhandledRejection', (err) => {
   console.error('Unhandled rejection:', err);
+  if (process.env.NODE_ENV === 'production') {
+    process.exit(1);
+  }
 });
 
 process.on('SIGINT', shutdown);

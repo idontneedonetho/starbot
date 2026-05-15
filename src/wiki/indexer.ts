@@ -8,7 +8,29 @@ import { chunkTextByTokens } from './chunker.js';
 const INDEX_CHUNK_TOKENS = 512;
 const INDEX_CHUNK_OVERLAP = 64;
 
-const CACHE_VERSION = 6;
+const CACHE_VERSION = 7;
+
+// Float16 / Float32 conversion for embedding storage (halves memory).
+function float32ToFloat16(f32: number[]): number[] {
+  const buf = new ArrayBuffer(f32.length * 4);
+  new Float32Array(buf).set(f32);
+  const view = new DataView(buf);
+  const result: number[] = new Array(f32.length * 2);
+  for (let i = 0; i < f32.length * 2; i++) {
+    result[i] = view.getUint16(i * 2, true);
+  }
+  return result;
+}
+
+function float16ToFloat32(f16: number[]): number[] {
+  const buf = new ArrayBuffer(f16.length * 2);
+  const view = new DataView(buf);
+  for (let i = 0; i < f16.length; i++) {
+    view.setUint16(i * 2, f16[i], true);
+  }
+  const f32View = new Float32Array(buf);
+  return Array.from(f32View);
+}
 
 function cachePath(base: string): string {
   return path.join(base, '..', 'data', 'wiki-embeddings.json');
@@ -18,10 +40,12 @@ interface CachedChunk {
   path: string;
   mtime: number;
   contentEmbedding: number[];
+  isFloat16: boolean;
 }
 
 interface CacheData {
   version: number;
+  float16: boolean;
   chunks: CachedChunk[];
 }
 
@@ -45,13 +69,14 @@ function loadCache(wikiClonePath: string): CacheData | null {
   return null;
 }
 
-function saveCache(wikiClonePath: string, cachedMap: Map<string, CachedChunk>): void {
+function saveCache(wikiClonePath: string, cachedMap: Map<string, CachedChunk>, float16: boolean): void {
   const cp = cachePath(wikiClonePath);
   const dir = path.dirname(cp);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
   const data: CacheData = {
     version: CACHE_VERSION,
+    float16,
     chunks: [...cachedMap.values()],
   };
 
@@ -63,7 +88,6 @@ export interface WikiIndex {
   getChunk: (id: string) => WikiChunk | undefined;
   getContentEmbedding: (id: string) => number[] | undefined;
   getParentPageFromChunk: (chunkId: string) => WikiPage | undefined;
-  chunks: Map<string, WikiChunk>;
 }
 
 export async function buildIndex(wikiPages: WikiPage[], wikiClonePath: string): Promise<WikiIndex> {
@@ -121,23 +145,26 @@ export async function buildIndex(wikiPages: WikiPage[], wikiClonePath: string): 
     const contentTexts = staleChunks.map(c => `${c.title}\n\n${c.content}`);
     const contentEmbeddings = await embedBatch(contentTexts);
 
+    // Store embeddings as Float16 to halve memory usage.
     for (let i = 0; i < staleChunks.length; i++) {
       const c = staleChunks[i];
       const mtime = pageMtimes.get(c.parentPath) ?? 0;
+      const float16Data = float32ToFloat16(contentEmbeddings[i]);
 
       cachedMap.set(c.path, {
         path: c.path,
         mtime,
-        contentEmbedding: contentEmbeddings[i],
+        contentEmbedding: float16Data,
+        isFloat16: true,
       });
     }
 
-    saveCache(wikiClonePath, cachedMap);
+    saveCache(wikiClonePath, cachedMap, true);
   }
 
   const contentEmbedMap = new Map<string, number[]>();
   for (const [id, cached] of cachedMap) {
-    contentEmbedMap.set(id, cached.contentEmbedding);
+    contentEmbedMap.set(id, cached.isFloat16 ? float16ToFloat32(cached.contentEmbedding) : cached.contentEmbedding);
   }
 
   return {
@@ -155,6 +182,5 @@ export async function buildIndex(wikiPages: WikiPage[], wikiClonePath: string): 
       if (!c) return undefined;
       return parentPageMap.get(c.parentPath);
     },
-    chunks: chunkMap,
   };
 }

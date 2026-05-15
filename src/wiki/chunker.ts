@@ -1,12 +1,4 @@
-import { AutoTokenizer } from '@huggingface/transformers';
-
-const MODEL = 'Xenova/bge-small-en-v1.5';
-
-let tokenizer: any | null = null;
-async function getTokenizer(): Promise<any> {
-  if (!tokenizer) tokenizer = await AutoTokenizer.from_pretrained(MODEL);
-  return tokenizer;
-}
+import { getTokenizer } from './embedder.js';
 
 export async function chunkTextByTokens(
   text: string,
@@ -16,12 +8,10 @@ export async function chunkTextByTokens(
   const t = text.trim();
   if (!t) return [];
 
-  // Prevent pathological overlap.
   if (overlapTokens >= maxTokens) overlapTokens = Math.floor(maxTokens / 4);
 
   const tk = await getTokenizer();
 
-  // Prefer token-level chunking; fall back to tokenizer() inputIds.
   let inputIds: number[];
   if (typeof tk.encode === 'function') {
     try {

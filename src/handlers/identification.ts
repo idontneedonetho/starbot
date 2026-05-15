@@ -3,47 +3,41 @@ import {
   type ModalSubmitInteraction,
   GuildMember,
   ModalBuilder,
-  ActionRowBuilder,
   TextInputBuilder,
   TextInputStyle,
+  LabelBuilder,
   MessageFlags,
 } from 'discord.js';
-import { computeNickname } from '../nick.js';
-import { loadConfig } from '../config.js';
+import type { BotConfig } from '../config.js';
 
-const config = loadConfig();
-
-export async function handleIdentityButton(interaction: ButtonInteraction) {
+export async function handleIdentityButton(_config: BotConfig, interaction: ButtonInteraction) {
   const modal = new ModalBuilder()
     .setCustomId('identity_modal')
     .setTitle('Set Your Nickname');
 
-  const yearInput = new TextInputBuilder()
-    .setCustomId('identity_year')
-    .setLabel('Year')
-    .setStyle(TextInputStyle.Short)
-    .setPlaceholder('e.g. 2024')
-    .setRequired(true)
-    .setMaxLength(4)
-    .setMinLength(4);
+  const yearInput = new TextInputBuilder({
+    custom_id: 'identity_year',
+    style: TextInputStyle.Short,
+    placeholder: 'e.g. 2024',
+    required: true,
+    max_length: 4,
+    min_length: 4,
+  });
+  modal.addLabelComponents(new LabelBuilder().setLabel('Year').setTextInputComponent(yearInput));
 
-  const modelInput = new TextInputBuilder()
-    .setCustomId('identity_model')
-    .setLabel('Model')
-    .setStyle(TextInputStyle.Short)
-    .setPlaceholder('e.g. Bolt, Model 3, F-150')
-    .setRequired(true)
-    .setMaxLength(50);
-
-  modal.addComponents(
-    new ActionRowBuilder<TextInputBuilder>().addComponents(yearInput),
-    new ActionRowBuilder<TextInputBuilder>().addComponents(modelInput),
-  );
+  const modelInput = new TextInputBuilder({
+    custom_id: 'identity_model',
+    style: TextInputStyle.Short,
+    placeholder: 'e.g. Bolt, Model 3, F-150',
+    required: true,
+    max_length: 50,
+  });
+  modal.addLabelComponents(new LabelBuilder().setLabel('Model').setTextInputComponent(modelInput));
 
   await interaction.showModal(modal);
 }
 
-export async function handleIdentitySubmit(interaction: ModalSubmitInteraction) {
+export async function handleIdentitySubmit(config: BotConfig, interaction: ModalSubmitInteraction) {
   const year = interaction.fields.getTextInputValue('identity_year');
   const model = interaction.fields.getTextInputValue('identity_model');
 
@@ -55,11 +49,14 @@ export async function handleIdentitySubmit(interaction: ModalSubmitInteraction) 
   }
 
   const username = interaction.user.username;
-  const result = computeNickname(username, year, model);
-  if (!result.valid) {
-    await interaction.reply({ content: result.error ?? 'Invalid nickname.', flags: MessageFlags.Ephemeral });
+  const yearShort = year.slice(-2);
+  const suffix = ` ('${yearShort} ${model})`;
+  if (suffix.length > 32) {
+    await interaction.reply({ content: 'Vehicle details are too long for a Discord nickname.', flags: MessageFlags.Ephemeral });
     return;
   }
+  const maxNameLen = 32 - suffix.length;
+  const nickname = `${username.slice(0, maxNameLen)}${suffix}`;
 
   if (!(interaction.member instanceof GuildMember)) {
     await interaction.reply({ content: 'Could not identify your member record.', flags: MessageFlags.Ephemeral });
@@ -67,7 +64,7 @@ export async function handleIdentitySubmit(interaction: ModalSubmitInteraction) 
   }
 
   try {
-    await interaction.member.setNickname(result.nickname);
+    await interaction.member.setNickname(nickname);
   } catch {
     await interaction.reply({
       content: 'Failed to set nickname. Make sure the bot has **Manage Nicknames** permission.',
@@ -82,5 +79,5 @@ export async function handleIdentitySubmit(interaction: ModalSubmitInteraction) 
     console.error('Failed to assign verified role:', err);
   }
 
-  await interaction.reply({ content: `Nickname set to **${result.nickname}**`, flags: MessageFlags.Ephemeral });
+  await interaction.reply({ content: `Nickname set to **${nickname}**`, flags: MessageFlags.Ephemeral });
 }

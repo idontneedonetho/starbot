@@ -4,14 +4,65 @@ import { simpleGit } from 'simple-git';
 import { type WikiPage } from './types.js';
 
 const DOCS_SUBDIR = 'docs';
+const CACHE_DIR = 'data';
 
 export async function ensureWikiClone(cloneUrl: string, clonePath: string): Promise<void> {
-  if (fs.existsSync(path.join(clonePath, '.git'))) {
-    await simpleGit(clonePath).pull();
-  } else {
-    fs.mkdirSync(clonePath, { recursive: true });
-    await simpleGit().clone(cloneUrl, clonePath);
+  const gitDir = path.join(clonePath, '.git');
+  if (fs.existsSync(gitDir)) {
+    // Only pull if it's been more than 1 hour since the last pull.
+    const shouldPull = shouldPullWiki(clonePath);
+    if (shouldPull) {
+      try {
+        await simpleGit(clonePath).pull();
+        recordLastPull();
+      } catch (err) {
+        const msg = (err as Error).message;
+        // Dubious ownership in Docker — delete and re-clone.
+        if (msg.includes('dubious ownership')) {
+          console.log('Wiki repo has dubious ownership — deleting and re-cloning...');
+          fs.rmSync(clonePath, { recursive: true, force: true });
+        } else {
+          console.error(`Failed to pull wiki updates: ${msg}`);
+          return;
+        }
+      }
+    }
   }
+
+  // Clone or re-clone.
+  fs.mkdirSync(path.dirname(clonePath), { recursive: true });
+  try {
+    await simpleGit().clone(cloneUrl, clonePath);
+  } catch (err) {
+    const msg = (err as Error).message;
+    if (msg.includes('Authentication') || msg.includes('403') || msg.includes('401')) {
+      console.error(`Failed to clone wiki: private repository or authentication required. Wiki search will be unavailable.`);
+    } else {
+      console.error(`Failed to clone wiki: ${msg}`);
+    }
+    throw err;
+  }
+}
+
+function shouldPullWiki(clonePath: string): boolean {
+  const lastPullPath = path.join(clonePath, '..', CACHE_DIR, 'wiki-last-pull.json');
+  try {
+    const raw = fs.readFileSync(lastPullPath, 'utf-8');
+    const { timestamp } = JSON.parse(raw) as { timestamp: number };
+    const now = Date.now();
+    // Pull if last pull was more than 1 hour ago.
+    return now - timestamp > 60 * 60 * 1000;
+  } catch {
+    // No record or invalid file — pull.
+    return true;
+  }
+}
+
+function recordLastPull(): void {
+  const dir = path.join(__dirname, '..', '..', 'data');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const lastPullPath = path.join(dir, 'wiki-last-pull.json');
+  fs.writeFileSync(lastPullPath, JSON.stringify({ timestamp: Date.now() }), 'utf-8');
 }
 
 export function readWikiPages(clonePath: string): WikiPage[] {
