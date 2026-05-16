@@ -8,9 +8,9 @@ import {
   LabelBuilder,
   MessageFlags,
 } from 'discord.js';
-import type { BotConfig } from '../config.js';
+import { loadConfig } from '../config.js';
 
-export async function handleIdentityButton(_config: BotConfig, interaction: ButtonInteraction) {
+export async function handleIdentityButton(interaction: ButtonInteraction) {
   const modal = new ModalBuilder()
     .setCustomId('identity_modal')
     .setTitle('Set Your Nickname');
@@ -37,7 +37,8 @@ export async function handleIdentityButton(_config: BotConfig, interaction: Butt
   await interaction.showModal(modal);
 }
 
-export async function handleIdentitySubmit(config: BotConfig, interaction: ModalSubmitInteraction) {
+export async function handleIdentitySubmit(interaction: ModalSubmitInteraction) {
+  const config = loadConfig();
   const year = interaction.fields.getTextInputValue('identity_year');
   const model = interaction.fields.getTextInputValue('identity_model');
 

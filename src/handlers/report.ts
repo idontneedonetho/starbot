@@ -15,12 +15,42 @@ import {
   ForumChannel,
   type Guild,
 } from 'discord.js';
-import type { BotConfig } from '../config.js';
-import type { StoredData, PendingRouteData } from '../data.js';
-import { saveData } from '../data.js';
+import { loadConfig } from '../config.js';
 import { getMemberDisplayName } from './util.js';
 import { getIndex } from '../wiki/wiki.js';
 import { autoSearchWiki, formatWikiResults } from '../wiki/searcher.js';
+
+function encodeConfirmCustomId(
+  ticketId: string,
+  userId: string,
+  dongleId: string,
+  routeName: string,
+  iteration?: string,
+): string {
+  const parts = [ticketId, userId, dongleId, routeName];
+  if (iteration) parts.push(iteration);
+  return `confirm_route|${parts.join('|')}`;
+}
+
+interface ParsedConfirmRoute {
+  ticketId: string;
+  userId: string;
+  dongleId: string;
+  routeName: string;
+  iteration?: string;
+}
+
+function parseConfirmCustomId(customId: string): ParsedConfirmRoute | null {
+  const parts = customId.split('|');
+  if (parts.length < 5 || parts[0] !== 'confirm_route') return null;
+  return {
+    ticketId: parts[1],
+    userId: parts[2],
+    dongleId: parts[3],
+    routeName: parts[4],
+    iteration: parts[5],
+  };
+}
 
 async function getForum(guild: Guild, id: string): Promise<ForumChannel | null> {
   const cached = guild.channels.cache.get(id);
@@ -33,7 +63,7 @@ async function getForum(guild: Guild, id: string): Promise<ForumChannel | null> 
   }
 }
 
-export async function handleReportButton(_config: BotConfig, interaction: ButtonInteraction) {
+export async function handleReportButton(interaction: ButtonInteraction) {
   const select = new StringSelectMenuBuilder()
     .setCustomId('report_type_select')
     .setPlaceholder('Select report type...')
@@ -50,7 +80,7 @@ export async function handleReportButton(_config: BotConfig, interaction: Button
   });
 }
 
-export async function handleReportTypeSelect(config: BotConfig, interaction: StringSelectMenuInteraction) {
+export async function handleReportTypeSelect(interaction: StringSelectMenuInteraction) {
   const type = interaction.values[0];
   if (!type) {
     await interaction.reply({ content: 'Please select a report type.', flags: MessageFlags.Ephemeral });
@@ -59,20 +89,20 @@ export async function handleReportTypeSelect(config: BotConfig, interaction: Str
 
   switch (type) {
     case 'Bug':
-      await showBugModal(config, interaction);
+      await showBugModal(interaction);
       break;
     case 'Feedback':
-      await showFeedbackModal(config, interaction, 'Feedback');
+      await showFeedbackModal(interaction, 'Feedback');
       break;
     case 'Feature Request':
-      await showFeedbackModal(config, interaction, 'Feature Request');
+      await showFeedbackModal(interaction, 'Feature Request');
       break;
     default:
       await interaction.reply({ content: 'Unknown report type.', flags: MessageFlags.Ephemeral });
   }
 }
 
-async function showBugModal(_config: BotConfig, interaction: StringSelectMenuInteraction) {
+async function showBugModal(interaction: StringSelectMenuInteraction) {
   const modal = new ModalBuilder().setCustomId('bug_modal').setTitle('Submit Bug Report');
 
   const routeIdInput = new TextInputBuilder({
@@ -126,7 +156,7 @@ async function showBugModal(_config: BotConfig, interaction: StringSelectMenuInt
   await interaction.showModal(modal);
 }
 
-async function showFeedbackModal(_config: BotConfig, interaction: StringSelectMenuInteraction, type: string) {
+async function showFeedbackModal(interaction: StringSelectMenuInteraction, type: string) {
   const modal = new ModalBuilder()
     .setCustomId(type === 'Feedback' ? 'feedback_modal' : 'feature_modal')
     .setTitle(type === 'Feedback' ? 'Submit Feedback' : 'Submit Feature Request');
@@ -144,16 +174,9 @@ async function showFeedbackModal(_config: BotConfig, interaction: StringSelectMe
   await interaction.showModal(modal);
 }
 
-interface PendingRoute extends PendingRouteData {}
+export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
+  const config = loadConfig();
 
-export const pendingRoutes = new Map<number, PendingRoute>();
-
-export async function handleBugSubmit(
-  config: BotConfig,
-  interaction: ModalSubmitInteraction,
-  data: StoredData,
-  getNextTicket: (d: StoredData) => { data: StoredData; ticketNumber: number },
-) {
   const routeIdInput = interaction.fields.getTextInputValue('route_id');
   const observed = interaction.fields.getTextInputValue('observed');
   const expected = interaction.fields.getTextInputValue('expected');
@@ -173,7 +196,6 @@ export async function handleBugSubmit(
   const connectRouteStr = iteration ? `${dongleId}/${routeName}/${iteration}` : `${dongleId}/${routeName}`;
   const routeUrl = `https://connect.comma.ai/${connectRouteStr}`;
 
-  // Check route validity and publicity via comma.ai API.
   let routeValid = false;
   let routePublic = false;
   try {
@@ -196,9 +218,6 @@ export async function handleBugSubmit(
     return;
   }
 
-  const { data: updatedData, ticketNumber } = getNextTicket(data);
-  data.ticketCounter = updatedData.ticketCounter; // sync for later saves
-
   const nickname = getMemberDisplayName(interaction);
 
   const guild = interaction.guild;
@@ -215,7 +234,6 @@ export async function handleBugSubmit(
 
   const reportEmbed = new EmbedBuilder()
     .setColor(0x5865f2)
-    .setTitle(`Bug Report #${ticketNumber}`)
     .addFields(
       { name: 'Observed Behavior', value: observed },
       { name: 'Expected Behavior', value: expected },
@@ -227,10 +245,10 @@ export async function handleBugSubmit(
     reportEmbed.addFields({ name: 'Additional Details', value: details });
   }
 
-  let publicThread: Awaited<typeof publicForum.threads>['create'] extends (...args: infer A) => Promise<infer R> ? R : never;
+  let publicThread: Awaited<ReturnType<typeof publicForum.threads.create>>;
   try {
     publicThread = await publicForum.threads.create({
-      name: `🐛 Bug Report #${ticketNumber} — ${nickname}`,
+      name: `🐛 Bug Report — ${nickname}`,
       message: { embeds: [reportEmbed] },
     });
   } catch (err) {
@@ -239,6 +257,10 @@ export async function handleBugSubmit(
     return;
   }
 
+  const ticketId = String(parseInt(publicThread.id.slice(-5), 10));
+  await publicThread.edit({ name: `🐛 Bug Report ${ticketId} — ${nickname}` });
+  reportEmbed.setTitle(`Bug Report ${ticketId}`);
+
   let routeTrackerUrl: string | null = null;
 
   if (routePublic) {
@@ -246,7 +268,7 @@ export async function handleBugSubmit(
     if (routesForum) {
       const routeEmbed = new EmbedBuilder()
         .setColor(0xf0b132)
-        .setTitle(`Route Issue #${ticketNumber}`)
+        .setTitle(`Route Issue ${ticketId}`)
         .addFields(
           { name: 'User', value: nickname, inline: true },
           { name: 'Route (for Mods)', value: `[${dongleId}/${routeName}](${routeUrl})`, inline: false },
@@ -254,7 +276,7 @@ export async function handleBugSubmit(
         .setTimestamp();
 
       const routesThread = await routesForum.threads.create({
-        name: `Route Issue #${ticketNumber} — ${nickname}`,
+        name: `Route Issue ${ticketId} — ${nickname}`,
         message: { embeds: [routeEmbed] },
       });
 
@@ -273,14 +295,10 @@ export async function handleBugSubmit(
       }
     }
   } else {
-    // Route is valid but not public — store for later confirmation.
-    pendingRoutes.set(ticketNumber, { dongleId, routeName, iteration, userId: interaction.user.id });
-    data.pendingRoutes[String(ticketNumber)] = { dongleId, routeName, iteration, userId: interaction.user.id };
-    saveData(data);
-
+    // Route is valid but not public — encode data in the confirm button itself.
     const confirmButton = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
-        .setCustomId(`confirm_route_${ticketNumber}`)
+        .setCustomId(encodeConfirmCustomId(ticketId, interaction.user.id, dongleId, routeName, iteration))
         .setLabel('Confirm Route')
         .setStyle(ButtonStyle.Primary)
         .setEmoji('📍'),
@@ -293,7 +311,6 @@ export async function handleBugSubmit(
   }
 
   // Wiki suggestions
-  let wikiAdded = false;
   try {
     const wikiIndex = getIndex();
     if (wikiIndex) {
@@ -301,55 +318,41 @@ export async function handleBugSubmit(
       const wikiResults = await autoSearchWiki(wikiIndex, wikiQuery);
       if (wikiResults.length > 0) {
         reportEmbed.addFields({ name: '📖 Potentially Related Wiki Articles', value: formatWikiResults(wikiResults) });
-        wikiAdded = true;
       }
     }
   } catch (err) {
     console.error('Failed to fetch wiki suggestions:', err);
   }
 
-  const routeAdded = routeTrackerUrl != null;
-
-  if (wikiAdded || routeAdded) {
-    const starter = await publicThread.fetchStarterMessage();
-    if (starter) {
-      await starter.edit({ embeds: [reportEmbed] }).catch(err => {
-        console.error('Failed to edit starter message with wiki/route link:', err);
-      });
-    } else {
-      console.error('Could not find starter message to edit with wiki/route link.');
-    }
+  const starter = await publicThread.fetchStarterMessage();
+  if (starter) {
+    await starter.edit({ embeds: [reportEmbed] }).catch(err => {
+      console.error('Failed to edit starter message with ticket ID / wiki / route link:', err);
+    });
+  } else {
+    console.error('Could not find starter message to edit.');
   }
 
   await interaction.reply({
-    content: `Bug report **#${ticketNumber}** submitted! [View thread](${publicThread.url})`,
+    content: `Bug report **${ticketId}** submitted! [View thread](${publicThread.url})`,
     flags: MessageFlags.Ephemeral,
   });
 }
 
-export async function handleConfirmRoute(
-  config: BotConfig,
-  interaction: ButtonInteraction,
-  data: StoredData,
-) {
-  const ticketNumber = parseInt(interaction.customId.replace('confirm_route_', ''), 10);
-  if (isNaN(ticketNumber)) {
-    await interaction.reply({ content: 'Invalid confirmation button.', flags: MessageFlags.Ephemeral });
+export async function handleConfirmRoute(interaction: ButtonInteraction) {
+  const parsed = parseConfirmCustomId(interaction.customId);
+  if (!parsed) {
+    await interaction.reply({ content: 'Invalid or expired confirmation button.', flags: MessageFlags.Ephemeral });
     return;
   }
 
-  const pending = pendingRoutes.get(ticketNumber);
-  if (!pending) {
-    await interaction.reply({ content: 'This route confirmation has expired or already been processed.', flags: MessageFlags.Ephemeral });
-    return;
-  }
+  const { ticketId, userId, dongleId, routeName, iteration } = parsed;
 
-  if (interaction.user.id !== pending.userId) {
+  if (interaction.user.id !== userId) {
     await interaction.reply({ content: 'Only the original reporter can confirm the route.', flags: MessageFlags.Ephemeral });
     return;
   }
 
-  const { dongleId, routeName, iteration } = pending;
   const connectRouteStr = iteration ? `${dongleId}/${routeName}/${iteration}` : `${dongleId}/${routeName}`;
   const routeUrl = `https://connect.comma.ai/${connectRouteStr}`;
 
@@ -375,6 +378,8 @@ export async function handleConfirmRoute(
     return;
   }
 
+  const config = loadConfig();
+
   const starter = await thread.fetchStarterMessage();
   if (!starter) {
     await interaction.reply({ content: 'Could not find the report starter message.', flags: MessageFlags.Ephemeral });
@@ -398,7 +403,7 @@ export async function handleConfirmRoute(
       const nickname = getMemberDisplayName(interaction);
       const routeEmbed = new EmbedBuilder()
         .setColor(0xf0b132)
-        .setTitle(`Route Issue #${ticketNumber}`)
+        .setTitle(`Route Issue ${ticketId}`)
         .addFields(
           { name: 'User', value: nickname, inline: true },
           { name: 'Route (for Mods)', value: `[${dongleId}/${routeName}](${routeUrl})`, inline: false },
@@ -406,7 +411,7 @@ export async function handleConfirmRoute(
         .setTimestamp();
 
       const routesThread = await routesForum.threads.create({
-        name: `Route Issue #${ticketNumber} — ${nickname}`,
+        name: `Route Issue ${ticketId} — ${nickname}`,
         message: { embeds: [routeEmbed] },
       });
 
@@ -428,15 +433,13 @@ export async function handleConfirmRoute(
 
   await starter.edit({ embeds: [updated] });
 
-  pendingRoutes.delete(ticketNumber);
-  delete data.pendingRoutes[String(ticketNumber)];
-  saveData(data);
-
-  const content = `✅ Route confirmed and linked to **#${ticketNumber}**.${routesThreadUrl ? ` [View Route Tracker →](${routesThreadUrl})` : ''}`;
+  const content = `✅ Route confirmed and linked to **${ticketId}**.${routesThreadUrl ? ` [View Route Tracker →](${routesThreadUrl})` : ''}`;
   await interaction.update({ content, components: [] });
 }
 
-export async function handleFeedbackSubmit(config: BotConfig, interaction: ModalSubmitInteraction, type: 'feedback' | 'feature') {
+export async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, type: 'feedback' | 'feature') {
+  const config = loadConfig();
+
   const content = interaction.fields.getTextInputValue('content');
 
   const nickname = getMemberDisplayName(interaction);
@@ -462,7 +465,7 @@ export async function handleFeedbackSubmit(config: BotConfig, interaction: Modal
     .setDescription(content.length > 4096 ? content.slice(0, 4093) + '...' : content)
     .setTimestamp();
 
-  let thread: Awaited<typeof forumChannel.threads>['create'] extends (...args: infer A) => Promise<infer R> ? R : never;
+  let thread: Awaited<ReturnType<typeof forumChannel.threads.create>>;
   try {
     thread = await forumChannel.threads.create({
       name: `${emoji} ${label} — ${nickname}`,

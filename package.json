@@ -13,6 +13,7 @@
   "dependencies": {
     "@huggingface/transformers": "*",
     "discord.js": "*",
+    "discordx": "*",
     "dotenv": "*",
     "minisearch": "*",
     "simple-git": "*"

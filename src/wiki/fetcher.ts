@@ -7,6 +7,8 @@ const DOCS_SUBDIR = 'docs';
 const CACHE_DIR = 'data';
 
 export async function ensureWikiClone(cloneUrl: string, clonePath: string): Promise<void> {
+  await simpleGit().addConfig('safe.directory', '*', false, 'global');
+
   const gitDir = path.join(clonePath, '.git');
   if (fs.existsSync(gitDir)) {
     // Only pull if it's been more than 1 hour since the last pull.
@@ -14,10 +16,8 @@ export async function ensureWikiClone(cloneUrl: string, clonePath: string): Prom
     if (shouldPull) {
       try {
         await simpleGit(clonePath).pull();
-        recordLastPull();
       } catch (err) {
         const msg = (err as Error).message;
-        // Dubious ownership in Docker — delete and re-clone.
         if (msg.includes('dubious ownership')) {
           console.log('Wiki repo has dubious ownership — deleting and re-cloning...');
           fs.rmSync(clonePath, { recursive: true, force: true });
@@ -26,6 +26,7 @@ export async function ensureWikiClone(cloneUrl: string, clonePath: string): Prom
           return;
         }
       }
+      recordLastPull(clonePath);
     }
   }
 
@@ -33,6 +34,7 @@ export async function ensureWikiClone(cloneUrl: string, clonePath: string): Prom
   fs.mkdirSync(path.dirname(clonePath), { recursive: true });
   try {
     await simpleGit().clone(cloneUrl, clonePath);
+    recordLastPull(clonePath);
   } catch (err) {
     const msg = (err as Error).message;
     if (msg.includes('Authentication') || msg.includes('403') || msg.includes('401')) {
@@ -58,10 +60,10 @@ function shouldPullWiki(clonePath: string): boolean {
   }
 }
 
-function recordLastPull(): void {
-  const dir = path.join(__dirname, '..', '..', 'data');
+function recordLastPull(clonePath: string): void {
+  const lastPullPath = path.join(clonePath, '..', CACHE_DIR, 'wiki-last-pull.json');
+  const dir = path.dirname(lastPullPath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  const lastPullPath = path.join(dir, 'wiki-last-pull.json');
   fs.writeFileSync(lastPullPath, JSON.stringify({ timestamp: Date.now() }), 'utf-8');
 }
 
