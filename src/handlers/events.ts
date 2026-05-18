@@ -8,11 +8,13 @@ import {
   ForumChannel,
 } from 'discord.js';
 import { loadConfig } from '../config.js';
-import { ensureWikiClone, readWikiPages } from '../wiki/fetcher.js';
+import { fetchWikiPages } from '../wiki/fetcher.js';
 import { buildIndex } from '../wiki/indexer.js';
 import { setIndex, setInitFailed, getInitStatus, getIndex } from '../wiki/wiki.js';
 import { autoSearchWiki, formatWikiResults } from '../wiki/searcher.js';
 import { WikiRateLimit } from './guards.js';
+
+const BLURPLE = 0x5865f2;
 
 @Discord()
 export class BotEvents {
@@ -45,14 +47,13 @@ export class BotEvents {
 
     // Initialize wiki search
     try {
-      await ensureWikiClone(config.wikiCloneUrl, config.wikiClonePath);
-      const wikiPages = readWikiPages(config.wikiClonePath);
+      const wikiPages = await fetchWikiPages(config.wikiRepo, config.wikiCacheDir);
       if (wikiPages.length > 0) {
-        const idx = await buildIndex(wikiPages, config.wikiClonePath);
+        const idx = await buildIndex(wikiPages, config.wikiCacheDir);
         setIndex(idx);
         console.log(`Wiki initialized with ${wikiPages.length} pages`);
       } else {
-        console.log('Wiki clone empty — no pages found');
+        console.log('Wiki fetch returned no pages');
         setInitFailed();
       }
     } catch (err) {
@@ -98,7 +99,7 @@ export class BotEvents {
     try {
       await message.react(reactionEmoji);
       reactionAdded = true;
-    } catch { /* ignore */ }
+    } catch (err) { console.warn('[events] Failed to add reaction:', err); }
 
     try {
       const results = await autoSearchWiki(index, query);
@@ -106,7 +107,7 @@ export class BotEvents {
         const embed = new EmbedBuilder()
           .setTitle('📖 Wiki Results')
           .setDescription(formatWikiResults(results))
-          .setColor(0x5865f2)
+          .setColor(BLURPLE)
           .setTimestamp();
         await message.reply({ embeds: [embed] });
       } else {
@@ -120,7 +121,7 @@ export class BotEvents {
         try {
           const reaction = message.reactions.cache.get(reactionEmoji);
           if (reaction) await reaction.users.remove(message.client.user!.id);
-        } catch { /* ignore */ }
+        } catch (err) { console.warn('[events] Failed to remove reaction:', err); }
       }
     }
   }
@@ -142,7 +143,7 @@ export class BotEvents {
         ({ message: m }) => m.author.id === guild.client.user!.id && m.components.length > 0,
       );
       if (existing) return;
-    } catch { /* create new */ }
+    } catch (err) { console.warn('[events] Failed to fetch pinned messages:', err); }
 
     const message = await channel.send({
       content,
@@ -172,7 +173,7 @@ export class BotEvents {
         if (existing.archived) await existing.setArchived(false);
         return;
       }
-    } catch { /* create new */ }
+    } catch (err) { console.warn('[events] Failed to fetch active threads:', err); }
 
     const row = this.buttonRow(label, customId, style, emoji);
     const raw = await guild.client.rest.post(`/channels/${forum.id}/threads`, {

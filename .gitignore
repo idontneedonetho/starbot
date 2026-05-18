@@ -1,6 +1,7 @@
 node_modules/
 data/docs/
 data/data/
+data/wiki/
 dist/
 .env
 data/messages.json

@@ -13,10 +13,6 @@ export function setInitFailed(): void {
   initFailed = true;
 }
 
-export function isWikiReady(): boolean {
-  return initialized;
-}
-
 export function getInitStatus(): 'not_started' | 'ready' | 'failed' {
   if (initialized) return 'ready';
   if (initFailed) return 'failed';

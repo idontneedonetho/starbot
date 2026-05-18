@@ -2,6 +2,7 @@ services:
   starbot:
     build: .
     container_name: starbot
+    init: true
     restart: unless-stopped
     env_file:
       - .env

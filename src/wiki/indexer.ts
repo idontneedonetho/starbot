@@ -49,16 +49,16 @@ interface CacheData {
   chunks: CachedChunk[];
 }
 
-function getMtime(wikiClonePath: string, filePath: string): number {
+function getMtime(cacheDir: string, filePath: string): number {
   try {
-    return fs.statSync(path.join(wikiClonePath, filePath)).mtimeMs;
+    return fs.statSync(path.join(cacheDir, filePath)).mtimeMs;
   } catch {
     return 0;
   }
 }
 
-function loadCache(wikiClonePath: string): CacheData | null {
-  const cp = cachePath(wikiClonePath);
+function loadCache(cacheDir: string): CacheData | null {
+  const cp = cachePath(cacheDir);
   try {
     const raw = fs.readFileSync(cp, 'utf-8');
     const data = JSON.parse(raw) as CacheData;
@@ -69,8 +69,8 @@ function loadCache(wikiClonePath: string): CacheData | null {
   return null;
 }
 
-function saveCache(wikiClonePath: string, cachedMap: Map<string, CachedChunk>, float16: boolean): void {
-  const cp = cachePath(wikiClonePath);
+function saveCache(cacheDir: string, cachedMap: Map<string, CachedChunk>, float16: boolean): void {
+  const cp = cachePath(cacheDir);
   const dir = path.dirname(cp);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
@@ -90,7 +90,7 @@ export interface WikiIndex {
   getParentPageFromChunk: (chunkId: string) => WikiPage | undefined;
 }
 
-export async function buildIndex(wikiPages: WikiPage[], wikiClonePath: string): Promise<WikiIndex> {
+export async function buildIndex(wikiPages: WikiPage[], cacheDir: string): Promise<WikiIndex> {
   // Map parent-page path -> page metadata.
   const parentPageMap = new Map<string, WikiPage>();
   for (const p of wikiPages) parentPageMap.set(p.path, p);
@@ -106,7 +106,7 @@ export async function buildIndex(wikiPages: WikiPage[], wikiClonePath: string): 
 
   // Chunk every page for passage-level retrieval.
   const pageMtimes = new Map<string, number>();
-  for (const p of wikiPages) pageMtimes.set(p.path, getMtime(wikiClonePath, p.path));
+  for (const p of wikiPages) pageMtimes.set(p.path, getMtime(cacheDir, p.path));
 
   for (const p of wikiPages) {
     const contentChunks = await chunkTextByTokens(p.content, INDEX_CHUNK_TOKENS, INDEX_CHUNK_OVERLAP);
@@ -130,7 +130,7 @@ export async function buildIndex(wikiPages: WikiPage[], wikiClonePath: string): 
   miniSearch.addAll(docs);
 
   // Cache passage embeddings (invalidated on parent-page mtime).
-  const cache = loadCache(wikiClonePath);
+  const cache = loadCache(cacheDir);
   const cachedMap = new Map<string, CachedChunk>();
   if (cache) for (const c of cache.chunks) cachedMap.set(c.path, c);
 
@@ -159,7 +159,7 @@ export async function buildIndex(wikiPages: WikiPage[], wikiClonePath: string): 
       });
     }
 
-    saveCache(wikiClonePath, cachedMap, true);
+    saveCache(cacheDir, cachedMap, true);
   }
 
   const contentEmbedMap = new Map<string, number[]>();

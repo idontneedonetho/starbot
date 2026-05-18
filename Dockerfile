@@ -1,8 +1,7 @@
 FROM node:22-slim AS base
 
-# Install git (needed by simple-git) + ONNX Runtime deps (needed by @huggingface/transformers)
+# Install ONNX Runtime deps (needed by @huggingface/transformers)
 RUN apt-get update && apt-get install -y \
-    git \
     libgomp1 \
     libstdc++6 \
     && rm -rf /var/lib/apt/lists/*

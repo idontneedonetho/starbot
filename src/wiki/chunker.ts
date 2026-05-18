@@ -21,7 +21,7 @@ export async function chunkTextByTokens(
     }
   } else {
     const out = tk(t, { addSpecialTokens: false });
-    inputIds = out?.inputIds ?? out?.input_ids ?? [];
+    inputIds = out.inputIds ?? [];
   }
 
   if (!inputIds || inputIds.length === 0) return [t];

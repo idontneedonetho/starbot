@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import {
   type ButtonInteraction,
   type StringSelectMenuInteraction,
@@ -20,37 +21,37 @@ import { getMemberDisplayName } from './util.js';
 import { getIndex } from '../wiki/wiki.js';
 import { autoSearchWiki, formatWikiResults } from '../wiki/searcher.js';
 
-function encodeConfirmCustomId(
-  ticketId: string,
-  userId: string,
-  dongleId: string,
-  routeName: string,
-  iteration?: string,
-): string {
-  const parts = [ticketId, userId, dongleId, routeName];
-  if (iteration) parts.push(iteration);
-  return `confirm_route|${parts.join('|')}`;
-}
-
 interface ParsedConfirmRoute {
   ticketId: string;
   userId: string;
   dongleId: string;
   routeName: string;
   iteration?: string;
+  createdAt: number;
+}
+
+const pendingRoutes = new Map<string, ParsedConfirmRoute>();
+
+function encodeConfirmCustomId(ticketId: string, userId: string, dongleId: string, routeName: string, iteration?: string): string {
+  const token = crypto.randomBytes(4).toString('hex');
+  pendingRoutes.set(token, { ticketId, userId, dongleId, routeName, iteration, createdAt: Date.now() });
+  return `confirm_route_${token}`;
 }
 
 function parseConfirmCustomId(customId: string): ParsedConfirmRoute | null {
-  const parts = customId.split('|');
-  if (parts.length < 5 || parts[0] !== 'confirm_route') return null;
-  return {
-    ticketId: parts[1],
-    userId: parts[2],
-    dongleId: parts[3],
-    routeName: parts[4],
-    iteration: parts[5],
-  };
+  const token = customId.replace('confirm_route_', '');
+  const data = pendingRoutes.get(token);
+  if (data) pendingRoutes.delete(token);
+  return data ?? null;
 }
+
+// Purge pending routes older than 24 hours every 30 minutes.
+setInterval(() => {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  for (const [token, data] of pendingRoutes) {
+    if (data.createdAt < cutoff) pendingRoutes.delete(token);
+  }
+}, 30 * 60 * 1000).unref();
 
 async function getForum(guild: Guild, id: string): Promise<ForumChannel | null> {
   const cached = guild.channels.cache.get(id);
@@ -58,9 +59,54 @@ async function getForum(guild: Guild, id: string): Promise<ForumChannel | null> 
   try {
     const ch = await guild.channels.fetch(id);
     return ch instanceof ForumChannel ? ch : null;
-  } catch {
+  } catch (err) {
+    console.warn('[report] Failed to fetch forum channel:', err);
     return null;
   }
+}
+
+const COLORS = {
+  blurple: 0x5865f2,
+  amber: 0xf0b132,
+  green: 0x248046,
+} as const;
+
+async function createRouteTrackerThread(
+  guild: Guild,
+  config: ReturnType<typeof loadConfig>,
+  ticketId: string,
+  nickname: string,
+  dongleId: string,
+  routeName: string,
+  routeUrl: string,
+  threadUrl: string,
+): Promise<string | null> {
+  const routesForum = await getForum(guild, config.routesChannelId);
+  if (!routesForum) return null;
+
+  const routeEmbed = new EmbedBuilder()
+    .setColor(COLORS.amber)
+    .setTitle(`Route Issue ${ticketId}`)
+    .addFields(
+      { name: 'User', value: nickname, inline: true },
+      { name: 'Route', value: `[${dongleId}/${routeName}](${routeUrl})`, inline: false },
+    )
+    .setTimestamp();
+
+  const routesThread = await routesForum.threads.create({
+    name: `Route Issue ${ticketId} — ${nickname}`,
+    message: { embeds: [routeEmbed] },
+  });
+
+  const routesStarter = await routesThread.fetchStarterMessage();
+  if (routesStarter) {
+    routeEmbed.addFields(
+      { name: '\u200B', value: `[Jump to Public Thread →](${threadUrl})` },
+    );
+    await routesStarter.edit({ embeds: [routeEmbed] });
+  }
+
+  return routesThread.url;
 }
 
 export async function handleReportButton(interaction: ButtonInteraction) {
@@ -175,6 +221,7 @@ async function showFeedbackModal(interaction: StringSelectMenuInteraction, type:
 }
 
 export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const config = loadConfig();
 
   const routeIdInput = interaction.fields.getTextInputValue('route_id');
@@ -185,9 +232,8 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
 
   const routeMatch = routeIdInput.match(/^([a-f0-9]{16})[\/|]([a-zA-Z0-9_.-]+)(?:\/([a-zA-Z0-9_.-]+))?$/);
   if (!routeMatch) {
-    await interaction.reply({
+    await interaction.editReply({
       content: `Invalid route ID. You entered:\n\`${routeIdInput}\`\n\nUse the format \`dongle_id/route_name\` (e.g. \`a1b2c3d4e5f6a7b8/0000aaaa--98c2d4e6f8\`).`,
-      flags: MessageFlags.Ephemeral,
     });
     return;
   }
@@ -206,14 +252,13 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
     } else if (res.status === 403 || res.status === 401) {
       routeValid = true;
     }
-  } catch {
-    // API unreachable
+  } catch (err) {
+    console.warn('[report] Route validation API unreachable:', err);
   }
 
   if (!routeValid) {
-    await interaction.reply({
+    await interaction.editReply({
       content: `The route you entered doesn't appear to exist:\n\`${routeIdInput}\`\n\nPlease double-check the Route ID and try again.`,
-      flags: MessageFlags.Ephemeral,
     });
     return;
   }
@@ -222,18 +267,18 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
 
   const guild = interaction.guild;
   if (!guild) {
-    await interaction.reply({ content: 'Could not resolve guild.', flags: MessageFlags.Ephemeral });
+    await interaction.editReply({ content: 'Could not resolve guild.' });
     return;
   }
 
   const publicForum = await getForum(guild, config.forumChannelId);
   if (!publicForum) {
-    await interaction.reply({ content: 'Public forum channel not found. Contact an admin.', flags: MessageFlags.Ephemeral });
+    await interaction.editReply({ content: 'Public forum channel not found. Contact an admin.' });
     return;
   }
 
   const reportEmbed = new EmbedBuilder()
-    .setColor(0x5865f2)
+    .setColor(COLORS.blurple)
     .addFields(
       { name: 'Observed Behavior', value: observed },
       { name: 'Expected Behavior', value: expected },
@@ -253,7 +298,7 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
     });
   } catch (err) {
     console.error('Failed to create public thread:', err);
-    await interaction.reply({ content: 'Failed to create report thread. Contact an admin.', flags: MessageFlags.Ephemeral });
+    await interaction.editReply({ content: 'Failed to create report thread. Contact an admin.' });
     return;
   }
 
@@ -264,35 +309,13 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
   let routeTrackerUrl: string | null = null;
 
   if (routePublic) {
-    const routesForum = await getForum(guild, config.routesChannelId);
-    if (routesForum) {
-      const routeEmbed = new EmbedBuilder()
-        .setColor(0xf0b132)
-        .setTitle(`Route Issue ${ticketId}`)
-        .addFields(
-          { name: 'User', value: nickname, inline: true },
-          { name: 'Route (for Mods)', value: `[${dongleId}/${routeName}](${routeUrl})`, inline: false },
-        )
-        .setTimestamp();
-
-      const routesThread = await routesForum.threads.create({
-        name: `Route Issue ${ticketId} — ${nickname}`,
-        message: { embeds: [routeEmbed] },
-      });
-
-      routeTrackerUrl = routesThread.url;
-
+    routeTrackerUrl = await createRouteTrackerThread(
+      guild, config, ticketId, nickname, dongleId, routeName, routeUrl, publicThread.url,
+    );
+    if (routeTrackerUrl) {
       reportEmbed.addFields(
-        { name: '\u200B', value: `[Route Tracker →](${routeTrackerUrl})` },
+        { name: '\u200B', value: `[Mods route Tracker →](${routeTrackerUrl})` },
       );
-
-      const routesStarter = await routesThread.fetchStarterMessage();
-      if (routesStarter) {
-        routeEmbed.addFields(
-          { name: '\u200B', value: `[Jump to Public Thread →](${publicThread.url})` },
-        );
-        await routesStarter.edit({ embeds: [routeEmbed] });
-      }
     }
   } else {
     // Route is valid but not public — encode data in the confirm button itself.
@@ -305,7 +328,7 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
     );
 
     await publicThread.send({
-      content: `<@${interaction.user.id}> Your route is valid but not yet public. Once you've made it public, click the button below to link it to this report.\n\nNeed help? Follow [these instructions](https://wiki.firestar.link/faq/#how-do-i-upload-logs-for-troubleshooting).`,
+      content: `<@${interaction.user.id}> Your route is valid but not yet public. Once you've made it public, click the button below to link it to this report.\n\nNeed help? Follow [these instructions](<https://wiki.firestar.link/faq/#how-do-i-upload-logs-for-troubleshooting>).`,
       components: [confirmButton],
     });
   }
@@ -333,9 +356,8 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
     console.error('Could not find starter message to edit.');
   }
 
-  await interaction.reply({
+  await interaction.editReply({
     content: `Bug report **${ticketId}** submitted! [View thread](${publicThread.url})`,
-    flags: MessageFlags.Ephemeral,
   });
 }
 
@@ -360,8 +382,8 @@ export async function handleConfirmRoute(interaction: ButtonInteraction) {
   try {
     const res = await fetch(`https://api.comma.ai/v1/route/${dongleId}|${routeName}/files`);
     nowPublic = res.ok;
-  } catch {
-    // API unreachable
+  } catch (err) {
+    console.warn('[report] Route check API unreachable on confirm:', err);
   }
 
   const thread = interaction.channel;
@@ -372,7 +394,7 @@ export async function handleConfirmRoute(interaction: ButtonInteraction) {
 
   if (!nowPublic) {
     await interaction.reply({
-      content: `Your route is still not public. Make sure it's accessible on [connect.comma.ai](${routeUrl}) and try again.\n\nFollow [these instructions](https://wiki.firestar.link/faq/#how-do-i-upload-logs-for-troubleshooting) to make your route public.`,
+      content: `Your route is still not public. Make sure it's accessible on [connect.comma.ai](${routeUrl}) and try again.\n\nFollow [these instructions](<https://wiki.firestar.link/faq/#how-do-i-upload-logs-for-troubleshooting>) to make your route public.`,
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -398,46 +420,25 @@ export async function handleConfirmRoute(interaction: ButtonInteraction) {
   const guild = interaction.guild;
   let routesThreadUrl: string | null = null;
   if (guild) {
-    const routesForum = await getForum(guild, config.routesChannelId);
-    if (routesForum) {
-      const nickname = getMemberDisplayName(interaction);
-      const routeEmbed = new EmbedBuilder()
-        .setColor(0xf0b132)
-        .setTitle(`Route Issue ${ticketId}`)
-        .addFields(
-          { name: 'User', value: nickname, inline: true },
-          { name: 'Route (for Mods)', value: `[${dongleId}/${routeName}](${routeUrl})`, inline: false },
-        )
-        .setTimestamp();
-
-      const routesThread = await routesForum.threads.create({
-        name: `Route Issue ${ticketId} — ${nickname}`,
-        message: { embeds: [routeEmbed] },
-      });
-
-      routesThreadUrl = routesThread.url;
-
-      const routesStarter = await routesThread.fetchStarterMessage();
-      if (routesStarter) {
-        routeEmbed.addFields(
-          { name: '\u200B', value: `[Jump to Public Thread →](${thread.url})` },
-        );
-        await routesStarter.edit({ embeds: [routeEmbed] });
-      }
-
+    const nickname = getMemberDisplayName(interaction);
+    routesThreadUrl = await createRouteTrackerThread(
+      guild, config, ticketId, nickname, dongleId, routeName, routeUrl, thread.url,
+    );
+    if (routesThreadUrl) {
       updated.addFields(
-        { name: '\u200B', value: `[Route Tracker →](${routesThreadUrl})` },
+        { name: '\u200B', value: `[Mods route Tracker →](${routesThreadUrl})` },
       );
     }
   }
 
   await starter.edit({ embeds: [updated] });
 
-  const content = `✅ Route confirmed and linked to **${ticketId}**.${routesThreadUrl ? ` [View Route Tracker →](${routesThreadUrl})` : ''}`;
+  const content = `✅ Route confirmed and linked to **${ticketId}**.${routesThreadUrl ? ` [Mods route Tracker →](${routesThreadUrl})` : ''}`;
   await interaction.update({ content, components: [] });
 }
 
 export async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, type: 'feedback' | 'feature') {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const config = loadConfig();
 
   const content = interaction.fields.getTextInputValue('content');
@@ -446,13 +447,13 @@ export async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, 
 
   const guild = interaction.guild;
   if (!guild) {
-    await interaction.reply({ content: 'Could not resolve guild.', flags: MessageFlags.Ephemeral });
+    await interaction.editReply({ content: 'Could not resolve guild.' });
     return;
   }
 
   const forumChannel = await getForum(guild, config.forumChannelId);
   if (!forumChannel) {
-    await interaction.reply({ content: 'Forum channel not found. Contact an admin.', flags: MessageFlags.Ephemeral });
+    await interaction.editReply({ content: 'Forum channel not found. Contact an admin.' });
     return;
   }
 
@@ -460,7 +461,7 @@ export async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, 
   const label = type === 'feedback' ? 'Feedback' : 'Feature Request';
 
   const embed = new EmbedBuilder()
-    .setColor(type === 'feedback' ? 0x248046 : 0x5865f2)
+    .setColor(type === 'feedback' ? COLORS.green : COLORS.blurple)
     .setTitle(label)
     .setDescription(content.length > 4096 ? content.slice(0, 4093) + '...' : content)
     .setTimestamp();
@@ -473,12 +474,11 @@ export async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, 
     });
   } catch (err) {
     console.error('Failed to create feedback thread:', err);
-    await interaction.reply({ content: 'Failed to create thread. Contact an admin.', flags: MessageFlags.Ephemeral });
+    await interaction.editReply({ content: 'Failed to create thread. Contact an admin.' });
     return;
   }
 
-  await interaction.reply({
+  await interaction.editReply({
     content: `${label} submitted! [View thread](${thread.url})`,
-    flags: MessageFlags.Ephemeral,
   });
 }

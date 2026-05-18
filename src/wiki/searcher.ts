@@ -105,14 +105,6 @@ export function formatWikiResults(results: WikiResult[]): string {
   return results.map((r, i) => `${i + 1}. ${r.title} — <${r.url}>`).join('\n');
 }
 
-export async function searchWikiResults(
-  index: WikiIndex,
-  query: string,
-  topK: number = 3,
-): Promise<WikiResult[]> {
-  return searchWiki(index, query, topK);
-}
-
 export async function autoSearchWiki(
   index: WikiIndex,
   query: string,

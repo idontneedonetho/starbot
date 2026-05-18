@@ -1,10 +1,24 @@
 import { pipeline } from '@huggingface/transformers';
 
-let pipe: any = null;
+interface EmbeddingResult {
+  dims: number[];
+  data: Float32Array;
+}
 
-async function getPipe(): Promise<any> {
+interface EmbeddingPipeline {
+  (texts: string[], options: { pooling: string; normalize: boolean }): Promise<EmbeddingResult>;
+  tokenizer: {
+    encode: (text: string, opts?: { addSpecialTokens: boolean }) => number[];
+    decode: (ids: number[], opts?: { skipSpecialTokens: boolean }) => string;
+    (text: string, opts?: { addSpecialTokens: boolean }): { inputIds: number[]; attentionMask?: number[] };
+  };
+}
+
+let pipe: EmbeddingPipeline | null = null;
+
+async function getPipe(): Promise<EmbeddingPipeline> {
   if (!pipe) {
-    pipe = await pipeline('feature-extraction', 'Xenova/bge-small-en-v1.5');
+    pipe = await pipeline('feature-extraction', 'Xenova/bge-small-en-v1.5') as unknown as EmbeddingPipeline;
   }
   return pipe;
 }
@@ -12,7 +26,8 @@ async function getPipe(): Promise<any> {
 export async function embedBatch(texts: string[]): Promise<number[][]> {
   const fn = await getPipe();
   const result = await fn(texts, { pooling: 'cls', normalize: true });
-  const dim = result.dims![result.dims!.length - 1];
+  const dims = result.dims;
+  const dim = dims[dims.length - 1];
   const vectors: number[][] = [];
   for (let i = 0; i < texts.length; i++) {
     vectors.push(Array.from(result.data.subarray(i * dim, (i + 1) * dim)));
@@ -20,7 +35,7 @@ export async function embedBatch(texts: string[]): Promise<number[][]> {
   return vectors;
 }
 
-export async function getTokenizer(): Promise<any> {
+export async function getTokenizer(): Promise<EmbeddingPipeline['tokenizer']> {
   const p = await getPipe();
   return p.tokenizer;
 }
