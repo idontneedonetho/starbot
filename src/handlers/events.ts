@@ -2,11 +2,13 @@ import { Client, Discord, Once, On, ArgsOf, Guard } from 'discordx';
 import {
   Events,
   ButtonStyle,
+  ActivityType,
   ActionRowBuilder,
   ButtonBuilder,
   EmbedBuilder,
   ForumChannel,
 } from 'discord.js';
+import { execSync } from 'child_process';
 import { loadConfig } from '../config.js';
 import { fetchWikiPages } from '../wiki/fetcher.js';
 import { buildIndex } from '../wiki/indexer.js';
@@ -64,6 +66,13 @@ export class BotEvents {
     const status = getInitStatus();
     console.log(`Wiki status: ${status}`);
     console.log('StarPilot bot is ready');
+
+    try {
+      const commitHash = execSync('git rev-parse --short HEAD', { encoding: 'utf-8' }).trim();
+      client.user!.setActivity({ name: commitHash, type: ActivityType.Watching });
+    } catch (err) {
+      console.warn('Failed to set activity from git commit:', err);
+    }
   }
 
   @On({ event: Events.InteractionCreate })
