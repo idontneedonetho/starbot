@@ -4,6 +4,7 @@ FROM node:22-slim AS base
 RUN apt-get update && apt-get install -y \
     libgomp1 \
     libstdc++6 \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 FROM base AS builder
