@@ -80,5 +80,11 @@ export async function handleIdentitySubmit(interaction: ModalSubmitInteraction) 
     console.error('Failed to assign verified role:', err);
   }
 
+  try {
+    await interaction.member.roles.remove(config.pendingRole);
+  } catch (err) {
+    console.error('Failed to remove pending role:', err);
+  }
+
   await interaction.reply({ content: `Nickname set to **${nickname}**`, flags: MessageFlags.Ephemeral });
 }

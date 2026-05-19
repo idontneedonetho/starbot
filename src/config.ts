@@ -8,6 +8,7 @@ export interface BotConfig {
   forumChannelId: string;
   routesChannelId: string;
   verifiedRole: string;
+  pendingRole: string;
   wikiRepo: string;
   wikiCacheDir: string;
 }
@@ -31,6 +32,9 @@ export function loadConfig(): BotConfig {
   const verifiedRole = process.env.VERIFIED_ROLE;
   if (!verifiedRole) throw new Error('VERIFIED_ROLE is required');
 
+  const pendingRole = process.env.PENDING_ROLE;
+  if (!pendingRole) throw new Error('PENDING_ROLE is required');
+
   const wikiRepo = process.env.WIKI_REPO || 'StarPilot-Docs/docs';
   const wikiCacheDir = process.env.WIKI_CACHE_DIR || 'data/wiki';
 
@@ -41,6 +45,7 @@ export function loadConfig(): BotConfig {
     forumChannelId,
     routesChannelId,
     verifiedRole,
+    pendingRole,
     wikiRepo,
     wikiCacheDir,
   };

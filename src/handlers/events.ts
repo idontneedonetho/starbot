@@ -66,6 +66,16 @@ export class BotEvents {
     console.log('StarPilot bot is ready');
   }
 
+  @On({ event: Events.GuildMemberAdd })
+  async memberAdd([member]: ArgsOf<Events.GuildMemberAdd>) {
+    const config = loadConfig();
+    try {
+      await member.roles.add(config.pendingRole);
+    } catch (err) {
+      console.error('Failed to assign pending role:', err);
+    }
+  }
+
   @On({ event: Events.InteractionCreate })
   async interactionCreate([interaction]: ArgsOf<Events.InteractionCreate>) {
     const client = interaction.client as Client;
