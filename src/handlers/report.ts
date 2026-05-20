@@ -15,8 +15,8 @@ import {
   type Guild,
 } from 'discord.js';
 import { loadConfig } from '../config.js';
-import { getMemberDisplayName } from './util.js';
 import { getIndex } from '../wiki/wiki.js';
+import { embedBatch } from '../wiki/embedder.js';
 import { autoSearchWiki, formatWikiResults } from '../wiki/searcher.js';
 
 interface ParsedConfirmRoute {
@@ -74,7 +74,7 @@ async function createRouteTrackerThread(
   config: ReturnType<typeof loadConfig>,
   ticketId: string,
   userId: string,
-  nickname: string,
+  title: string | null,
   dongleId: string,
   routeName: string,
   routeUrl: string,
@@ -93,7 +93,7 @@ async function createRouteTrackerThread(
     .setTimestamp();
 
   const routesThread = await routesForum.threads.create({
-    name: `Route Issue ${ticketId} — ${nickname}`,
+    name: title ? `Route Issue - ${title} (${ticketId})` : `Route Issue - ${ticketId}`,
     message: { embeds: [routeEmbed] },
   });
 
@@ -106,6 +106,80 @@ async function createRouteTrackerThread(
   }
 
   return routesThread.url;
+}
+
+function dot(a: number[], b: number[]): number {
+  let result = 0;
+  for (let i = 0; i < a.length; i++) result += a[i] * b[i];
+  return result;
+}
+
+function isContentWord(w: string): boolean {
+  if (w.length >= 4) return true;
+  if (w.length >= 3 && w === w.toUpperCase() && /[A-Z]/.test(w[0])) return true;
+  if (w.includes("'t")) return true;
+  return false;
+}
+
+function getNGrams(words: string[], n: number): { phrase: string; start: number; len: number }[] {
+  const result: { phrase: string; start: number; len: number }[] = [];
+  for (let i = 0; i + n <= words.length; i++) {
+    result.push({ phrase: words.slice(i, i + n).join(' '), start: i, len: n });
+  }
+  return result;
+}
+
+async function generateThreadTitle(input: string): Promise<string | null> {
+  const trimmed = input.trim().replace(/\s+/g, ' ');
+  if (!trimmed) return null;
+
+  const allWords = trimmed.split(/[^a-zA-Z0-9']+/).filter(w => w.length > 0);
+  if (allWords.length === 0) return null;
+
+  const words = allWords.length > 50 ? allWords.slice(0, 50) : allWords;
+
+  if (words.length <= 10) {
+    return words.map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
+  }
+
+  const ngrams2 = getNGrams(words, 2);
+  const ngrams3 = getNGrams(words, 3);
+  const ngrams = [...ngrams2, ...ngrams3];
+
+  const [textEmb, ...ngramEmbs] = await embedBatch([trimmed, ...ngrams.map(g => g.phrase)]);
+
+  const scoredNgrams = ngrams.map((g, i) => ({ ...g, score: dot(textEmb, ngramEmbs[i]) }));
+
+  const wordScores = new Array(words.length).fill(0);
+  for (const sg of scoredNgrams) {
+    for (let j = 0; j < sg.len; j++) {
+      const idx = sg.start + j;
+      if (idx < words.length) {
+        wordScores[idx] = Math.max(wordScores[idx], sg.score);
+      }
+    }
+  }
+
+  const seen = new Map<string, { word: string; score: number; index: number }>();
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (!isContentWord(w)) continue;
+    const lower = w.toLowerCase();
+    const existing = seen.get(lower);
+    if (!existing || wordScores[i] > existing.score) {
+      seen.set(lower, { word: w, score: wordScores[i], index: i });
+    }
+  }
+
+  const scored = [...seen.values()].sort((a, b) => b.score - a.score);
+
+  const top10 = scored
+    .slice(0, 10)
+    .sort((a, b) => a.index - b.index);
+
+  if (top10.length === 0) return null;
+
+  return top10.map(({ word }) => word[0].toUpperCase() + word.slice(1)).join(' ');
 }
 
 export async function handleBugButton(interaction: ButtonInteraction) {
@@ -235,8 +309,6 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
     return;
   }
 
-  const nickname = getMemberDisplayName(interaction);
-
   const guild = interaction.guild;
   if (!guild) {
     await interaction.editReply({ content: 'Could not resolve guild.' });
@@ -262,10 +334,12 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
     reportEmbed.addFields({ name: 'Additional Details', value: details });
   }
 
+  const bugTitle = await generateThreadTitle(observed).catch(() => null);
+
   let publicThread: Awaited<ReturnType<typeof publicForum.threads.create>>;
   try {
     publicThread = await publicForum.threads.create({
-      name: `🐛 Bug Report — ${nickname}`,
+      name: bugTitle ? `🐛 Bug Report - ${bugTitle}` : '🐛 Bug Report',
       message: { content: `<@${interaction.user.id}>`, embeds: [reportEmbed] },
     });
   } catch (err) {
@@ -275,14 +349,14 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
   }
 
   const ticketId = String(parseInt(publicThread.id.slice(-5), 10));
-  await publicThread.edit({ name: `🐛 Bug Report ${ticketId} — ${nickname}` });
+  await publicThread.edit({ name: bugTitle ? `🐛 Bug Report - ${bugTitle} (${ticketId})` : `🐛 Bug Report - ${ticketId}` });
   reportEmbed.setTitle(`Bug Report ${ticketId}`);
 
   let routeTrackerUrl: string | null = null;
 
   if (routePublic) {
     routeTrackerUrl = await createRouteTrackerThread(
-      guild, config, ticketId, interaction.user.id, nickname, dongleId, routeName, routeUrl, publicThread.url,
+      guild, config, ticketId, interaction.user.id, bugTitle, dongleId, routeName, routeUrl, publicThread.url,
     );
     if (routeTrackerUrl) {
       reportEmbed.addFields(
@@ -392,9 +466,8 @@ export async function handleConfirmRoute(interaction: ButtonInteraction) {
   const guild = interaction.guild;
   let routesThreadUrl: string | null = null;
   if (guild) {
-    const nickname = getMemberDisplayName(interaction);
     routesThreadUrl = await createRouteTrackerThread(
-      guild, config, ticketId, interaction.user.id, nickname, dongleId, routeName, routeUrl, thread.url,
+      guild, config, ticketId, interaction.user.id, null, dongleId, routeName, routeUrl, thread.url,
     );
     if (routesThreadUrl) {
       updated.addFields(
@@ -414,8 +487,6 @@ export async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, 
   const config = loadConfig();
 
   const content = interaction.fields.getTextInputValue('content');
-
-  const nickname = getMemberDisplayName(interaction);
 
   const guild = interaction.guild;
   if (!guild) {
@@ -438,10 +509,12 @@ export async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, 
     .setDescription(content.length > 4096 ? content.slice(0, 4093) + '...' : content)
     .setTimestamp();
 
+  const feedbackTitle = await generateThreadTitle(content).catch(() => null);
+
   let thread: Awaited<ReturnType<typeof forumChannel.threads.create>>;
   try {
     thread = await forumChannel.threads.create({
-      name: `${emoji} ${label} — ${nickname}`,
+      name: feedbackTitle ? `${emoji} ${label} - ${feedbackTitle}` : `${emoji} ${label}`,
       message: { content: `<@${interaction.user.id}>`, embeds: [embed] },
     });
   } catch (err) {

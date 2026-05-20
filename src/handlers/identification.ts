@@ -30,7 +30,7 @@ export async function handleIdentityButton(interaction: ButtonInteraction) {
     style: TextInputStyle.Short,
     placeholder: 'e.g. Bolt, Model 3, F-150',
     required: true,
-    max_length: 10,
+    max_length: 30,
   });
   modal.addLabelComponents(new LabelBuilder().setLabel('Model').setTextInputComponent(modelInput));
 
@@ -39,7 +39,7 @@ export async function handleIdentityButton(interaction: ButtonInteraction) {
     style: TextInputStyle.Short,
     placeholder: 'e.g. CoolPilot42',
     required: false,
-    max_length: 24,
+    max_length: 30,
   });
   modal.addLabelComponents(new LabelBuilder().setLabel('Nickname (optional)').setTextInputComponent(nicknameInput));
 
@@ -59,12 +59,10 @@ export async function handleIdentitySubmit(interaction: ModalSubmitInteraction) 
 
   const baseName = (nicknameRaw || interaction.user.username).trim();
   const yearShort = year.slice(-2);
-  const suffix = ` ('${yearShort} ${model})`;
-  if (baseName.length + suffix.length > 32) {
-    await interaction.reply({ content: 'Nickname + vehicle details too long for Discord (max 32 chars).', flags: MessageFlags.Ephemeral });
-    return;
+  let nickname = `${baseName} ('${yearShort} ${model})`;
+  if (nickname.length > 32) {
+    nickname = nickname.slice(0, 31) + ')';
   }
-  const nickname = `${baseName.slice(0, 32 - suffix.length)}${suffix}`;
 
   if (!(interaction.member instanceof GuildMember)) {
     await interaction.reply({ content: 'Could not identify your member record.', flags: MessageFlags.Ephemeral });

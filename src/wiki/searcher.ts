@@ -1,9 +1,9 @@
-import { type WikiResult, type WikiPage } from './types.js';
+import { type WikiResult, type WikiPage, type WikiChunk } from './types.js';
 import { type WikiIndex } from './indexer.js';
 import { embedBatch } from './embedder.js';
 import { rerank } from './reranker.js';
 
-const QUERY_PREFIX = 'Represent this sentence for searching relevant passages: ';
+export const QUERY_PREFIX = 'Represent this sentence for searching relevant passages: ';
 
 const RRF_K = 20;
 const BM25_TOP_K = 500;
@@ -112,4 +112,47 @@ export async function autoSearchWiki(
 ): Promise<WikiResult[]> {
   const results = await searchWiki(index, query, topK);
   return results;
+}
+
+export async function searchBestChunk(
+  index: WikiIndex,
+  query: string,
+): Promise<WikiChunk | null> {
+  const trimmed = query.trim();
+  if (!trimmed) return null;
+
+  const bm25Results = index.search(trimmed).slice(0, BM25_TOP_K);
+  if (bm25Results.length === 0) return null;
+
+  const bm25Rank = new Map<string, number>();
+  for (let i = 0; i < bm25Results.length; i++) {
+    bm25Rank.set(bm25Results[i].id, i + 1);
+  }
+
+  const [queryEmbedding] = await embedBatch([QUERY_PREFIX + trimmed]);
+
+  const cosinePairs: Array<{ id: string; cos: number }> = [];
+  for (const { id } of bm25Results) {
+    const candidateEmb = index.getContentEmbedding(id);
+    if (!candidateEmb) continue;
+    cosinePairs.push({ id, cos: dot(queryEmbedding, candidateEmb) });
+  }
+
+  cosinePairs.sort((a, b) => b.cos - a.cos);
+  const cosRank = new Map<string, number>(cosinePairs.slice(0, COSINE_TOP).map((r, i) => [r.id, i + 1]));
+
+  const candidates = bm25Results
+    .map(({ id }) => index.getChunk(id))
+    .filter((c): c is NonNullable<typeof c> => c != null);
+
+  const scoredChunks = await rerank('', candidates, bm25Rank, cosRank, {
+    k: RRF_K,
+    p: FUSION_P,
+    wBm25: FUSION_W_BM25,
+    wCos: FUSION_W_COS,
+    cutoffRank: FUSION_TOP_CUTOFF_RANK,
+    topK: 1,
+  });
+
+  return scoredChunks.length > 0 ? scoredChunks[0].chunk : null;
 }
