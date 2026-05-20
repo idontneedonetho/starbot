@@ -73,6 +73,7 @@ async function createRouteTrackerThread(
   guild: Guild,
   config: ReturnType<typeof loadConfig>,
   ticketId: string,
+  userId: string,
   nickname: string,
   dongleId: string,
   routeName: string,
@@ -86,7 +87,7 @@ async function createRouteTrackerThread(
     .setColor(COLORS.amber)
     .setTitle(`Route Issue ${ticketId}`)
     .addFields(
-      { name: 'User', value: nickname, inline: true },
+      { name: 'User', value: `<@${userId}>`, inline: true },
       { name: 'Route', value: `[${dongleId}/${routeName}](${routeUrl})`, inline: false },
     )
     .setTimestamp();
@@ -265,7 +266,7 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
   try {
     publicThread = await publicForum.threads.create({
       name: `🐛 Bug Report — ${nickname}`,
-      message: { embeds: [reportEmbed] },
+      message: { content: `<@${interaction.user.id}>`, embeds: [reportEmbed] },
     });
   } catch (err) {
     console.error('Failed to create public thread:', err);
@@ -281,7 +282,7 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
 
   if (routePublic) {
     routeTrackerUrl = await createRouteTrackerThread(
-      guild, config, ticketId, nickname, dongleId, routeName, routeUrl, publicThread.url,
+      guild, config, ticketId, interaction.user.id, nickname, dongleId, routeName, routeUrl, publicThread.url,
     );
     if (routeTrackerUrl) {
       reportEmbed.addFields(
@@ -393,7 +394,7 @@ export async function handleConfirmRoute(interaction: ButtonInteraction) {
   if (guild) {
     const nickname = getMemberDisplayName(interaction);
     routesThreadUrl = await createRouteTrackerThread(
-      guild, config, ticketId, nickname, dongleId, routeName, routeUrl, thread.url,
+      guild, config, ticketId, interaction.user.id, nickname, dongleId, routeName, routeUrl, thread.url,
     );
     if (routesThreadUrl) {
       updated.addFields(
@@ -441,7 +442,7 @@ export async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, 
   try {
     thread = await forumChannel.threads.create({
       name: `${emoji} ${label} — ${nickname}`,
-      message: { embeds: [embed] },
+      message: { content: `<@${interaction.user.id}>`, embeds: [embed] },
     });
   } catch (err) {
     console.error('Failed to create feedback thread:', err);
