@@ -34,30 +34,37 @@ export async function handleIdentityButton(interaction: ButtonInteraction) {
   });
   modal.addLabelComponents(new LabelBuilder().setLabel('Model').setTextInputComponent(modelInput));
 
+  const nicknameInput = new TextInputBuilder({
+    custom_id: 'identity_nickname',
+    style: TextInputStyle.Short,
+    placeholder: 'e.g. CoolPilot42',
+    required: false,
+    max_length: 24,
+  });
+  modal.addLabelComponents(new LabelBuilder().setLabel('Nickname (optional)').setTextInputComponent(nicknameInput));
+
   await interaction.showModal(modal);
 }
 
 export async function handleIdentitySubmit(interaction: ModalSubmitInteraction) {
   const config = loadConfig();
+  const nicknameRaw = interaction.fields.getTextInputValue('identity_nickname');
   const year = interaction.fields.getTextInputValue('identity_year');
   const model = interaction.fields.getTextInputValue('identity_model');
 
-  const currentYear = new Date().getFullYear();
-  const yearNum = Number(year);
-  if (!/^\d{4}$/.test(year) || yearNum < currentYear - 15 || yearNum > currentYear) {
-    await interaction.reply({ content: 'Please enter a valid year (last 15 years).', flags: MessageFlags.Ephemeral });
+  if (!/^\d{4}$/.test(year)) {
+    await interaction.reply({ content: 'Please enter a valid 4-digit year.', flags: MessageFlags.Ephemeral });
     return;
   }
 
-  const username = interaction.user.username;
+  const baseName = (nicknameRaw || interaction.user.username).trim();
   const yearShort = year.slice(-2);
   const suffix = ` ('${yearShort} ${model})`;
-  if (suffix.length > 32) {
-    await interaction.reply({ content: 'Vehicle details are too long for a Discord nickname.', flags: MessageFlags.Ephemeral });
+  if (baseName.length + suffix.length > 32) {
+    await interaction.reply({ content: 'Nickname + vehicle details too long for Discord (max 32 chars).', flags: MessageFlags.Ephemeral });
     return;
   }
-  const maxNameLen = 32 - suffix.length;
-  const nickname = `${username.slice(0, maxNameLen)}${suffix}`;
+  const nickname = `${baseName.slice(0, 32 - suffix.length)}${suffix}`;
 
   if (!(interaction.member instanceof GuildMember)) {
     await interaction.reply({ content: 'Could not identify your member record.', flags: MessageFlags.Ephemeral });
@@ -68,7 +75,7 @@ export async function handleIdentitySubmit(interaction: ModalSubmitInteraction) 
     await interaction.member.setNickname(nickname);
   } catch {
     await interaction.reply({
-      content: 'Failed to set nickname. Make sure the bot has **Manage Nicknames** permission.',
+      content: 'Failed to set nickname. Make sure the bot has **Manage Nicknames** permission and its role is above yours in the server settings.',
       flags: MessageFlags.Ephemeral,
     });
     return;
