@@ -1,6 +1,9 @@
 services:
   starbot:
-    build: .
+    build:
+      context: .
+      args:
+        COMMIT_HASH: ${COMMIT_HASH:-unknown}
     container_name: starbot
     init: true
     restart: unless-stopped

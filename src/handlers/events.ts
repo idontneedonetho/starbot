@@ -8,6 +8,7 @@ import {
   EmbedBuilder,
   ForumChannel,
 } from 'discord.js';
+import { readFileSync } from 'fs';
 import { execSync } from 'child_process';
 import { loadConfig } from '../config.js';
 import { fetchWikiPages } from '../wiki/fetcher.js';
@@ -17,6 +18,18 @@ import { autoSearchWiki, formatWikiResults } from '../wiki/searcher.js';
 import { WikiRateLimit } from './guards.js';
 
 const BLURPLE = 0x5865f2;
+
+function getCommitHash(): string | null {
+  try {
+    return readFileSync('/app/version.txt', 'utf-8').trim();
+  } catch {
+    try {
+      return execSync('git rev-parse --short HEAD', { encoding: 'utf-8' }).trim();
+    } catch {
+      return null;
+    }
+  }
+}
 
 @Discord()
 export class BotEvents {
@@ -67,11 +80,9 @@ export class BotEvents {
     console.log(`Wiki status: ${status}`);
     console.log('StarPilot bot is ready');
 
-    try {
-      const commitHash = execSync('git rev-parse --short HEAD', { encoding: 'utf-8' }).trim();
+    const commitHash = getCommitHash();
+    if (commitHash) {
       client.user!.setActivity({ name: commitHash, type: ActivityType.Watching });
-    } catch (err) {
-      console.warn('Failed to set activity from git commit:', err);
     }
   }
 
