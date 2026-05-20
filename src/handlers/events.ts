@@ -9,7 +9,6 @@ import {
   ForumChannel,
 } from 'discord.js';
 import { readFileSync } from 'fs';
-import { execSync } from 'child_process';
 import { loadConfig } from '../config.js';
 import { fetchWikiPages } from '../wiki/fetcher.js';
 import { buildIndex } from '../wiki/indexer.js';
@@ -21,13 +20,14 @@ const BLURPLE = 0x5865f2;
 
 function getCommitHash(): string | null {
   try {
-    return readFileSync('/app/version.txt', 'utf-8').trim();
-  } catch {
-    try {
-      return execSync('git rev-parse --short HEAD', { encoding: 'utf-8' }).trim();
-    } catch {
-      return null;
+    const head = readFileSync('.git/HEAD', 'utf-8').trim();
+    if (head.startsWith('ref: ')) {
+      const refPath = '.git/' + head.slice(5);
+      return readFileSync(refPath, 'utf-8').trim().slice(0, 7);
     }
+    return head.slice(0, 7);
+  } catch {
+    return null;
   }
 }
 
