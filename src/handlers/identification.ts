@@ -30,7 +30,7 @@ export async function handleIdentityButton(interaction: ButtonInteraction) {
     style: TextInputStyle.Short,
     placeholder: 'e.g. Bolt, Model 3, F-150',
     required: true,
-    max_length: 50,
+    max_length: 10,
   });
   modal.addLabelComponents(new LabelBuilder().setLabel('Model').setTextInputComponent(modelInput));
 

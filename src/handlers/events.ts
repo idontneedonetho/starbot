@@ -6,7 +6,6 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   EmbedBuilder,
-  ForumChannel,
 } from 'discord.js';
 import { readFileSync } from 'fs';
 import { loadConfig } from '../config.js';
@@ -52,13 +51,12 @@ export class BotEvents {
       'Welcome to **StarPilot Server**! To gain access to the rest of the community, please set your server nickname and register your primary vehicle.\n\nYou can click this button at any time to update your vehicle or name in the future.',
     ).catch(err => console.error('Failed to set up identification button:', err));
 
-    await this.ensureButtonThread(
-      guild, config.forumChannelId,
-      'Click Here to Submit a Report',
+    await this.ensureButtonMessage(
+      guild, config.reportButtonChannelId,
       'Submit a Report', 'submit_report',
       ButtonStyle.Success, '🐛',
-      'Click the button below to submit a structured report. Bugs will require a Route ID.\nEncountered an issue with navigation? Have an idea for a new feature? Let us know!',
-    ).catch(err => console.error('Failed to set up report button thread:', err));
+      '### Submit a Report\n\nEncountered an issue with navigation? Have an idea for a new feature? Let us know!\n\n> **Bug reports** require a **Route ID** — visible only to **server admins**',
+    ).catch(err => console.error('Failed to set up report button:', err));
 
     // Initialize wiki search
     try {
@@ -170,47 +168,6 @@ export class BotEvents {
       components: [this.buttonRow(label, customId, style, emoji)],
     });
     await message.pin().catch(err => console.error('Failed to pin identification button:', err));
-  }
-
-  private async ensureButtonThread(
-    guild: import('discord.js').Guild,
-    forumId: string, threadName: string,
-    label: string, customId: string,
-    style: ButtonStyle, emoji: string, content?: string,
-  ) {
-    const forum = await guild.channels.fetch(forumId);
-    if (!(forum instanceof ForumChannel)) {
-      console.error(`Forum channel ${forumId} not found`);
-      return;
-    }
-
-    try {
-      const existingThreads = await forum.threads.fetchActive();
-      const existing = existingThreads.threads.find(
-        t => t.ownerId === guild.client.user!.id && t.name === threadName,
-      );
-      if (existing) {
-        if (existing.archived) await existing.setArchived(false);
-        return;
-      }
-    } catch (err) { console.warn('[events] Failed to fetch active threads:', err); }
-
-    const row = this.buttonRow(label, customId, style, emoji);
-    const raw = await guild.client.rest.post(`/channels/${forum.id}/threads`, {
-      body: {
-        name: threadName,
-        message: { content, components: [row.toJSON()] },
-      },
-    }) as { id: string };
-
-    const thread = await forum.threads.fetch(raw.id);
-    if (!thread) {
-      console.error('Failed to resolve created thread');
-      return;
-    }
-
-    await thread.setLocked(true).catch(err => console.error('Failed to lock report thread:', err));
-    await thread.pin().catch(err => console.error('Failed to pin report thread:', err));
   }
 
   private buttonRow(label: string, customId: string, style: ButtonStyle, emoji: string) {

@@ -5,6 +5,7 @@ export interface BotConfig {
   token: string;
   guildId: string;
   identificationChannelId: string;
+  reportButtonChannelId: string;
   forumChannelId: string;
   routesChannelId: string;
   verifiedRole: string;
@@ -22,6 +23,9 @@ export function loadConfig(): BotConfig {
 
   const identificationChannelId = process.env.IDENTIFICATION_CHANNEL_ID;
   if (!identificationChannelId) throw new Error('IDENTIFICATION_CHANNEL_ID is required');
+
+  const reportButtonChannelId = process.env.REPORT_BUTTON_CHANNEL_ID;
+  if (!reportButtonChannelId) throw new Error('REPORT_BUTTON_CHANNEL_ID is required');
 
   const forumChannelId = process.env.FORUM_CHANNEL_ID;
   if (!forumChannelId) throw new Error('FORUM_CHANNEL_ID is required');
@@ -42,6 +46,7 @@ export function loadConfig(): BotConfig {
     token,
     guildId,
     identificationChannelId,
+    reportButtonChannelId,
     forumChannelId,
     routesChannelId,
     verifiedRole,

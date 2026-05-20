@@ -158,7 +158,7 @@ async function showBugModal(interaction: StringSelectMenuInteraction) {
     required: true,
     max_length: 128,
   });
-  modal.addLabelComponents(new LabelBuilder().setLabel('Route ID').setTextInputComponent(routeIdInput));
+  modal.addLabelComponents(new LabelBuilder().setLabel('Route ID').setDescription('Visible only to server admins').setTextInputComponent(routeIdInput));
 
   const observedInput = new TextInputBuilder({
     custom_id: 'observed',
