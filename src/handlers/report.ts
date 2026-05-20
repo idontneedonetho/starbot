@@ -1,11 +1,9 @@
 import crypto from 'crypto';
 import {
   type ButtonInteraction,
-  type StringSelectMenuInteraction,
   type ModalSubmitInteraction,
   ModalBuilder,
   ActionRowBuilder,
-  StringSelectMenuBuilder,
   ButtonBuilder,
   ButtonStyle,
   TextInputBuilder,
@@ -109,46 +107,19 @@ async function createRouteTrackerThread(
   return routesThread.url;
 }
 
-export async function handleReportButton(interaction: ButtonInteraction) {
-  const select = new StringSelectMenuBuilder()
-    .setCustomId('report_type_select')
-    .setPlaceholder('Select report type...')
-    .addOptions(
-      { label: 'Bug Report', value: 'Bug', emoji: '🐛', description: 'Report a navigation or system issue' },
-      { label: 'General Feedback', value: 'Feedback', emoji: '💬', description: 'Share your thoughts' },
-      { label: 'Feature Request', value: 'Feature Request', emoji: '✨', description: 'Request a new feature' },
-    );
-
-  await interaction.reply({
-    content: 'What type of report would you like to submit?',
-    components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select)],
-    flags: MessageFlags.Ephemeral,
-  });
+export async function handleBugButton(interaction: ButtonInteraction) {
+  await showBugModal(interaction);
 }
 
-export async function handleReportTypeSelect(interaction: StringSelectMenuInteraction) {
-  const type = interaction.values[0];
-  if (!type) {
-    await interaction.reply({ content: 'Please select a report type.', flags: MessageFlags.Ephemeral });
-    return;
-  }
-
-  switch (type) {
-    case 'Bug':
-      await showBugModal(interaction);
-      break;
-    case 'Feedback':
-      await showFeedbackModal(interaction, 'Feedback');
-      break;
-    case 'Feature Request':
-      await showFeedbackModal(interaction, 'Feature Request');
-      break;
-    default:
-      await interaction.reply({ content: 'Unknown report type.', flags: MessageFlags.Ephemeral });
-  }
+export async function handleFeedbackButton(interaction: ButtonInteraction) {
+  await showFeedbackModal(interaction, 'Feedback');
 }
 
-async function showBugModal(interaction: StringSelectMenuInteraction) {
+export async function handleFeatureButton(interaction: ButtonInteraction) {
+  await showFeedbackModal(interaction, 'Feature Request');
+}
+
+async function showBugModal(interaction: ButtonInteraction) {
   const modal = new ModalBuilder().setCustomId('bug_modal').setTitle('Submit Bug Report');
 
   const routeIdInput = new TextInputBuilder({
@@ -202,7 +173,7 @@ async function showBugModal(interaction: StringSelectMenuInteraction) {
   await interaction.showModal(modal);
 }
 
-async function showFeedbackModal(interaction: StringSelectMenuInteraction, type: string) {
+async function showFeedbackModal(interaction: ButtonInteraction, type: string) {
   const modal = new ModalBuilder()
     .setCustomId(type === 'Feedback' ? 'feedback_modal' : 'feature_modal')
     .setTitle(type === 'Feedback' ? 'Submit Feedback' : 'Submit Feature Request');

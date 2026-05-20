@@ -46,15 +46,19 @@ export class BotEvents {
 
     await this.ensureButtonMessage(
       guild, config.identificationChannelId,
-      'Set Nickname & Vehicle', 'set_identity',
-      ButtonStyle.Primary, '🎭',
+      [
+        { label: 'Set Nickname & Vehicle', customId: 'set_identity', style: ButtonStyle.Primary, emoji: '🎭' },
+      ],
       'Welcome to **StarPilot Server**! To gain access to the rest of the community, please set your server nickname and register your primary vehicle.\n\nYou can click this button at any time to update your vehicle or name in the future.',
     ).catch(err => console.error('Failed to set up identification button:', err));
 
     await this.ensureButtonMessage(
       guild, config.reportButtonChannelId,
-      'Submit a Report', 'submit_report',
-      ButtonStyle.Success, '🐛',
+      [
+        { label: 'Bug Report', customId: 'report_bug', style: ButtonStyle.Primary, emoji: '🐛' },
+        { label: 'Feedback', customId: 'report_feedback', style: ButtonStyle.Secondary, emoji: '💬' },
+        { label: 'Feature Request', customId: 'report_feature', style: ButtonStyle.Success, emoji: '✨' },
+      ],
       '### Submit a Report\n\nEncountered an issue with navigation? Have an idea for a new feature? Let us know!\n\n> **Bug reports** require a **Route ID** — visible only to **server admins**',
     ).catch(err => console.error('Failed to set up report button:', err));
 
@@ -146,8 +150,9 @@ export class BotEvents {
 
   private async ensureButtonMessage(
     guild: import('discord.js').Guild,
-    channelId: string, label: string, customId: string,
-    style: ButtonStyle, emoji: string, content?: string,
+    channelId: string,
+    buttons: Array<{ label: string; customId: string; style: ButtonStyle; emoji: string }>,
+    content?: string,
   ) {
     const channel = await guild.channels.fetch(channelId);
     if (!channel?.isTextBased()) {
@@ -165,14 +170,16 @@ export class BotEvents {
 
     const message = await channel.send({
       content,
-      components: [this.buttonRow(label, customId, style, emoji)],
+      components: [this.buttonRow(buttons)],
     });
-    await message.pin().catch(err => console.error('Failed to pin identification button:', err));
+    await message.pin().catch(err => console.error('Failed to pin button:', err));
   }
 
-  private buttonRow(label: string, customId: string, style: ButtonStyle, emoji: string) {
+  private buttonRow(buttons: Array<{ label: string; customId: string; style: ButtonStyle; emoji: string }>) {
     return new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder().setCustomId(customId).setLabel(label).setStyle(style).setEmoji(emoji),
+      ...buttons.map(b =>
+        new ButtonBuilder().setCustomId(b.customId).setLabel(b.label).setStyle(b.style).setEmoji(b.emoji),
+      ),
     );
   }
 }

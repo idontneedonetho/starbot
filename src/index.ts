@@ -4,7 +4,6 @@ import { loadConfig } from './config.js';
 import './handlers/events.js';
 import './handlers/buttons.js';
 import './handlers/modals.js';
-import './handlers/select-menus.js';
 
 const config = loadConfig();
 

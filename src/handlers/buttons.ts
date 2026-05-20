@@ -1,7 +1,7 @@
 import { Discord, ButtonComponent } from 'discordx';
 import { type ButtonInteraction } from 'discord.js';
 import { handleIdentityButton } from './identification.js';
-import { handleReportButton, handleConfirmRoute } from './report.js';
+import { handleBugButton, handleFeedbackButton, handleFeatureButton, handleConfirmRoute } from './report.js';
 
 @Discord()
 export class BotButtons {
@@ -10,9 +10,19 @@ export class BotButtons {
     await handleIdentityButton(interaction);
   }
 
-  @ButtonComponent({ id: 'submit_report' })
-  async report(interaction: ButtonInteraction) {
-    await handleReportButton(interaction);
+  @ButtonComponent({ id: 'report_bug' })
+  async bug(interaction: ButtonInteraction) {
+    await handleBugButton(interaction);
+  }
+
+  @ButtonComponent({ id: 'report_feedback' })
+  async feedback(interaction: ButtonInteraction) {
+    await handleFeedbackButton(interaction);
+  }
+
+  @ButtonComponent({ id: 'report_feature' })
+  async feature(interaction: ButtonInteraction) {
+    await handleFeatureButton(interaction);
   }
 
   @ButtonComponent({ id: /^confirm_route\|/ })
