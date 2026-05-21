@@ -83,6 +83,11 @@ export async function handleIdentitySubmit(interaction: ModalSubmitInteraction) 
     await interaction.member.roles.add(config.verifiedRole);
   } catch (err) {
     console.error('Failed to assign verified role:', err);
+    await interaction.reply({
+      content: `Nickname set to **${nickname}**, but I couldn't assign the verified role. Make sure the bot has **Manage Roles** permission and its role is above yours.`,
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
   }
 
   try {

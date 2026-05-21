@@ -135,7 +135,7 @@ async function addWikiSuggestions(embed: EmbedBuilder, query: string): Promise<v
 }
 
 async function editStarterEmbed(
-  thread: { fetchStarterMessage: () => Promise<{ edit: (opts: { embeds: EmbedBuilder[] }) => Promise<unknown> } | null> },
+  thread: ThreadChannel,
   embed: EmbedBuilder,
   label: string,
 ): Promise<void> {
@@ -413,7 +413,7 @@ async function submitReport(
     await thread.send({
       content: `<@${interaction.user.id}> Your route is valid but not yet public. Once you've made it public, click the button below to link it to this report.\n\nNeed help? Follow [these instructions](<https://wiki.firestar.link/faq/#how-do-i-upload-logs-for-troubleshooting>).`,
       components: [new ActionRowBuilder<ButtonBuilder>().addComponents(btn)],
-    });
+    }).catch(err => console.error('Failed to send primary confirm button:', err));
   }
 
   const remainingNonPublic = params.primaryNonPublicRoute
@@ -424,7 +424,7 @@ async function submitReport(
     await thread.send({
       content: `<@${interaction.user.id}> Some additional routes are not yet public. Once you've made them public, click the button below to link them to this report.`,
       components: confirmRows,
-    });
+    }).catch(err => console.error('Failed to send additional confirm buttons:', err));
   }
 
   await addWikiSuggestions(params.embed, params.wikiQuery);
@@ -557,11 +557,10 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
     }
   }
 
-  // Validate all routes.
+  // Validate all routes in parallel.
   const validatedRoutes: Array<ExtractedRoute & { valid: boolean; public: boolean }> = [];
-  for (const r of allRoutes) {
-    const v = await validateRoute(r.dongleId, r.routeName);
-    validatedRoutes.push({ ...r, ...v });
+  for (const v of await Promise.all(allRoutes.map(r => validateRoute(r.dongleId, r.routeName)))) {
+    validatedRoutes.push({ ...allRoutes[validatedRoutes.length], ...v });
   }
 
   // Dedicated route must be valid.
@@ -704,9 +703,8 @@ export async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, 
   // Scan content for route IDs.
   const routes = extractRouteIds(content);
   const validatedRoutes: Array<ExtractedRoute & { valid: boolean; public: boolean }> = [];
-  for (const r of routes) {
-    const v = await validateRoute(r.dongleId, r.routeName);
-    validatedRoutes.push({ ...r, ...v });
+  for (const v of await Promise.all(routes.map(r => validateRoute(r.dongleId, r.routeName)))) {
+    validatedRoutes.push({ ...routes[validatedRoutes.length], ...v });
   }
 
   await submitReport(interaction, {

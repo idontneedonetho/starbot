@@ -27,12 +27,12 @@ function shutdown() {
 
 process.on('unhandledRejection', (err) => {
   console.error('Unhandled rejection:', err);
-  if (process.env.NODE_ENV === 'production') process.exit(1);
+  shutdown();
 });
 
 process.on('uncaughtException', (err) => {
   console.error('Uncaught exception:', err);
-  if (process.env.NODE_ENV === 'production') process.exit(1);
+  shutdown();
 });
 
 process.on('SIGINT', shutdown);
