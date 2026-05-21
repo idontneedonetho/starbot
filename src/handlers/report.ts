@@ -1,4 +1,3 @@
-import crypto from 'crypto';
 import {
   type ButtonInteraction,
   type ModalSubmitInteraction,
@@ -12,6 +11,7 @@ import {
   EmbedBuilder,
   MessageFlags,
   ForumChannel,
+  ThreadChannel,
   type Guild,
 } from 'discord.js';
 import { loadConfig } from '../config.js';
@@ -25,31 +25,23 @@ interface ParsedConfirmRoute {
   dongleId: string;
   routeName: string;
   iteration?: string;
-  createdAt: number;
 }
 
-const pendingRoutes = new Map<string, ParsedConfirmRoute>();
+interface ExtractedRoute {
+  dongleId: string;
+  routeName: string;
+  iteration?: string;
+}
 
 function encodeConfirmCustomId(ticketId: string, userId: string, dongleId: string, routeName: string, iteration?: string): string {
-  const token = crypto.randomBytes(4).toString('hex');
-  pendingRoutes.set(token, { ticketId, userId, dongleId, routeName, iteration, createdAt: Date.now() });
-  return `confirm_route_${token}`;
+  return `cr_${ticketId}_${userId}_${dongleId}_${routeName}${iteration ? '_' + iteration : ''}`;
 }
 
 function parseConfirmCustomId(customId: string): ParsedConfirmRoute | null {
-  const token = customId.replace('confirm_route_', '');
-  const data = pendingRoutes.get(token);
-  if (data) pendingRoutes.delete(token);
-  return data ?? null;
+  const parts = customId.split('_');
+  if (parts.length < 5 || parts[0] !== 'cr') return null;
+  return { ticketId: parts[1], userId: parts[2], dongleId: parts[3], routeName: parts[4], iteration: parts[5] || undefined };
 }
-
-// Purge pending routes older than 24 hours every 30 minutes.
-setInterval(() => {
-  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-  for (const [token, data] of pendingRoutes) {
-    if (data.createdAt < cutoff) pendingRoutes.delete(token);
-  }
-}, 30 * 60 * 1000).unref();
 
 async function getForum(guild: Guild, id: string): Promise<ForumChannel | null> {
   const cached = guild.channels.cache.get(id);
@@ -69,41 +61,162 @@ const COLORS = {
   green: 0x248046,
 } as const;
 
+// Route ID regex — matches dongle/route or dongle|route with optional iteration.
+// Route names use the comma.ai format: 8hex--10hex (e.g. 0000000b--97f3b3b1ee).
+const ROUTE_REGEX = /([a-f0-9]{16})[\/|]([a-f0-9]{8}--[a-f0-9]{10})(?:\/([a-f0-9]{8}--[a-f0-9]{10}))?/gi;
+
+function extractRouteIds(text: string): ExtractedRoute[] {
+  const results: ExtractedRoute[] = [];
+  const seen = new Set<string>();
+  const regex = new RegExp(ROUTE_REGEX.source, 'g');
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(text)) !== null) {
+    const key = formatRoute(m[1], m[2], m[3]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    results.push({
+      dongleId: m[1],
+      routeName: m[2],
+      iteration: m[3],
+    });
+  }
+  return results;
+}
+
+function stripRouteIds(text: string): string {
+  return text.replace(ROUTE_REGEX, '').replace(/\s+/g, ' ').trim();
+}
+
+async function validateRoute(dongleId: string, routeName: string): Promise<{ valid: boolean; public: boolean }> {
+  try {
+    const res = await fetch(`https://api.comma.ai/v1/route/${dongleId}|${routeName}/files`);
+    if (res.ok) return { valid: true, public: true };
+    if (res.status === 403 || res.status === 401) return { valid: true, public: false };
+  } catch (err) {
+    console.warn('[report] Route validation API unreachable:', err);
+  }
+  return { valid: false, public: false };
+}
+
+function formatRoute(dongleId: string, routeName: string, iteration?: string): string {
+  return iteration ? `${dongleId}/${routeName}/${iteration}` : `${dongleId}/${routeName}`;
+}
+
+function buildConfirmRows(
+  routes: Array<{ dongleId: string; routeName: string; iteration?: string }>,
+  ticketId: string,
+  userId: string,
+): ActionRowBuilder<ButtonBuilder>[] {
+  const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+  for (const r of routes) {
+    if (rows.length === 0 || rows[rows.length - 1].components.length >= 3) {
+      rows.push(new ActionRowBuilder<ButtonBuilder>());
+    }
+    rows[rows.length - 1].addComponents(
+      new ButtonBuilder()
+        .setCustomId(encodeConfirmCustomId(ticketId, userId, r.dongleId, r.routeName, r.iteration))
+        .setLabel(`Confirm ${r.dongleId.slice(0, 8)}`)
+        .setStyle(ButtonStyle.Primary)
+        .setEmoji('📍'),
+    );
+  }
+  return rows;
+}
+
+async function addWikiSuggestions(embed: EmbedBuilder, query: string): Promise<void> {
+  try {
+    const wikiIndex = getIndex();
+    if (wikiIndex) {
+      const wikiResults = await autoSearchWiki(wikiIndex, query);
+      if (wikiResults.length > 0) {
+        embed.addFields({ name: '📖 Potentially Related Wiki Articles', value: formatWikiResults(wikiResults) });
+      }
+    }
+  } catch (err) {
+    console.error('Failed to fetch wiki suggestions:', err);
+  }
+}
+
+async function editStarterEmbed(
+  thread: { fetchStarterMessage: () => Promise<{ edit: (opts: { embeds: EmbedBuilder[] }) => Promise<unknown> } | null> },
+  embed: EmbedBuilder,
+  label: string,
+): Promise<void> {
+  const starter = await thread.fetchStarterMessage();
+  if (starter) {
+    await starter.edit({ embeds: [embed] }).catch(err => {
+      console.error(`Failed to edit starter message${label}:`, err);
+    });
+  } else {
+    console.error('Could not find starter message to edit.');
+  }
+}
+
+function formatThreadTitle(emoji: string, label: string, title: string | null, ticketId: string): string {
+  if (title) return `${emoji} ${label} - ${title} (${ticketId})`;
+  return `${emoji} ${label} - ${ticketId}`;
+}
+
+async function findRouteThread(forum: ForumChannel, name: string): Promise<ThreadChannel | null> {
+  const cached = forum.threads.cache.find(t => t.name === name);
+  if (cached) return cached;
+  try {
+    const active = await forum.threads.fetchActive();
+    return active.threads.find(t => t.name === name) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function createRouteTrackerThread(
   guild: Guild,
   config: ReturnType<typeof loadConfig>,
   ticketId: string,
   userId: string,
-  title: string | null,
   dongleId: string,
   routeName: string,
-  routeUrl: string,
+  iteration: string | undefined,
   threadUrl: string,
 ): Promise<string | null> {
   const routesForum = await getForum(guild, config.routesChannelId);
   if (!routesForum) return null;
 
+  const threadName = formatRoute(dongleId, routeName, iteration);
+  const routeUrl = `https://connect.comma.ai/${threadName}`;
+
+  // If thread for this route already exists, just append this report.
+  const existing = await findRouteThread(routesForum, threadName);
+  if (existing) {
+    const starter = await existing.fetchStarterMessage();
+    if (starter) {
+      const embed = starter.embeds[0];
+      if (embed) {
+        const updated = EmbedBuilder.from(embed);
+        if (!embed.fields?.some((f: { value?: string }) => f.value?.includes(threadUrl))) {
+          updated.addFields(
+            { name: `Report ${ticketId}`, value: `<@${userId}> — [Jump →](${threadUrl})` },
+          );
+          await starter.edit({ embeds: [updated] });
+        }
+      }
+    }
+    return existing.url;
+  }
+
+  // Create new thread for this route.
   const routeEmbed = new EmbedBuilder()
     .setColor(COLORS.amber)
-    .setTitle(`Route Issue ${ticketId}`)
+    .setTitle(`Route ${threadName}`)
     .addFields(
-      { name: 'User', value: `<@${userId}>`, inline: true },
-      { name: 'Route', value: `[${dongleId}/${routeName}](${routeUrl})`, inline: false },
+      { name: 'Route', value: `[${threadName}](${routeUrl})` },
+      { name: `Report ${ticketId}`, value: `<@${userId}> — [Jump →](${threadUrl})` },
     )
     .setTimestamp();
 
   const routesThread = await routesForum.threads.create({
-    name: title ? `Route Issue - ${title} (${ticketId})` : `Route Issue - ${ticketId}`,
+    name: threadName,
     message: { embeds: [routeEmbed] },
   });
-
-  const routesStarter = await routesThread.fetchStarterMessage();
-  if (routesStarter) {
-    routeEmbed.addFields(
-      { name: '\u200B', value: `[Jump to Public Thread →](${threadUrl})` },
-    );
-    await routesStarter.edit({ embeds: [routeEmbed] });
-  }
 
   return routesThread.url;
 }
@@ -276,38 +389,57 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
   const reproIntent = interaction.fields.getTextInputValue('reproducibility_intent');
   const details = interaction.fields.getTextInputValue('details');
 
-  const routeMatch = routeIdInput.match(/^([a-f0-9]{16})[\/|]([a-zA-Z0-9_.-]+)(?:\/([a-zA-Z0-9_.-]+))?$/);
-  if (!routeMatch) {
+  // Validate the dedicated route ID field — required.
+  const dedicatedMatch = routeIdInput.match(new RegExp(`^${ROUTE_REGEX.source}$`, 'i'));
+  if (!dedicatedMatch) {
     await interaction.editReply({
       content: `Invalid route ID. You entered:\n\`${routeIdInput}\`\n\nUse the format \`dongle_id/route_name\` (e.g. \`a1b2c3d4e5f6a7b8/0000aaaa--98c2d4e6f8\`).`,
     });
     return;
   }
 
-  const [, dongleId, routeName, iteration] = routeMatch;
-  const connectRouteStr = iteration ? `${dongleId}/${routeName}/${iteration}` : `${dongleId}/${routeName}`;
-  const routeUrl = `https://connect.comma.ai/${connectRouteStr}`;
+  // Collect all route IDs: dedicated field first, then scan other text fields.
+  const allRoutes: ExtractedRoute[] = [];
+  const seenKeys = new Set<string>();
 
-  let routeValid = false;
-  let routePublic = false;
-  try {
-    const res = await fetch(`https://api.comma.ai/v1/route/${dongleId}|${routeName}/files`);
-    if (res.ok) {
-      routeValid = true;
-      routePublic = true;
-    } else if (res.status === 403 || res.status === 401) {
-      routeValid = true;
+  const [, dDongleId, dRouteName, dIteration] = dedicatedMatch;
+  const dedicatedKey = formatRoute(dDongleId, dRouteName, dIteration);
+  seenKeys.add(dedicatedKey);
+  allRoutes.push({ dongleId: dDongleId, routeName: dRouteName, iteration: dIteration });
+
+  // Scan all text fields for additional route IDs.
+  const allText = [observed, expected, reproIntent, ...(details ? [details] : [])].join('\n');
+  const textRoutes = extractRouteIds(allText);
+  for (const r of textRoutes) {
+    const key = formatRoute(r.dongleId, r.routeName, r.iteration);
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      allRoutes.push(r);
     }
-  } catch (err) {
-    console.warn('[report] Route validation API unreachable:', err);
   }
 
-  if (!routeValid) {
+  // Validate all routes.
+  const validatedRoutes: Array<ExtractedRoute & { valid: boolean; public: boolean }> = [];
+  for (const r of allRoutes) {
+    const v = await validateRoute(r.dongleId, r.routeName);
+    validatedRoutes.push({ ...r, ...v });
+  }
+
+  // Dedicated route must be valid.
+  if (!validatedRoutes[0].valid) {
     await interaction.editReply({
       content: `The route you entered doesn't appear to exist:\n\`${routeIdInput}\`\n\nPlease double-check the Route ID and try again.`,
     });
     return;
   }
+
+  const validRoutes = validatedRoutes.filter(r => r.valid);
+
+  // Strip route IDs from public-facing text fields.
+  const cleanObserved = stripRouteIds(observed);
+  const cleanExpected = stripRouteIds(expected);
+  const cleanReproIntent = stripRouteIds(reproIntent);
+  const cleanDetails = details ? stripRouteIds(details) : null;
 
   const guild = interaction.guild;
   if (!guild) {
@@ -324,22 +456,22 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
   const reportEmbed = new EmbedBuilder()
     .setColor(COLORS.blurple)
     .addFields(
-      { name: 'Observed Behavior', value: observed },
-      { name: 'Expected Behavior', value: expected },
-      { name: 'Reproducibility & Intent', value: reproIntent },
+      { name: 'Observed Behavior', value: cleanObserved },
+      { name: 'Expected Behavior', value: cleanExpected },
+      { name: 'Reproducibility & Intent', value: cleanReproIntent },
     )
     .setTimestamp();
 
-  if (details) {
-    reportEmbed.addFields({ name: 'Additional Details', value: details });
+  if (cleanDetails) {
+    reportEmbed.addFields({ name: 'Additional Details', value: cleanDetails });
   }
 
-  const bugTitle = await generateThreadTitle(observed).catch(() => null);
+  const bugTitle = await generateThreadTitle(cleanObserved).catch(() => null);
 
   let publicThread: Awaited<ReturnType<typeof publicForum.threads.create>>;
   try {
     publicThread = await publicForum.threads.create({
-      name: bugTitle ? `🐛 Bug Report - ${bugTitle}` : '🐛 Bug Report',
+      name: formatThreadTitle('🐛', 'Bug Report', bugTitle, '...'),
       message: { content: `<@${interaction.user.id}>`, embeds: [reportEmbed] },
     });
   } catch (err) {
@@ -349,25 +481,34 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
   }
 
   const ticketId = String(parseInt(publicThread.id.slice(-5), 10));
-  await publicThread.edit({ name: bugTitle ? `🐛 Bug Report - ${bugTitle} (${ticketId})` : `🐛 Bug Report - ${ticketId}` });
+  await publicThread.edit({ name: formatThreadTitle('🐛', 'Bug Report', bugTitle, ticketId) });
   reportEmbed.setTitle(`Bug Report ${ticketId}`);
 
-  let routeTrackerUrl: string | null = null;
-
-  if (routePublic) {
-    routeTrackerUrl = await createRouteTrackerThread(
-      guild, config, ticketId, interaction.user.id, bugTitle, dongleId, routeName, routeUrl, publicThread.url,
+  // Create route tracker threads for public routes.
+  const publicRoutes = validRoutes.filter(r => r.public);
+  for (let i = 0; i < publicRoutes.length; i++) {
+    const r = publicRoutes[i];
+    const routeTrackerUrl = await createRouteTrackerThread(
+      guild, config, ticketId, interaction.user.id,
+      r.dongleId, r.routeName, r.iteration,
+      publicThread.url,
     );
-    if (routeTrackerUrl) {
+    if (routeTrackerUrl && i === 0) {
       reportEmbed.addFields(
-        { name: '\u200B', value: `[Mods route Tracker →](${routeTrackerUrl})` },
+        { name: '\u200B', value: `[Mods Route Tracker →](${routeTrackerUrl})` },
       );
     }
-  } else {
-    // Route is valid but not public — encode data in the confirm button itself.
+  }
+
+  // Handle non-public routes with confirm buttons.
+  const nonPublicRoutes = validRoutes.filter(r => !r.public);
+  const primaryNonPublic = nonPublicRoutes.length > 0 && nonPublicRoutes[0].dongleId === validRoutes[0].dongleId;
+
+  if (primaryNonPublic) {
+    const primary = nonPublicRoutes[0];
     const confirmButton = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
-        .setCustomId(encodeConfirmCustomId(ticketId, interaction.user.id, dongleId, routeName, iteration))
+        .setCustomId(encodeConfirmCustomId(ticketId, interaction.user.id, primary.dongleId, primary.routeName, primary.iteration))
         .setLabel('Confirm Route')
         .setStyle(ButtonStyle.Primary)
         .setEmoji('📍'),
@@ -379,28 +520,17 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
     });
   }
 
-  // Wiki suggestions
-  try {
-    const wikiIndex = getIndex();
-    if (wikiIndex) {
-      const wikiQuery = `${observed} ${expected} ${reproIntent}`;
-      const wikiResults = await autoSearchWiki(wikiIndex, wikiQuery);
-      if (wikiResults.length > 0) {
-        reportEmbed.addFields({ name: '📖 Potentially Related Wiki Articles', value: formatWikiResults(wikiResults) });
-      }
-    }
-  } catch (err) {
-    console.error('Failed to fetch wiki suggestions:', err);
+  const additionalNonPublic = primaryNonPublic ? nonPublicRoutes.slice(1) : nonPublicRoutes;
+  if (additionalNonPublic.length > 0) {
+    const confirmRows = buildConfirmRows(additionalNonPublic, ticketId, interaction.user.id);
+    await publicThread.send({
+      content: `<@${interaction.user.id}> Some additional routes are not yet public. Once you've made them public, click the button below to link them to this report.`,
+      components: confirmRows,
+    });
   }
 
-  const starter = await publicThread.fetchStarterMessage();
-  if (starter) {
-    await starter.edit({ embeds: [reportEmbed] }).catch(err => {
-      console.error('Failed to edit starter message with ticket ID / wiki / route link:', err);
-    });
-  } else {
-    console.error('Could not find starter message to edit.');
-  }
+  await addWikiSuggestions(reportEmbed, `${cleanObserved} ${cleanExpected} ${cleanReproIntent}`);
+  await editStarterEmbed(publicThread, reportEmbed, ' with ticket ID / wiki / route link');
 
   await interaction.editReply({
     content: `Bug report **${ticketId}** submitted! [View thread](${publicThread.url})`,
@@ -421,8 +551,7 @@ export async function handleConfirmRoute(interaction: ButtonInteraction) {
     return;
   }
 
-  const connectRouteStr = iteration ? `${dongleId}/${routeName}/${iteration}` : `${dongleId}/${routeName}`;
-  const routeUrl = `https://connect.comma.ai/${connectRouteStr}`;
+  const routeUrl = `https://connect.comma.ai/${formatRoute(dongleId, routeName, iteration)}`;
 
   let nowPublic = false;
   try {
@@ -467,18 +596,18 @@ export async function handleConfirmRoute(interaction: ButtonInteraction) {
   let routesThreadUrl: string | null = null;
   if (guild) {
     routesThreadUrl = await createRouteTrackerThread(
-      guild, config, ticketId, interaction.user.id, null, dongleId, routeName, routeUrl, thread.url,
+      guild, config, ticketId, interaction.user.id, dongleId, routeName, iteration, thread.url,
     );
     if (routesThreadUrl) {
       updated.addFields(
-        { name: '\u200B', value: `[Mods route Tracker →](${routesThreadUrl})` },
+        { name: '\u200B', value: `[Mods Route Tracker →](${routesThreadUrl})` },
       );
     }
   }
 
   await starter.edit({ embeds: [updated] });
 
-  const content = `✅ Route confirmed and linked to **${ticketId}**.${routesThreadUrl ? ` [Mods route Tracker →](${routesThreadUrl})` : ''}`;
+  const content = `✅ Route confirmed and linked to **${ticketId}**.${routesThreadUrl ? ` [Mods Route Tracker →](${routesThreadUrl})` : ''}`;
   await interaction.update({ content, components: [] });
 }
 
@@ -503,18 +632,28 @@ export async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, 
   const emoji = type === 'feedback' ? '💬' : '✨';
   const label = type === 'feedback' ? 'Feedback' : 'Feature Request';
 
+  const cleanContent = stripRouteIds(content);
+
   const embed = new EmbedBuilder()
     .setColor(type === 'feedback' ? COLORS.green : COLORS.blurple)
     .setTitle(label)
-    .setDescription(content.length > 4096 ? content.slice(0, 4093) + '...' : content)
+    .setDescription(cleanContent.length > 4096 ? cleanContent.slice(0, 4093) + '...' : cleanContent)
     .setTimestamp();
 
-  const feedbackTitle = await generateThreadTitle(content).catch(() => null);
+  const feedbackTitle = await generateThreadTitle(cleanContent).catch(() => null);
+
+  // Scan content for route IDs.
+  const routes = extractRouteIds(content);
+  const validatedRoutes: Array<ExtractedRoute & { valid: boolean; public: boolean }> = [];
+  for (const r of routes) {
+    const v = await validateRoute(r.dongleId, r.routeName);
+    validatedRoutes.push({ ...r, ...v });
+  }
 
   let thread: Awaited<ReturnType<typeof forumChannel.threads.create>>;
   try {
     thread = await forumChannel.threads.create({
-      name: feedbackTitle ? `${emoji} ${label} - ${feedbackTitle}` : `${emoji} ${label}`,
+      name: formatThreadTitle(emoji, label, feedbackTitle, '...'),
       message: { content: `<@${interaction.user.id}>`, embeds: [embed] },
     });
   } catch (err) {
@@ -523,7 +662,38 @@ export async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, 
     return;
   }
 
+  const ticketId = String(parseInt(thread.id.slice(-5), 10));
+  await thread.edit({ name: formatThreadTitle(emoji, label, feedbackTitle, ticketId) });
+  embed.setTitle(`${label} ${ticketId}`);
+
+  // Create route tracker threads for valid public routes.
+  const validPublicRoutes = validatedRoutes.filter(r => r.valid && r.public);
+  for (let i = 0; i < validPublicRoutes.length; i++) {
+    const r = validPublicRoutes[i];
+    const trackerUrl = await createRouteTrackerThread(
+      guild, config, ticketId, interaction.user.id,
+      r.dongleId, r.routeName, r.iteration,
+      thread.url,
+    );
+    if (trackerUrl && i === 0) {
+      embed.addFields({ name: '\u200B', value: `[Mods Route Tracker →](${trackerUrl})` });
+    }
+  }
+
+  // Handle non-public routes with confirm buttons.
+  const nonPublicRoutes = validatedRoutes.filter(r => r.valid && !r.public);
+  if (nonPublicRoutes.length > 0) {
+    const confirmRows = buildConfirmRows(nonPublicRoutes, ticketId, interaction.user.id);
+    await thread.send({
+      content: `<@${interaction.user.id}> Some of your routes are not yet public. Once you've made them public, click the button below to link them to this report.`,
+      components: confirmRows,
+    });
+  }
+
+  await addWikiSuggestions(embed, cleanContent);
+  await editStarterEmbed(thread, embed, '');
+
   await interaction.editReply({
-    content: `${label} submitted! [View thread](${thread.url})`,
+    content: `${label} **${ticketId}** submitted! [View thread](${thread.url})`,
   });
 }

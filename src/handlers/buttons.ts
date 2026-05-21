@@ -25,7 +25,7 @@ export class BotButtons {
     await handleFeatureButton(interaction);
   }
 
-  @ButtonComponent({ id: /^confirm_route\|/ })
+  @ButtonComponent({ id: /^cr_/ })
   async confirmRoute(interaction: ButtonInteraction) {
     await handleConfirmRoute(interaction);
   }
