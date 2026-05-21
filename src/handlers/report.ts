@@ -171,54 +171,98 @@ async function findRouteThread(forum: ForumChannel, name: string): Promise<Threa
 async function createRouteTrackerThread(
   guild: Guild,
   config: ReturnType<typeof loadConfig>,
-  ticketId: string,
-  userId: string,
   dongleId: string,
   routeName: string,
   iteration: string | undefined,
   threadUrl: string,
-): Promise<string | null> {
+  publicThreadName: string,
+): Promise<{ url: string; threadId: string } | null> {
   const routesForum = await getForum(guild, config.routesChannelId);
   if (!routesForum) return null;
 
-  const threadName = formatRoute(dongleId, routeName, iteration);
-  const routeUrl = `https://connect.comma.ai/${threadName}`;
+  const routeStr = formatRoute(dongleId, routeName, iteration);
+  const routeUrl = `https://connect.comma.ai/${routeStr}`;
 
-  // If thread for this route already exists, just append this report.
-  const existing = await findRouteThread(routesForum, threadName);
+  // Check if a tracker thread already exists for this public post.
+  const existing = await findRouteThread(routesForum, publicThreadName);
   if (existing) {
     const starter = await existing.fetchStarterMessage();
     if (starter) {
       const embed = starter.embeds[0];
       if (embed) {
         const updated = EmbedBuilder.from(embed);
-        if (!embed.fields?.some((f: { value?: string }) => f.value?.includes(threadUrl))) {
-          updated.addFields(
-            { name: `Report ${ticketId}`, value: `<@${userId}> — [Jump →](${threadUrl})` },
-          );
+        if (!embed.fields?.some((f: { value?: string }) => f.value?.includes(routeUrl))) {
+          const existingField = updated.data.fields?.find(f => f.name === 'Additional Routes');
+          if (existingField) {
+            existingField.value += `\n[${routeStr}](${routeUrl})`;
+          } else {
+            updated.addFields({ name: 'Additional Routes', value: `[${routeStr}](${routeUrl})` });
+          }
           await starter.edit({ embeds: [updated] });
         }
       }
     }
-    return existing.url;
+    return { url: existing.url, threadId: existing.id };
   }
 
-  // Create new thread for this route.
+  // Create new thread for this report's routes.
   const routeEmbed = new EmbedBuilder()
     .setColor(COLORS.amber)
-    .setTitle(`Route ${threadName}`)
+    .setTitle('Route')
     .addFields(
-      { name: 'Route', value: `[${threadName}](${routeUrl})` },
-      { name: `Report ${ticketId}`, value: `<@${userId}> — [Jump →](${threadUrl})` },
+      { name: '\u200B', value: `[${routeStr}](${routeUrl})` },
     )
     .setTimestamp();
 
   const routesThread = await routesForum.threads.create({
-    name: threadName,
+    name: publicThreadName,
     message: { embeds: [routeEmbed] },
   });
 
-  return routesThread.url;
+  // Add Original Post interlink.
+  const starter = await routesThread.fetchStarterMessage();
+  if (starter) {
+    routeEmbed.addFields(
+      { name: '\u200B', value: `[Original Post →](${threadUrl})` },
+    );
+    await starter.edit({ embeds: [routeEmbed] });
+  }
+
+  return { url: routesThread.url, threadId: routesThread.id };
+}
+
+async function addAdditionalRoutesToTracker(
+  guild: Guild,
+  threadId: string,
+  additionalRoutes: Array<{ dongleId: string; routeName: string; iteration?: string }>,
+): Promise<void> {
+  if (additionalRoutes.length === 0) return;
+  try {
+    const channel = await guild.channels.fetch(threadId);
+    if (!channel?.isThread()) return;
+    const starter = await channel.fetchStarterMessage();
+    if (!starter) return;
+    const embed = starter.embeds[0];
+    if (!embed) return;
+    const updated = EmbedBuilder.from(embed);
+    const links = additionalRoutes.map(r => {
+      const url = `https://connect.comma.ai/${formatRoute(r.dongleId, r.routeName, r.iteration)}`;
+      return `[${r.dongleId}/${r.routeName}](${url})`;
+    }).join('\n');
+    if (!embed.fields?.some((f: { value?: string }) => f.value?.includes(links))) {
+      const origPostIdx = updated.data.fields?.findIndex(
+        f => f.value?.startsWith('[Original Post →]'),
+      ) ?? -1;
+      if (origPostIdx >= 0) {
+        updated.spliceFields(origPostIdx, 0, { name: 'Additional Routes', value: links });
+      } else {
+        updated.addFields({ name: 'Additional Routes', value: links });
+      }
+      await starter.edit({ embeds: [updated] });
+    }
+  } catch (err) {
+    console.warn('[report] Failed to add additional routes to tracker:', err);
+  }
 }
 
 function dot(a: number[], b: number[]): number {
@@ -484,19 +528,20 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
   await publicThread.edit({ name: formatThreadTitle('🐛', 'Bug Report', bugTitle, ticketId) });
   reportEmbed.setTitle(`Bug Report ${ticketId}`);
 
-  // Create route tracker threads for public routes.
+  // Create route tracker thread for the primary route, add additional routes to it.
   const publicRoutes = validRoutes.filter(r => r.public);
-  for (let i = 0; i < publicRoutes.length; i++) {
-    const r = publicRoutes[i];
-    const routeTrackerUrl = await createRouteTrackerThread(
-      guild, config, ticketId, interaction.user.id,
-      r.dongleId, r.routeName, r.iteration,
-      publicThread.url,
+  if (publicRoutes.length > 0) {
+    const primary = publicRoutes[0];
+    const tracker = await createRouteTrackerThread(
+      guild, config,
+      primary.dongleId, primary.routeName, primary.iteration,
+      publicThread.url, publicThread.name,
     );
-    if (routeTrackerUrl && i === 0) {
+    if (tracker) {
       reportEmbed.addFields(
-        { name: '\u200B', value: `[Mods Route Tracker →](${routeTrackerUrl})` },
+        { name: '\u200B', value: `[Mods Route Tracker →](${tracker.url})` },
       );
+      await addAdditionalRoutesToTracker(guild, tracker.threadId, publicRoutes.slice(1));
     }
   }
 
@@ -595,13 +640,16 @@ export async function handleConfirmRoute(interaction: ButtonInteraction) {
   const guild = interaction.guild;
   let routesThreadUrl: string | null = null;
   if (guild) {
-    routesThreadUrl = await createRouteTrackerThread(
-      guild, config, ticketId, interaction.user.id, dongleId, routeName, iteration, thread.url,
+    const result = await createRouteTrackerThread(
+      guild, config, dongleId, routeName, iteration, thread.url, thread.name,
     );
-    if (routesThreadUrl) {
-      updated.addFields(
-        { name: '\u200B', value: `[Mods Route Tracker →](${routesThreadUrl})` },
-      );
+    if (result) {
+      routesThreadUrl = result.url;
+      if (!embed.fields?.some((f: { value?: string }) => f.value?.includes(result.url))) {
+        updated.addFields(
+          { name: '\u200B', value: `[Mods Route Tracker →](${result.url})` },
+        );
+      }
     }
   }
 
@@ -666,17 +714,18 @@ export async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, 
   await thread.edit({ name: formatThreadTitle(emoji, label, feedbackTitle, ticketId) });
   embed.setTitle(`${label} ${ticketId}`);
 
-  // Create route tracker threads for valid public routes.
+  // Create route tracker thread for the primary route, add additional routes to it.
   const validPublicRoutes = validatedRoutes.filter(r => r.valid && r.public);
-  for (let i = 0; i < validPublicRoutes.length; i++) {
-    const r = validPublicRoutes[i];
-    const trackerUrl = await createRouteTrackerThread(
-      guild, config, ticketId, interaction.user.id,
-      r.dongleId, r.routeName, r.iteration,
-      thread.url,
+  if (validPublicRoutes.length > 0) {
+    const primary = validPublicRoutes[0];
+    const tracker = await createRouteTrackerThread(
+      guild, config,
+      primary.dongleId, primary.routeName, primary.iteration,
+      thread.url, thread.name,
     );
-    if (trackerUrl && i === 0) {
-      embed.addFields({ name: '\u200B', value: `[Mods Route Tracker →](${trackerUrl})` });
+    if (tracker) {
+      embed.addFields({ name: '\u200B', value: `[Mods Route Tracker →](${tracker.url})` });
+      await addAdditionalRoutesToTracker(guild, tracker.threadId, validPublicRoutes.slice(1));
     }
   }
 
