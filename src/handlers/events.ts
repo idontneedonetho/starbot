@@ -12,10 +12,9 @@ import { loadConfig } from '../config.js';
 import { fetchWikiPages } from '../wiki/fetcher.js';
 import { buildIndex } from '../wiki/indexer.js';
 import { setIndex, setInitFailed, getInitStatus, getIndex } from '../wiki/wiki.js';
-import { autoSearchWiki, formatWikiResults } from '../wiki/searcher.js';
+import { searchWiki, formatWikiResults } from '../wiki/searcher.js';
 import { WikiRateLimit } from './guards.js';
-
-const BLURPLE = 0x5865f2;
+import { COLORS } from '../util.js';
 
 function getCommitHash(): string | null {
   try {
@@ -124,12 +123,12 @@ export class BotEvents {
     } catch (err) { console.warn('[events] Failed to add reaction:', err); }
 
     try {
-      const results = await autoSearchWiki(index, query);
+      const results = await searchWiki(index, query);
       if (results.length > 0) {
         const embed = new EmbedBuilder()
           .setTitle('📖 Wiki Results')
           .setDescription(formatWikiResults(results))
-          .setColor(BLURPLE)
+          .setColor(COLORS.blurple)
           .setTimestamp();
         await message.reply({ embeds: [embed] });
       } else {

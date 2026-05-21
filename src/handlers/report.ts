@@ -1,6 +1,9 @@
+import type {
+  ButtonInteraction,
+  ModalSubmitInteraction,
+  Guild,
+} from 'discord.js';
 import {
-  type ButtonInteraction,
-  type ModalSubmitInteraction,
   ModalBuilder,
   ActionRowBuilder,
   ButtonBuilder,
@@ -12,12 +15,12 @@ import {
   MessageFlags,
   ForumChannel,
   ThreadChannel,
-  type Guild,
 } from 'discord.js';
 import { loadConfig } from '../config.js';
 import { getIndex } from '../wiki/wiki.js';
 import { embedBatch } from '../wiki/embedder.js';
-import { autoSearchWiki, formatWikiResults } from '../wiki/searcher.js';
+import { searchWiki, formatWikiResults } from '../wiki/searcher.js';
+import { COLORS, dot } from '../util.js';
 
 interface ParsedConfirmRoute {
   ticketId: string;
@@ -55,12 +58,6 @@ async function getForum(guild: Guild, id: string): Promise<ForumChannel | null> 
   }
 }
 
-const COLORS = {
-  blurple: 0x5865f2,
-  amber: 0xf0b132,
-  green: 0x248046,
-} as const;
-
 // Route ID regex — matches dongle/route or dongle|route with optional iteration.
 // Route names use the comma.ai format: 8hex--10hex (e.g. 0000000b--97f3b3b1ee).
 const ROUTE_REGEX = /([a-f0-9]{16})[\/|]([a-f0-9]{8}--[a-f0-9]{10})(?:\/([a-f0-9]{8}--[a-f0-9]{10}))?/gi;
@@ -68,7 +65,7 @@ const ROUTE_REGEX = /([a-f0-9]{16})[\/|]([a-f0-9]{8}--[a-f0-9]{10})(?:\/([a-f0-9
 function extractRouteIds(text: string): ExtractedRoute[] {
   const results: ExtractedRoute[] = [];
   const seen = new Set<string>();
-  const regex = new RegExp(ROUTE_REGEX.source, 'g');
+  const regex = new RegExp(ROUTE_REGEX.source, 'gi');
   let m: RegExpExecArray | null;
   while ((m = regex.exec(text)) !== null) {
     const key = formatRoute(m[1], m[2], m[3]);
@@ -127,7 +124,7 @@ async function addWikiSuggestions(embed: EmbedBuilder, query: string): Promise<v
   try {
     const wikiIndex = getIndex();
     if (wikiIndex) {
-      const wikiResults = await autoSearchWiki(wikiIndex, query);
+      const wikiResults = await searchWiki(wikiIndex, query);
       if (wikiResults.length > 0) {
         embed.addFields({ name: '📖 Potentially Related Wiki Articles', value: formatWikiResults(wikiResults) });
       }
@@ -175,7 +172,7 @@ async function createRouteTrackerThread(
   routeName: string,
   iteration: string | undefined,
   threadUrl: string,
-  publicThreadName: string,
+  publicThreadTitle: string,
 ): Promise<{ url: string; threadId: string } | null> {
   const routesForum = await getForum(guild, config.routesChannelId);
   if (!routesForum) return null;
@@ -184,7 +181,7 @@ async function createRouteTrackerThread(
   const routeUrl = `https://connect.comma.ai/${routeStr}`;
 
   // Check if a tracker thread already exists for this public post.
-  const existing = await findRouteThread(routesForum, publicThreadName);
+  const existing = await findRouteThread(routesForum, publicThreadTitle);
   if (existing) {
     const starter = await existing.fetchStarterMessage();
     if (starter) {
@@ -208,14 +205,14 @@ async function createRouteTrackerThread(
   // Create new thread for this report's routes.
   const routeEmbed = new EmbedBuilder()
     .setColor(COLORS.amber)
-    .setTitle('Route')
+    .setTitle(publicThreadTitle)
     .addFields(
-      { name: '\u200B', value: `[${routeStr}](${routeUrl})` },
+      { name: 'Route', value: `[${routeStr}](${routeUrl})` },
     )
     .setTimestamp();
 
   const routesThread = await routesForum.threads.create({
-    name: publicThreadName,
+    name: publicThreadTitle,
     message: { embeds: [routeEmbed] },
   });
 
@@ -263,12 +260,6 @@ async function addAdditionalRoutesToTracker(
   } catch (err) {
     console.warn('[report] Failed to add additional routes to tracker:', err);
   }
-}
-
-function dot(a: number[], b: number[]): number {
-  let result = 0;
-  for (let i = 0; i < a.length; i++) result += a[i] * b[i];
-  return result;
 }
 
 function isContentWord(w: string): boolean {
@@ -337,6 +328,99 @@ async function generateThreadTitle(input: string): Promise<string | null> {
   if (top10.length === 0) return null;
 
   return top10.map(({ word }) => word[0].toUpperCase() + word.slice(1)).join(' ');
+}
+
+async function submitReport(
+  interaction: ModalSubmitInteraction,
+  params: {
+    embed: EmbedBuilder;
+    titleSource: string;
+    wikiQuery: string;
+    validRoutes: Array<ExtractedRoute & { valid: boolean; public: boolean }>;
+    label: string;
+    emoji: string;
+    primaryNonPublicRoute?: ExtractedRoute;
+    footerNote?: string;
+  },
+): Promise<void> {
+  const config = loadConfig();
+  const guild = interaction.guild;
+  if (!guild) {
+    await interaction.editReply({ content: 'Could not resolve guild.' });
+    return;
+  }
+
+  const forum = await getForum(guild, config.forumChannelId);
+  if (!forum) {
+    await interaction.editReply({ content: 'Forum channel not found. Contact an admin.' });
+    return;
+  }
+
+  const generatedTitle = await generateThreadTitle(params.titleSource).catch(() => null);
+
+  let thread;
+  try {
+    thread = await forum.threads.create({
+      name: formatThreadTitle(params.emoji, params.label, generatedTitle, '...'),
+      message: { content: `<@${interaction.user.id}>`, embeds: [params.embed] },
+    });
+  } catch (err) {
+    console.error('Failed to create thread:', err);
+    await interaction.editReply({ content: 'Failed to create thread. Contact an admin.' });
+    return;
+  }
+
+  const ticketId = String(parseInt(thread.id.slice(-7), 10));
+  await thread.edit({ name: formatThreadTitle(params.emoji, params.label, generatedTitle, ticketId) });
+  params.embed.setTitle(`${params.label} ${ticketId}`);
+
+  // Route tracking: one tracker thread per report, additional routes append to it.
+  const validRoutes = params.validRoutes.filter(r => r.valid);
+  const publicRoutes = validRoutes.filter(r => r.public);
+  if (publicRoutes.length > 0) {
+    const primary = publicRoutes[0];
+    const tracker = await createRouteTrackerThread(
+      guild, config,
+      primary.dongleId, primary.routeName, primary.iteration,
+      thread.url, thread.name,
+    );
+    if (tracker) {
+      params.embed.addFields({ name: '\u200B', value: `[Mods Route Tracker →](${tracker.url})` });
+      await addAdditionalRoutesToTracker(guild, tracker.threadId, publicRoutes.slice(1));
+    }
+  }
+
+  // Confirm buttons for non-public routes.
+  const nonPublic = validRoutes.filter(r => !r.public);
+  if (params.primaryNonPublicRoute) {
+    const btn = new ButtonBuilder()
+      .setCustomId(encodeConfirmCustomId(ticketId, interaction.user.id, params.primaryNonPublicRoute.dongleId, params.primaryNonPublicRoute.routeName, params.primaryNonPublicRoute.iteration))
+      .setLabel('Confirm Route')
+      .setStyle(ButtonStyle.Primary)
+      .setEmoji('📍');
+    await thread.send({
+      content: `<@${interaction.user.id}> Your route is valid but not yet public. Once you've made it public, click the button below to link it to this report.\n\nNeed help? Follow [these instructions](<https://wiki.firestar.link/faq/#how-do-i-upload-logs-for-troubleshooting>).`,
+      components: [new ActionRowBuilder<ButtonBuilder>().addComponents(btn)],
+    });
+  }
+
+  const remainingNonPublic = params.primaryNonPublicRoute
+    ? nonPublic.filter(r => r.dongleId !== params.primaryNonPublicRoute!.dongleId || r.routeName !== params.primaryNonPublicRoute!.routeName)
+    : nonPublic;
+  if (remainingNonPublic.length > 0) {
+    const confirmRows = buildConfirmRows(remainingNonPublic, ticketId, interaction.user.id);
+    await thread.send({
+      content: `<@${interaction.user.id}> Some additional routes are not yet public. Once you've made them public, click the button below to link them to this report.`,
+      components: confirmRows,
+    });
+  }
+
+  await addWikiSuggestions(params.embed, params.wikiQuery);
+  await editStarterEmbed(thread, params.embed, params.footerNote ?? '');
+
+  await interaction.editReply({
+    content: `${params.label} **${ticketId}** submitted! [View thread](${thread.url})`,
+  });
 }
 
 export async function handleBugButton(interaction: ButtonInteraction) {
@@ -425,7 +509,6 @@ async function showFeedbackModal(interaction: ButtonInteraction, type: string) {
 
 export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  const config = loadConfig();
 
   const routeIdInput = interaction.fields.getTextInputValue('route_id');
   const observed = interaction.fields.getTextInputValue('observed');
@@ -485,18 +568,6 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
   const cleanReproIntent = stripRouteIds(reproIntent);
   const cleanDetails = details ? stripRouteIds(details) : null;
 
-  const guild = interaction.guild;
-  if (!guild) {
-    await interaction.editReply({ content: 'Could not resolve guild.' });
-    return;
-  }
-
-  const publicForum = await getForum(guild, config.forumChannelId);
-  if (!publicForum) {
-    await interaction.editReply({ content: 'Public forum channel not found. Contact an admin.' });
-    return;
-  }
-
   const reportEmbed = new EmbedBuilder()
     .setColor(COLORS.blurple)
     .addFields(
@@ -510,75 +581,18 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
     reportEmbed.addFields({ name: 'Additional Details', value: cleanDetails });
   }
 
-  const bugTitle = await generateThreadTitle(cleanObserved).catch(() => null);
+  const nonPublic = validRoutes.filter(r => !r.public);
+  const primaryNonPublic = nonPublic.length > 0 && nonPublic[0].dongleId === validRoutes[0].dongleId ? nonPublic[0] : undefined;
 
-  let publicThread: Awaited<ReturnType<typeof publicForum.threads.create>>;
-  try {
-    publicThread = await publicForum.threads.create({
-      name: formatThreadTitle('🐛', 'Bug Report', bugTitle, '...'),
-      message: { content: `<@${interaction.user.id}>`, embeds: [reportEmbed] },
-    });
-  } catch (err) {
-    console.error('Failed to create public thread:', err);
-    await interaction.editReply({ content: 'Failed to create report thread. Contact an admin.' });
-    return;
-  }
-
-  const ticketId = String(parseInt(publicThread.id.slice(-5), 10));
-  await publicThread.edit({ name: formatThreadTitle('🐛', 'Bug Report', bugTitle, ticketId) });
-  reportEmbed.setTitle(`Bug Report ${ticketId}`);
-
-  // Create route tracker thread for the primary route, add additional routes to it.
-  const publicRoutes = validRoutes.filter(r => r.public);
-  if (publicRoutes.length > 0) {
-    const primary = publicRoutes[0];
-    const tracker = await createRouteTrackerThread(
-      guild, config,
-      primary.dongleId, primary.routeName, primary.iteration,
-      publicThread.url, publicThread.name,
-    );
-    if (tracker) {
-      reportEmbed.addFields(
-        { name: '\u200B', value: `[Mods Route Tracker →](${tracker.url})` },
-      );
-      await addAdditionalRoutesToTracker(guild, tracker.threadId, publicRoutes.slice(1));
-    }
-  }
-
-  // Handle non-public routes with confirm buttons.
-  const nonPublicRoutes = validRoutes.filter(r => !r.public);
-  const primaryNonPublic = nonPublicRoutes.length > 0 && nonPublicRoutes[0].dongleId === validRoutes[0].dongleId;
-
-  if (primaryNonPublic) {
-    const primary = nonPublicRoutes[0];
-    const confirmButton = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setCustomId(encodeConfirmCustomId(ticketId, interaction.user.id, primary.dongleId, primary.routeName, primary.iteration))
-        .setLabel('Confirm Route')
-        .setStyle(ButtonStyle.Primary)
-        .setEmoji('📍'),
-    );
-
-    await publicThread.send({
-      content: `<@${interaction.user.id}> Your route is valid but not yet public. Once you've made it public, click the button below to link it to this report.\n\nNeed help? Follow [these instructions](<https://wiki.firestar.link/faq/#how-do-i-upload-logs-for-troubleshooting>).`,
-      components: [confirmButton],
-    });
-  }
-
-  const additionalNonPublic = primaryNonPublic ? nonPublicRoutes.slice(1) : nonPublicRoutes;
-  if (additionalNonPublic.length > 0) {
-    const confirmRows = buildConfirmRows(additionalNonPublic, ticketId, interaction.user.id);
-    await publicThread.send({
-      content: `<@${interaction.user.id}> Some additional routes are not yet public. Once you've made them public, click the button below to link them to this report.`,
-      components: confirmRows,
-    });
-  }
-
-  await addWikiSuggestions(reportEmbed, `${cleanObserved} ${cleanExpected} ${cleanReproIntent}`);
-  await editStarterEmbed(publicThread, reportEmbed, ' with ticket ID / wiki / route link');
-
-  await interaction.editReply({
-    content: `Bug report **${ticketId}** submitted! [View thread](${publicThread.url})`,
+  await submitReport(interaction, {
+    embed: reportEmbed,
+    titleSource: cleanObserved,
+    wikiQuery: `${cleanObserved} ${cleanExpected} ${cleanReproIntent}`,
+    validRoutes,
+    label: 'Bug Report',
+    emoji: '🐛',
+    primaryNonPublicRoute: primaryNonPublic,
+    footerNote: ' with ticket ID / wiki / route link',
   });
 }
 
@@ -661,21 +675,8 @@ export async function handleConfirmRoute(interaction: ButtonInteraction) {
 
 export async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, type: 'feedback' | 'feature') {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  const config = loadConfig();
 
   const content = interaction.fields.getTextInputValue('content');
-
-  const guild = interaction.guild;
-  if (!guild) {
-    await interaction.editReply({ content: 'Could not resolve guild.' });
-    return;
-  }
-
-  const forumChannel = await getForum(guild, config.forumChannelId);
-  if (!forumChannel) {
-    await interaction.editReply({ content: 'Forum channel not found. Contact an admin.' });
-    return;
-  }
 
   const emoji = type === 'feedback' ? '💬' : '✨';
   const label = type === 'feedback' ? 'Feedback' : 'Feature Request';
@@ -688,8 +689,6 @@ export async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, 
     .setDescription(cleanContent.length > 4096 ? cleanContent.slice(0, 4093) + '...' : cleanContent)
     .setTimestamp();
 
-  const feedbackTitle = await generateThreadTitle(cleanContent).catch(() => null);
-
   // Scan content for route IDs.
   const routes = extractRouteIds(content);
   const validatedRoutes: Array<ExtractedRoute & { valid: boolean; public: boolean }> = [];
@@ -698,51 +697,12 @@ export async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, 
     validatedRoutes.push({ ...r, ...v });
   }
 
-  let thread: Awaited<ReturnType<typeof forumChannel.threads.create>>;
-  try {
-    thread = await forumChannel.threads.create({
-      name: formatThreadTitle(emoji, label, feedbackTitle, '...'),
-      message: { content: `<@${interaction.user.id}>`, embeds: [embed] },
-    });
-  } catch (err) {
-    console.error('Failed to create feedback thread:', err);
-    await interaction.editReply({ content: 'Failed to create thread. Contact an admin.' });
-    return;
-  }
-
-  const ticketId = String(parseInt(thread.id.slice(-5), 10));
-  await thread.edit({ name: formatThreadTitle(emoji, label, feedbackTitle, ticketId) });
-  embed.setTitle(`${label} ${ticketId}`);
-
-  // Create route tracker thread for the primary route, add additional routes to it.
-  const validPublicRoutes = validatedRoutes.filter(r => r.valid && r.public);
-  if (validPublicRoutes.length > 0) {
-    const primary = validPublicRoutes[0];
-    const tracker = await createRouteTrackerThread(
-      guild, config,
-      primary.dongleId, primary.routeName, primary.iteration,
-      thread.url, thread.name,
-    );
-    if (tracker) {
-      embed.addFields({ name: '\u200B', value: `[Mods Route Tracker →](${tracker.url})` });
-      await addAdditionalRoutesToTracker(guild, tracker.threadId, validPublicRoutes.slice(1));
-    }
-  }
-
-  // Handle non-public routes with confirm buttons.
-  const nonPublicRoutes = validatedRoutes.filter(r => r.valid && !r.public);
-  if (nonPublicRoutes.length > 0) {
-    const confirmRows = buildConfirmRows(nonPublicRoutes, ticketId, interaction.user.id);
-    await thread.send({
-      content: `<@${interaction.user.id}> Some of your routes are not yet public. Once you've made them public, click the button below to link them to this report.`,
-      components: confirmRows,
-    });
-  }
-
-  await addWikiSuggestions(embed, cleanContent);
-  await editStarterEmbed(thread, embed, '');
-
-  await interaction.editReply({
-    content: `${label} **${ticketId}** submitted! [View thread](${thread.url})`,
+  await submitReport(interaction, {
+    embed,
+    titleSource: cleanContent,
+    wikiQuery: cleanContent,
+    validRoutes: validatedRoutes,
+    label,
+    emoji,
   });
 }

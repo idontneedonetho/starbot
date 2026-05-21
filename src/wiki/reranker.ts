@@ -5,14 +5,7 @@ export interface ScoredWikiChunk {
   score: number;
 }
 
-/**
- * Model-free (no cross-encoder) fusion of BM25 ranks + dense cosine ranks.
- *
- * For a chunk d:
- *   score(d) = wBm25/(k + rankBm25(d))^p + wCos/(k + rankCos(d))^p
- */
-export async function rerank(
-  _query: string,
+export function rerank(
   chunks: WikiChunk[],
   bm25Rank: Map<string, number>,
   cosineRank: Map<string, number>,
@@ -24,7 +17,7 @@ export async function rerank(
     cutoffRank: number;
     topK?: number;
   },
-): Promise<ScoredWikiChunk[]> {
+): ScoredWikiChunk[] {
   if (chunks.length === 0) return [];
 
   const { k, p, wBm25, wCos, cutoffRank, topK } = opts;
