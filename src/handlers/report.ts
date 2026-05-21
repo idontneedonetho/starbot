@@ -150,7 +150,13 @@ async function editStarterEmbed(
 }
 
 function formatThreadTitle(emoji: string, label: string, title: string | null, ticketId: string): string {
-  if (title) return `${emoji} ${label} - ${title} (${ticketId})`;
+  if (title) {
+    const raw = `${emoji} ${label} - ${title} (${ticketId})`;
+    if (raw.length <= 100) return raw;
+    const maxLen = 100 - emoji.length - label.length - ticketId.length - 6;
+    const truncated = title.slice(0, Math.max(0, maxLen - 1)) + '…';
+    return `${emoji} ${label} - ${truncated} (${ticketId})`;
+  }
   return `${emoji} ${label} - ${ticketId}`;
 }
 
@@ -371,7 +377,13 @@ async function submitReport(
   }
 
   const ticketId = String(parseInt(thread.id.slice(-7), 10));
-  await thread.edit({ name: formatThreadTitle(params.emoji, params.label, generatedTitle, ticketId) });
+
+  try {
+    await thread.edit({ name: formatThreadTitle(params.emoji, params.label, generatedTitle, ticketId) });
+  } catch (err) {
+    console.error('Failed to rename thread:', err);
+  }
+
   params.embed.setTitle(`${params.label} ${ticketId}`);
 
   // Route tracking: one tracker thread per report, additional routes append to it.
