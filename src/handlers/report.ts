@@ -36,6 +36,9 @@ interface ExtractedRoute {
   iteration?: string;
 }
 
+export const TRACKER_FIELD_PREFIX = '[Mods Route Tracker →]';
+export const ORIGINAL_POST_PREFIX = '[Original Post →]';
+
 function encodeConfirmCustomId(ticketId: string, userId: string, dongleId: string, routeName: string, iteration?: string): string {
   return `cr_${ticketId}_${userId}_${dongleId}_${routeName}${iteration ? '_' + iteration : ''}`;
 }
@@ -46,7 +49,7 @@ function parseConfirmCustomId(customId: string): ParsedConfirmRoute | null {
   return { ticketId: parts[1], userId: parts[2], dongleId: parts[3], routeName: parts[4], iteration: parts[5] || undefined };
 }
 
-async function getForum(guild: Guild, id: string): Promise<ForumChannel | null> {
+export async function getForum(guild: Guild, id: string): Promise<ForumChannel | null> {
   const cached = guild.channels.cache.get(id);
   if (cached instanceof ForumChannel) return cached;
   try {
@@ -58,9 +61,15 @@ async function getForum(guild: Guild, id: string): Promise<ForumChannel | null> 
   }
 }
 
+export function resolveTagIds(forum: ForumChannel, names: string[]): string[] {
+  return names
+    .map(name => forum.availableTags.find(t => t.name === name)?.id)
+    .filter((id): id is string => id != null);
+}
+
 // Route ID regex — matches dongle/route or dongle|route with optional iteration.
 // Route names use the comma.ai format: 8hex--10hex (e.g. 0000000b--97f3b3b1ee).
-const ROUTE_REGEX = /([a-f0-9]{16})[\/|]([a-f0-9]{8}--[a-f0-9]{10})(?:\/([a-f0-9]{8}--[a-f0-9]{10}))?/gi;
+export const ROUTE_REGEX = /([a-f0-9]{16})[\/|]([a-f0-9]{8}--[a-f0-9]{10})(?:\/([a-f0-9]{8}--[a-f0-9]{10}))?/gi;
 
 function extractRouteIds(text: string): ExtractedRoute[] {
   const results: ExtractedRoute[] = [];
@@ -80,11 +89,11 @@ function extractRouteIds(text: string): ExtractedRoute[] {
   return results;
 }
 
-function stripRouteIds(text: string): string {
+export function stripRouteIds(text: string): string {
   return text.replace(ROUTE_REGEX, '').replace(/\s+/g, ' ').trim();
 }
 
-async function validateRoute(dongleId: string, routeName: string): Promise<{ valid: boolean; public: boolean }> {
+export async function validateRoute(dongleId: string, routeName: string): Promise<{ valid: boolean; public: boolean }> {
   try {
     const res = await fetch(`https://api.comma.ai/v1/route/${dongleId}|${routeName}/files`);
     if (res.ok) return { valid: true, public: true };
@@ -95,7 +104,7 @@ async function validateRoute(dongleId: string, routeName: string): Promise<{ val
   return { valid: false, public: false };
 }
 
-function formatRoute(dongleId: string, routeName: string, iteration?: string): string {
+export function formatRoute(dongleId: string, routeName: string, iteration?: string): string {
   return iteration ? `${dongleId}/${routeName}/${iteration}` : `${dongleId}/${routeName}`;
 }
 
@@ -134,19 +143,29 @@ async function addWikiSuggestions(embed: EmbedBuilder, query: string): Promise<v
   }
 }
 
-async function editStarterEmbed(
-  thread: ThreadChannel,
-  embed: EmbedBuilder,
-  label: string,
-): Promise<void> {
-  const starter = await thread.fetchStarterMessage();
-  if (starter) {
-    await starter.edit({ embeds: [embed] }).catch(err => {
-      console.error(`Failed to edit starter message${label}:`, err);
-    });
-  } else {
-    console.error('Could not find starter message to edit.');
-  }
+export function buildActionRow(ticketId: string): ActionRowBuilder<ButtonBuilder> {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`additional_report_${ticketId}`)
+      .setLabel('Additional Report')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('📝'),
+    new ButtonBuilder()
+      .setCustomId(`assign_${ticketId}`)
+      .setLabel('Assign')
+      .setStyle(ButtonStyle.Primary)
+      .setEmoji('👤'),
+    new ButtonBuilder()
+      .setCustomId(`merge_${ticketId}`)
+      .setLabel('Merge')
+      .setStyle(ButtonStyle.Primary)
+      .setEmoji('🔀'),
+    new ButtonBuilder()
+      .setCustomId(`close_${ticketId}`)
+      .setLabel('Close')
+      .setStyle(ButtonStyle.Danger)
+      .setEmoji('🔒'),
+  );
 }
 
 function formatThreadTitle(emoji: string, label: string, title: string | null, ticketId: string): string {
@@ -226,7 +245,7 @@ async function createRouteTrackerThread(
   const starter = await routesThread.fetchStarterMessage();
   if (starter) {
     routeEmbed.addFields(
-      { name: '\u200B', value: `[Original Post →](${threadUrl})` },
+      { name: '\u200B', value: `${ORIGINAL_POST_PREFIX}(${threadUrl})` },
     );
     await starter.edit({ embeds: [routeEmbed] });
   }
@@ -234,10 +253,12 @@ async function createRouteTrackerThread(
   return { url: routesThread.url, threadId: routesThread.id };
 }
 
-async function addAdditionalRoutesToTracker(
+export async function addAdditionalRoutesToTracker(
   guild: Guild,
   threadId: string,
   additionalRoutes: Array<{ dongleId: string; routeName: string; iteration?: string }>,
+  sourceUrl?: string,
+  sourceName?: string,
 ): Promise<void> {
   if (additionalRoutes.length === 0) return;
   try {
@@ -250,11 +271,12 @@ async function addAdditionalRoutesToTracker(
     const updated = EmbedBuilder.from(embed);
     const links = additionalRoutes.map(r => {
       const url = `https://connect.comma.ai/${formatRoute(r.dongleId, r.routeName, r.iteration)}`;
-      return `[${r.dongleId}/${r.routeName}](${url})`;
+      const base = `[${r.dongleId}/${r.routeName}](${url})`;
+      return sourceUrl && sourceName ? `${base} — [${sourceName}](${sourceUrl})` : base;
     }).join('\n');
     if (!embed.fields?.some((f: { value?: string }) => f.value?.includes(links))) {
       const origPostIdx = updated.data.fields?.findIndex(
-        f => f.value?.startsWith('[Original Post →]'),
+        f => f.value?.startsWith(ORIGINAL_POST_PREFIX),
       ) ?? -1;
       if (origPostIdx >= 0) {
         updated.spliceFields(origPostIdx, 0, { name: 'Additional Routes', value: links });
@@ -345,6 +367,7 @@ async function submitReport(
     validRoutes: Array<ExtractedRoute & { valid: boolean; public: boolean }>;
     label: string;
     emoji: string;
+    tagNames: string[];
     primaryNonPublicRoute?: ExtractedRoute;
     footerNote?: string;
   },
@@ -364,11 +387,14 @@ async function submitReport(
 
   const generatedTitle = await generateThreadTitle(params.titleSource).catch(() => null);
 
+  const tagIds = params.tagNames.length > 0 ? resolveTagIds(forum, params.tagNames) : undefined;
+
   let thread;
   try {
     thread = await forum.threads.create({
       name: formatThreadTitle(params.emoji, params.label, generatedTitle, '...'),
       message: { content: `<@${interaction.user.id}>`, embeds: [params.embed] },
+      appliedTags: tagIds,
     });
   } catch (err) {
     console.error('Failed to create thread:', err);
@@ -397,7 +423,7 @@ async function submitReport(
       thread.url, thread.name,
     );
     if (tracker) {
-      params.embed.addFields({ name: '\u200B', value: `[Mods Route Tracker →](${tracker.url})` });
+      params.embed.addFields({ name: '\u200B', value: `${TRACKER_FIELD_PREFIX}(${tracker.url})` });
       await addAdditionalRoutesToTracker(guild, tracker.threadId, publicRoutes.slice(1));
     }
   }
@@ -428,7 +454,13 @@ async function submitReport(
   }
 
   await addWikiSuggestions(params.embed, params.wikiQuery);
-  await editStarterEmbed(thread, params.embed, params.footerNote ?? '');
+  const starter = await thread.fetchStarterMessage();
+  if (starter) {
+    const actionRow = buildActionRow(ticketId);
+    await starter.edit({ embeds: [params.embed], components: [actionRow] }).catch(err => {
+      console.error('Failed to edit starter message:', err);
+    });
+  }
 
   await interaction.editReply({
     content: `${params.label} **${ticketId}** submitted! [View thread](${thread.url})`,
@@ -602,6 +634,7 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
     validRoutes,
     label: 'Bug Report',
     emoji: '🐛',
+    tagNames: ['OPEN', 'BUG'],
     primaryNonPublicRoute: primaryNonPublic,
     footerNote: ' with ticket ID / wiki / route link',
   });
@@ -672,7 +705,7 @@ export async function handleConfirmRoute(interaction: ButtonInteraction) {
       routesThreadUrl = result.url;
       if (!embed.fields?.some((f: { value?: string }) => f.value?.includes(result.url))) {
         updated.addFields(
-          { name: '\u200B', value: `[Mods Route Tracker →](${result.url})` },
+          { name: '\u200B', value: `${TRACKER_FIELD_PREFIX}(${result.url})` },
         );
       }
     }
@@ -714,5 +747,6 @@ export async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, 
     validRoutes: validatedRoutes,
     label,
     emoji,
+    tagNames: type === 'feedback' ? ['OPEN', 'FEEDBACK'] : ['OPEN', 'FEATURE REQUEST'],
   });
 }

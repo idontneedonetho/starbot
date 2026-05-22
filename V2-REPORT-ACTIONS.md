@@ -18,7 +18,7 @@ Post-creation action buttons on report/feedback forum threads, plus automatic fo
 
 ## Phase 1 — Tag-Enabled Thread Creation
 
-Tags applied at thread creation in `handleBugSubmit` / `handleFeedbackSubmit`:
+Tags applied at thread creation in `submitReport()` via a new `appliedTags` param:
 
 | Report type | Tags |
 |-------------|------|
@@ -26,13 +26,22 @@ Tags applied at thread creation in `handleBugSubmit` / `handleFeedbackSubmit`:
 | Feedback | `OPEN`, `FEEDBACK` |
 | Feature Request | `OPEN`, `FEATURE REQUEST` |
 
-Applied via `appliedTags` in `forum.threads.create()`:
+The `handleBugSubmit` / `handleFeedbackSubmit` callers pass the tag list through to `submitReport()`:
 
 ```ts
-await publicForum.threads.create({
+await submitReport(interaction, {
+  ...
+  appliedTags: resolveTagIds(publicForum, ['OPEN', 'BUG']),
+});
+```
+
+Applied inside `submitReport()`:
+
+```ts
+await forum.threads.create({
   name: ...,
   message: ...,
-  appliedTags: resolveTagIds(publicForum, ['OPEN', 'BUG']),
+  appliedTags: params.appliedTags,
 });
 ```
 
@@ -40,7 +49,7 @@ await publicForum.threads.create({
 
 ## Phase 2 — Action Buttons
 
-New button row on each thread's starter message (added after thread creation):
+New button row on each thread's starter message (added in `submitReport()` after the embed edit):
 
 ```
 [📝 Additional Report] [👤 Assign] [🔀 Merge] [🔒 Close]
@@ -142,7 +151,7 @@ Add import for `report-actions.js`.
 | File | Changes |
 |------|---------|
 | `src/config.ts` | +`staffRole` field |
-| `src/handlers/report.ts` | Add `appliedTags` to `threads.create()`; add action button row after creation |
+| `src/handlers/report.ts` | Add `appliedTags` param to `submitReport()`; add action button row after embed edit |
 | `src/handlers/report-actions.ts` | **New** — all handlers + tag helpers |
 | `src/handlers/buttons.ts` | +5 `@ButtonComponent` |
 | `src/handlers/modals.ts` | +2 `@ModalComponent` |

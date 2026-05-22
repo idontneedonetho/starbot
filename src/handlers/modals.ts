@@ -2,6 +2,7 @@ import { Discord, ModalComponent } from 'discordx';
 import { type ModalSubmitInteraction } from 'discord.js';
 import { handleIdentitySubmit } from './identification.js';
 import { handleBugSubmit, handleFeedbackSubmit } from './report.js';
+import { handleAdditionalReportSubmit, handleMergeSubmit } from './report-actions.js';
 
 @Discord()
 export class BotModals {
@@ -23,5 +24,15 @@ export class BotModals {
   @ModalComponent({ id: 'feature_modal' })
   async feature(interaction: ModalSubmitInteraction) {
     await handleFeedbackSubmit(interaction, 'feature');
+  }
+
+  @ModalComponent({ id: /^additional_report_modal_/ })
+  async additionalReport(interaction: ModalSubmitInteraction) {
+    await handleAdditionalReportSubmit(interaction);
+  }
+
+  @ModalComponent({ id: /^merge_modal_/ })
+  async merge(interaction: ModalSubmitInteraction) {
+    await handleMergeSubmit(interaction);
   }
 }
