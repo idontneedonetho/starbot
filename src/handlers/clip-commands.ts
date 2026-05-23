@@ -29,9 +29,10 @@ import {
   handleClipRequest,
   getCachedClip,
   deleteCachedClip,
+  getClipConfig,
+  getAnonymizationOptions,
   RENDER_TYPE_MAP,
   RENDER_TYPES_WITH_ANONYMIZATION,
-  ANONYMIZATION_PROFILES,
   PASSENGER_REDACTION_STYLES,
   VALID_RENDER_TYPES,
   type ClipJobInput,
@@ -60,6 +61,13 @@ function getPendingForm(userId: string): ClipJobInput | undefined {
     return undefined;
   }
   return entry.input;
+}
+
+function validateAnonymization(profile: string | undefined): string | undefined {
+  if (!profile) return undefined;
+  const allowed = getAnonymizationOptions(getClipConfig());
+  if (!allowed.includes(profile)) return undefined;
+  return profile;
 }
 
 @Discord()
@@ -266,7 +274,7 @@ export class ClipCommands {
     await handleClipRequest(interaction, {
       route: url,
       renderType: 'driver-debug',
-      anonymizationProfile: anonymizationProfile || undefined,
+      anonymizationProfile: validateAnonymization(anonymizationProfile),
       passengerRedactionStyle: passengerRedactionStyle || undefined,
       fileSize: fileSize ?? undefined,
       includeAudio: includeAudio || undefined,
@@ -395,7 +403,7 @@ export class ClipCommands {
     await handleClipRequest(interaction, {
       route: url,
       renderType: 'driver',
-      anonymizationProfile: anonymizationProfile || undefined,
+      anonymizationProfile: validateAnonymization(anonymizationProfile),
       passengerRedactionStyle: passengerRedactionStyle || undefined,
       fileSize: fileSize ?? undefined,
       includeAudio: includeAudio || undefined,
@@ -458,7 +466,7 @@ export class ClipCommands {
     await handleClipRequest(interaction, {
       route: url,
       renderType: '360',
-      anonymizationProfile: anonymizationProfile || undefined,
+      anonymizationProfile: validateAnonymization(anonymizationProfile),
       passengerRedactionStyle: passengerRedactionStyle || undefined,
       fileSize: fileSize ?? undefined,
       includeAudio: includeAudio || undefined,
@@ -521,7 +529,7 @@ export class ClipCommands {
     await handleClipRequest(interaction, {
       route: url,
       renderType: '360-ui',
-      anonymizationProfile: anonymizationProfile || undefined,
+      anonymizationProfile: validateAnonymization(anonymizationProfile),
       passengerRedactionStyle: passengerRedactionStyle || undefined,
       fileSize: fileSize ?? undefined,
       includeAudio: includeAudio || undefined,
@@ -617,7 +625,7 @@ export class ClipCommands {
     await handleClipRequest(interaction, {
       route: url,
       renderType: '360_forward_upon_wide',
-      anonymizationProfile: anonymizationProfile || undefined,
+      anonymizationProfile: validateAnonymization(anonymizationProfile),
       passengerRedactionStyle: passengerRedactionStyle || undefined,
       fileSize: fileSize ?? undefined,
       includeAudio: includeAudio || undefined,
@@ -668,12 +676,13 @@ export class ClipCommands {
 
     if (RENDER_TYPES_WITH_ANONYMIZATION.has(rtRaw)) {
       setPendingForm(interaction.user.id, input);
+      const anonOptions = getAnonymizationOptions(getClipConfig());
       const anonSelect = new StringSelectMenuBuilder()
         .setCustomId('clip_followup_anon')
         .setPlaceholder('Select anonymization profile\u2026')
         .setMinValues(1)
         .addOptions(
-          ...ANONYMIZATION_PROFILES.map(p => ({ label: p.charAt(0).toUpperCase() + p.slice(1), value: p })),
+          ...anonOptions.map(p => ({ label: p.charAt(0).toUpperCase() + p.slice(1), value: p })),
         );
       const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(anonSelect);
       const embed = new EmbedBuilder()

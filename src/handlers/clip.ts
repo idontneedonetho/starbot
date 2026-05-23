@@ -14,6 +14,7 @@ export interface ClipConfig {
   endpoint: string;
   apiKey: string;
   maxDuration: number;
+  allowFaceSwap: boolean;
 }
 
 export interface ClipJobInput {
@@ -50,6 +51,12 @@ export const ANONYMIZATION_PROFILES = [
   'driver face swap, passenger face swap',
 ] as const;
 
+export function getAnonymizationOptions(config: ClipConfig | null): string[] {
+  const all = ANONYMIZATION_PROFILES as readonly string[];
+  if (!config || config.allowFaceSwap) return [...all];
+  return all.filter(p => !p.includes('face swap'));
+}
+
 export const PASSENGER_REDACTION_STYLES = [
   'blur',
   'silhouette',
@@ -85,7 +92,8 @@ export function getClipConfig(): ClipConfig | null {
   if (!endpoint || !apiKey) return null;
   const raw = parseInt(process.env.OP_REPLAY_CLIPPER_MAX_DURATION || '60', 10);
   const maxDuration = isNaN(raw) || raw <= 0 ? 60 : raw;
-  return { endpoint: endpoint.replace(/\/+$/, ''), apiKey, maxDuration };
+  const allowFaceSwap = process.env.OP_REPLAY_CLIPPER_ALLOW_FACE_SWAP === 'true';
+  return { endpoint: endpoint.replace(/\/+$/, ''), apiKey, maxDuration, allowFaceSwap };
 }
 
 export function parseRouteUrl(url: string): { route: string; duration: number } | null {
