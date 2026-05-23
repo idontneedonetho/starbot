@@ -99,3 +99,40 @@ export function parseRouteUrl(url: string): { route: string; duration: number } 
     return null;
   }
 }
+
+interface CachedClip {
+  buffer: Buffer;
+  renderType: string;
+  sizeBytes: number;
+  createdAt: number;
+}
+
+const clipCache = new Map<string, CachedClip>();
+const CACHE_TTL = 5 * 60 * 1000;
+
+export function getCachedClip(jobId: string): CachedClip | undefined {
+  const c = clipCache.get(jobId);
+  if (!c) return undefined;
+  if (Date.now() - c.createdAt > CACHE_TTL) {
+    clipCache.delete(jobId);
+    return undefined;
+  }
+  return c;
+}
+
+export function deleteCachedClip(jobId: string): void {
+  clipCache.delete(jobId);
+}
+
+function cacheClip(jobId: string, data: ArrayBuffer, renderType: string): void {
+  const now = Date.now();
+  for (const [k, v] of clipCache) {
+    if (now - v.createdAt > CACHE_TTL) clipCache.delete(k);
+  }
+  clipCache.set(jobId, {
+    buffer: Buffer.from(data),
+    renderType,
+    sizeBytes: data.byteLength,
+    createdAt: now,
+  });
+}
