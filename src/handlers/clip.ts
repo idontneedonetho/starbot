@@ -1,6 +1,11 @@
 import type { CommandInteraction, ModalSubmitInteraction, AnySelectMenuInteraction } from 'discord.js';
 import {
+  AttachmentBuilder,
+  MessageFlags,
   EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
 } from 'discord.js';
 import { COLORS } from '../util.js';
 
@@ -128,6 +133,136 @@ export function deleteCachedClip(jobId: string): void {
   clipCache.delete(jobId);
 }
 
+function cacheClip(jobId: string, data: ArrayBuffer, renderType: string): void {
+  const now = Date.now();
+  for (const [k, v] of clipCache) {
+    if (now - v.createdAt > CACHE_TTL) clipCache.delete(k);
+  }
+  clipCache.set(jobId, {
+    buffer: Buffer.from(data),
+    renderType,
+    sizeBytes: data.byteLength,
+    createdAt: now,
+  });
+}
+
+interface SubmitResponse {
+  job_id: string;
+  status: 'queued';
+  queue: 'pending' | 'slow';
+  queue_position: number;
+  estimated_wait_seconds: number | null;
+}
+
+interface JobStatus {
+  job_id: string;
+  status: 'queued' | 'processing' | 'completed' | 'failed';
+  queue: 'pending' | 'slow' | null;
+  progress_pct: number | null;
+  progress_detail: string | null;
+  fps: number | null;
+  runner: string | null;
+  result_cached: boolean;
+  error: string | null;
+  attempts: number;
+  created_at: number | null;
+  started_at: number | null;
+  completed_at: number | null;
+}
+
+async function submitJob(config: ClipConfig, input: ClipJobInput): Promise<SubmitResponse> {
+  const res = await fetch(`${config.endpoint}/predict`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${config.apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ input }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Clip API returned ${res.status}: ${text || res.statusText}`);
+  }
+
+  return res.json() as Promise<SubmitResponse>;
+}
+
+async function getJobStatus(config: ClipConfig, jobId: string): Promise<JobStatus> {
+  const res = await fetch(`${config.endpoint}/jobs/${jobId}`, {
+    headers: { 'Authorization': `Bearer ${config.apiKey}` },
+  });
+
+  if (res.ok) return res.json() as Promise<JobStatus>;
+
+  if (res.status === 404) throw new Error(`Job ${jobId} not found`);
+  throw new Error(`Failed to check job status (${res.status})`);
+}
+
+async function downloadOutput(config: ClipConfig, jobId: string): Promise<ArrayBuffer> {
+  const res = await fetch(`${config.endpoint}/jobs/${jobId}/output`, {
+    headers: { 'Authorization': `Bearer ${config.apiKey}` },
+  });
+
+  if (!res.ok) {
+    if (res.status === 404) throw new Error('Clip output expired (TTL is 1 hour). Please try again.');
+    throw new Error(`Failed to download clip (${res.status})`);
+  }
+
+  return res.arrayBuffer();
+}
+
+function progressBar(pct: number): string {
+  const filled = Math.round(pct / 5);
+  return `${'█'.repeat(filled)}${'░'.repeat(20 - filled)} ${Math.round(pct)}%`;
+}
+
+export interface ProgressUpdate {
+  pct: number | null;
+  detail: string;
+  queuePosition?: number;
+  queue?: string | null;
+  eta?: number | null;
+  fps?: number | null;
+}
+
+export type ProgressCallback = (update: ProgressUpdate) => Promise<void>;
+
+export function createProgressUpdater(
+  interaction: CommandInteraction | ModalSubmitInteraction | AnySelectMenuInteraction,
+): ProgressCallback {
+  let lastUpdate = 0;
+  return async (update) => {
+    const now = Date.now();
+    if (now - lastUpdate < 4000) return;
+    lastUpdate = now;
+    try {
+      const embed = new EmbedBuilder().setColor(COLORS.blurple).setTitle('Creating Clip');
+
+      if (update.queuePosition !== undefined) {
+        const queueLabel = update.queue === 'slow' ? 'Slow Queue' : 'Queue';
+        embed.addFields(
+          { name: 'Status', value: queueLabel, inline: true },
+          { name: 'Position', value: `${update.queuePosition}`, inline: true },
+          { name: 'ETA', value: update.eta != null ? `~${Math.ceil(update.eta)}s` : '\u2014', inline: true },
+        );
+      } else if (update.pct !== null) {
+        const detailStr = update.fps != null
+          ? `\`${update.detail}\` (${update.fps} fps)`
+          : `\`${update.detail}\``;
+        embed.addFields(
+          { name: 'Progress', value: progressBar(update.pct), inline: false },
+          { name: 'Detail', value: detailStr, inline: false },
+        );
+      } else {
+        embed.setDescription(`\`${update.detail}\``);
+      }
+
+      await interaction.editReply({ embeds: [embed] });
+    } catch { /* rate-limited or interaction expired */ }
+  };
+}
+
 export async function processClip(
   config: ClipConfig,
   input: ClipJobInput,
@@ -158,4 +293,135 @@ export async function processClip(
   }
 
   throw new Error('Clip processing timed out after 10 minutes');
+}
+
+async function sendEphemeral(
+  interaction: CommandInteraction | ModalSubmitInteraction | AnySelectMenuInteraction,
+  title: string,
+  description: string,
+): Promise<void> {
+  const embed = new EmbedBuilder().setColor(COLORS.amber).setTitle(title).setDescription(description);
+  if (interaction.deferred || interaction.replied) {
+    await interaction.editReply({ embeds: [embed] });
+  } else {
+    await interaction.reply({ embeds: [embed], flags: [MessageFlags.Ephemeral] as [MessageFlags.Ephemeral] });
+  }
+}
+
+export async function handleClipRequest(
+  interaction: CommandInteraction | ModalSubmitInteraction | AnySelectMenuInteraction,
+  input: ClipJobInput,
+): Promise<void> {
+  const config = getClipConfig();
+  if (!config) {
+    await sendEphemeral(interaction, 'Service Unavailable', 'Clip service is not configured. Contact an admin.');
+    return;
+  }
+
+  const parsed = parseRouteUrl(input.route);
+  if (!parsed) {
+    await sendEphemeral(interaction,
+      'Invalid Route URL',
+      'Must be a connect.comma.ai URL with a time range:\n' +
+      '`https://connect.comma.ai/{dongle_id}/{route_id}/{start}/{end}`',
+    );
+    return;
+  }
+
+  if (parsed.duration > config.maxDuration) {
+    await sendEphemeral(interaction,
+      'Duration Exceeds Limit',
+      `Requested **${Math.round(parsed.duration)}s** — maximum is **${config.maxDuration}s**.`,
+    );
+    return;
+  }
+
+  const userId = interaction.user.id;
+  if (!acquireUserLock(userId)) {
+    await sendEphemeral(interaction,
+      'Clip In Progress',
+      'You already have a clip being processed. Wait for it to finish before requesting another.',
+    );
+    return;
+  }
+
+  if (!interaction.deferred && !interaction.replied) {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  }
+
+  try {
+    const onProgress = createProgressUpdater(interaction);
+    const { data, jobId } = await processClip(config, input, onProgress);
+
+    const maxBytes = 25 * 1024 * 1024;
+    if (data.byteLength > maxBytes) {
+      const embed = new EmbedBuilder()
+        .setColor(COLORS.amber)
+        .setTitle('Clip Too Large')
+        .setDescription(
+          `Result is **${(data.byteLength / 1024 / 1024).toFixed(1)} MB** — Discord limit is 25 MB.\n` +
+          `Try a lower \`file-size\` value (target was ${input.fileSize ?? 9} MB).`,
+        );
+      await interaction.editReply({ embeds: [embed] });
+      return;
+    }
+
+    const renderLabel = input.renderType ?? 'ui';
+    const sizeLabel = `${(data.byteLength / 1024 / 1024).toFixed(1)} MB`;
+
+    cacheClip(jobId, data, renderLabel);
+
+    const embed = new EmbedBuilder()
+      .setColor(COLORS.green)
+      .setTitle('Clip Ready')
+      .addFields(
+        { name: 'Type', value: `\`${renderLabel}\``, inline: true },
+        { name: 'Size', value: sizeLabel, inline: true },
+      )
+      .setFooter({ text: 'Click Publish to share in channel' });
+
+    const attachment = new AttachmentBuilder(Buffer.from(data), { name: 'clip.mp4' });
+
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`clip_pub_${jobId}`)
+        .setLabel('Publish')
+        .setStyle(ButtonStyle.Primary),
+    );
+
+    await interaction.editReply({ embeds: [embed], files: [attachment], components: [row] });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error';
+    console.error('[clip]', msg);
+    try {
+      const embed = new EmbedBuilder()
+        .setColor(0xe74c3c)
+        .setTitle('Clip Failed')
+        .setDescription(msg);
+      await interaction.editReply({ embeds: [embed] });
+    } catch { /* interaction may have expired */ }
+  } finally {
+    releaseUserLock(userId);
+  }
+}
+
+export function parseAdvancedOptions(text: string): Partial<ClipJobInput> {
+  const result: Partial<ClipJobInput> = {};
+  for (const line of text.split('\n')) {
+    const colonIdx = line.indexOf(':');
+    if (colonIdx === -1) continue;
+    const key = line.slice(0, colonIdx).trim().toLowerCase();
+    const val = line.slice(colonIdx + 1).trim();
+
+    if (key === 'includeaudio') {
+      result.includeAudio = val === 'true';
+    } else if (key === 'anonymizationprofile' && (ANONYMIZATION_PROFILES as readonly string[]).includes(val)) {
+      result.anonymizationProfile = val;
+    } else if (key === 'passengerredactionstyle' && (PASSENGER_REDACTION_STYLES as readonly string[]).includes(val)) {
+      result.passengerRedactionStyle = val;
+    } else if (key === 'uialtvariant' && (UI_ALT_VARIANTS as readonly string[]).includes(val)) {
+      result.uiAltVariant = val;
+    }
+  }
+  return result;
 }
