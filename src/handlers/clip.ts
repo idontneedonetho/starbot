@@ -256,9 +256,13 @@ export function createProgressUpdater(
           embed.setDescription(update.detail);
         }
       } else if (update.pct !== null) {
+        let detail = update.detail;
+        if (update.fps != null) {
+          detail = detail.replace(/\s*\|\s*[\d.]+ fps$/i, '');
+        }
         const detailStr = update.fps != null
-          ? `\`${update.detail}\` (${update.fps} fps)`
-          : `\`${update.detail}\``;
+          ? `\`${detail}\` (${update.fps.toFixed(2)} fps)`
+          : `\`${detail}\``;
         embed.addFields(
           { name: 'Progress', value: progressBar(update.pct), inline: false },
           { name: 'Detail', value: detailStr, inline: false },
