@@ -7,6 +7,7 @@ import {
   ButtonBuilder,
   ButtonStyle,
 } from 'discord.js';
+import { EventSource } from 'eventsource';
 import { COLORS } from '../util.js';
 
 export interface ClipConfig {
@@ -154,20 +155,36 @@ interface SubmitResponse {
   estimated_wait_seconds: number | null;
 }
 
-interface JobStatus {
-  job_id: string;
-  status: 'queued' | 'processing' | 'completed' | 'failed';
-  queue: 'pending' | 'slow' | null;
-  progress_pct: number | null;
-  progress_detail: string | null;
-  fps: number | null;
-  runner: string | null;
-  result_cached: boolean;
-  error: string | null;
+interface SseQueuedEvent {
+  position: number;
+  eta_seconds: number | null;
+  queue: string;
+}
+
+interface SseRequeuedEvent {
+  reason: string;
   attempts: number;
-  created_at: number | null;
-  started_at: number | null;
-  completed_at: number | null;
+  max_attempts: number;
+  queue_position: number;
+  queue: string;
+}
+
+interface SseStartedEvent {
+  runner: string;
+}
+
+interface SseProgressEvent {
+  pct: number;
+  fps: number | null;
+  detail: string;
+}
+
+interface SseCompletedEvent {
+  output_url: string;
+}
+
+interface SseFailedEvent {
+  error: string;
 }
 
 async function submitJob(config: ClipConfig, input: ClipJobInput): Promise<SubmitResponse> {
@@ -186,17 +203,6 @@ async function submitJob(config: ClipConfig, input: ClipJobInput): Promise<Submi
   }
 
   return res.json() as Promise<SubmitResponse>;
-}
-
-async function getJobStatus(config: ClipConfig, jobId: string): Promise<JobStatus> {
-  const res = await fetch(`${config.endpoint}/jobs/${jobId}`, {
-    headers: { 'Authorization': `Bearer ${config.apiKey}` },
-  });
-
-  if (res.ok) return res.json() as Promise<JobStatus>;
-
-  if (res.status === 404) throw new Error(`Job ${jobId} not found`);
-  throw new Error(`Failed to check job status (${res.status})`);
 }
 
 async function downloadOutput(config: ClipConfig, jobId: string): Promise<ArrayBuffer> {
@@ -246,6 +252,9 @@ export function createProgressUpdater(
           { name: 'Position', value: `${update.queuePosition}`, inline: true },
           { name: 'ETA', value: update.eta != null ? `~${Math.ceil(update.eta)}s` : '\u2014', inline: true },
         );
+        if (update.detail !== 'Queued') {
+          embed.setDescription(update.detail);
+        }
       } else if (update.pct !== null) {
         const detailStr = update.fps != null
           ? `\`${update.detail}\` (${update.fps} fps)`
@@ -273,26 +282,65 @@ export async function processClip(
   const pos = submitRes.queue_position === -1 ? 0 : submitRes.queue_position;
   await onProgress({ pct: null, detail: 'Queued', queuePosition: pos, queue: submitRes.queue, eta: submitRes.estimated_wait_seconds });
 
-  const POLL_INTERVAL = 3000;
-  const MAX_TIME = 10 * 60 * 1000;
-  const start = Date.now();
+  return new Promise<{ data: ArrayBuffer; jobId: string }>((resolve, reject) => {
+    const MAX_TIME = 10 * 60 * 1000;
+    const timeout = setTimeout(() => {
+      es.close();
+      reject(new Error('Clip processing timed out after 10 minutes'));
+    }, MAX_TIME);
 
-  while (Date.now() - start < MAX_TIME) {
-    await new Promise(r => setTimeout(r, POLL_INTERVAL));
-    const status = await getJobStatus(config, jobId);
+    const url = `${config.endpoint}/jobs/${jobId}/stream`;
+    const es = new EventSource(url, {
+      fetch: (input, init) => fetch(input, { ...init, headers: { ...init?.headers, 'Authorization': `Bearer ${config.apiKey}` } }),
+    });
 
-    if (status.status === 'completed') {
-      const data = await downloadOutput(config, jobId);
-      return { data, jobId };
-    }
-    if (status.status === 'failed') throw new Error(status.error || 'Clip processing failed');
+    es.addEventListener('queued', (e: Event | MessageEvent) => {
+      const d = JSON.parse((e as MessageEvent).data) as SseQueuedEvent;
+      onProgress({ pct: null, detail: 'Queued', queuePosition: d.position, queue: d.queue, eta: d.eta_seconds }).catch(() => {});
+    });
 
-    const detail = status.progress_detail
-      ?? (status.status === 'queued' ? 'Waiting in queue\u2026' : 'Processing\u2026');
-    await onProgress({ pct: status.progress_pct, detail, queue: status.queue, fps: status.fps });
-  }
+    es.addEventListener('requeued', (e: Event | MessageEvent) => {
+      const d = JSON.parse((e as MessageEvent).data) as SseRequeuedEvent;
+      onProgress({ pct: null, detail: `Retrying (${d.attempts}/${d.max_attempts}): ${d.reason}`, queuePosition: d.queue_position, queue: d.queue }).catch(() => {});
+    });
 
-  throw new Error('Clip processing timed out after 10 minutes');
+    es.addEventListener('started', (e: Event | MessageEvent) => {
+      const d = JSON.parse((e as MessageEvent).data) as SseStartedEvent;
+      void d;
+      onProgress({ pct: null, detail: 'Processing\u2026' }).catch(() => {});
+    });
+
+    es.addEventListener('progress', (e: Event | MessageEvent) => {
+      const d = JSON.parse((e as MessageEvent).data) as SseProgressEvent;
+      onProgress({ pct: d.pct, detail: d.detail, fps: d.fps }).catch(() => {});
+    });
+
+    es.addEventListener('completed', async (e: Event | MessageEvent) => {
+      const d = JSON.parse((e as MessageEvent).data) as SseCompletedEvent;
+      void d;
+      clearTimeout(timeout);
+      es.close();
+      try {
+        const data = await downloadOutput(config, jobId);
+        resolve({ data, jobId });
+      } catch (err) {
+        reject(err);
+      }
+    });
+
+    es.addEventListener('failed', (e: Event | MessageEvent) => {
+      const d = JSON.parse((e as MessageEvent).data) as SseFailedEvent;
+      clearTimeout(timeout);
+      es.close();
+      reject(new Error(d.error || 'Clip processing failed'));
+    });
+
+    es.onerror = () => {
+      clearTimeout(timeout);
+      es.close();
+      reject(new Error('Lost connection to clip service'));
+    };
+  });
 }
 
 async function sendEphemeral(
