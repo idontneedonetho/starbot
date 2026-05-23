@@ -40,22 +40,23 @@ export const RENDER_TYPE_MAP: Record<string, string> = {
   '360-forward-upon-wide': '360_forward_upon_wide',
 };
 
-export const VALID_RENDER_TYPES = Object.keys(RENDER_TYPE_MAP);
-
-export const ANONYMIZATION_PROFILES = [
-  'none',
-  'driver unchanged, passenger hidden',
-  'driver unchanged, passenger face swap',
-  'driver face swap, passenger unchanged',
-  'driver face swap, passenger hidden',
-  'driver face swap, passenger face swap',
-] as const;
-
 export function getAnonymizationOptions(config: ClipConfig | null): string[] {
-  const all = ANONYMIZATION_PROFILES as readonly string[];
-  if (!config || config.allowFaceSwap) return [...all];
-  return all.filter(p => !p.includes('face swap'));
+  if (!config || config.allowFaceSwap) return [...ANONYMIZATION_PROFILES];
+  return ANONYMIZATION_PROFILES.filter(p => !p.includes('face swap'));
 }
+
+export const ANONYMIZATION_LABELS: Record<string, string> = {
+  'none': 'None',
+  'driver unchanged, passenger hidden': 'Driver Unchanged, Passenger Hidden',
+  'driver unchanged, passenger face swap': 'Driver Unchanged, Passenger Face Swap',
+  'driver face swap, passenger unchanged': 'Driver Face Swap, Passenger Unchanged',
+  'driver face swap, passenger hidden': 'Driver Face Swap, Passenger Hidden',
+  'driver face swap, passenger face swap': 'Driver Face Swap, Passenger Face Swap',
+};
+
+export const ANONYMIZATION_PROFILES = Object.keys(ANONYMIZATION_LABELS);
+
+export const VALID_RENDER_TYPES = Object.keys(RENDER_TYPE_MAP);
 
 export const PASSENGER_REDACTION_STYLES = [
   'blur',
@@ -348,9 +349,10 @@ export async function processClip(
     });
 
     es.onerror = () => {
-      clearTimeout(timeout);
-      es.close();
-      reject(new Error('Lost connection to clip service'));
+      if (es.readyState === EventSource.CLOSED) {
+        clearTimeout(timeout);
+        reject(new Error('Lost connection to clip service'));
+      }
     };
   });
 }

@@ -31,6 +31,7 @@ import {
   deleteCachedClip,
   getClipConfig,
   getAnonymizationOptions,
+  ANONYMIZATION_LABELS,
   RENDER_TYPE_MAP,
   RENDER_TYPES_WITH_ANONYMIZATION,
   PASSENGER_REDACTION_STYLES,
@@ -569,7 +570,7 @@ export class ClipCommands {
     });
   }
 
-  @Slash({ description: '360\u00b0 + forward on wide (up to 8K)', name: '360-forward-upon-wide' })
+  @Slash({ description: '360\u00b0 + forward on wide', name: '360-forward-upon-wide' })
   async s360ForwardUponWide(
     @SlashOption({
       name: 'url',
@@ -682,7 +683,7 @@ export class ClipCommands {
         .setPlaceholder('Select anonymization profile\u2026')
         .setMinValues(1)
         .addOptions(
-          ...anonOptions.map(p => ({ label: p.charAt(0).toUpperCase() + p.slice(1), value: p })),
+          ...anonOptions.map(p => ({ label: ANONYMIZATION_LABELS[p], value: p })),
         );
       const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(anonSelect);
       const embed = new EmbedBuilder()
