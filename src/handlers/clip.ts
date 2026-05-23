@@ -1,3 +1,7 @@
+import type { CommandInteraction, ModalSubmitInteraction, AnySelectMenuInteraction } from 'discord.js';
+import {
+  EmbedBuilder,
+} from 'discord.js';
 import { COLORS } from '../util.js';
 
 export interface ClipConfig {
@@ -124,81 +128,34 @@ export function deleteCachedClip(jobId: string): void {
   clipCache.delete(jobId);
 }
 
-function cacheClip(jobId: string, data: ArrayBuffer, renderType: string): void {
-  const now = Date.now();
-  for (const [k, v] of clipCache) {
-    if (now - v.createdAt > CACHE_TTL) clipCache.delete(k);
-  }
-  clipCache.set(jobId, {
-    buffer: Buffer.from(data),
-    renderType,
-    sizeBytes: data.byteLength,
-    createdAt: now,
-  });
-}
+export async function processClip(
+  config: ClipConfig,
+  input: ClipJobInput,
+  onProgress: ProgressCallback,
+): Promise<{ data: ArrayBuffer; jobId: string }> {
+  const submitRes = await submitJob(config, input);
+  const jobId = submitRes.job_id;
+  const pos = submitRes.queue_position === -1 ? 0 : submitRes.queue_position;
+  await onProgress({ pct: null, detail: 'Queued', queuePosition: pos, queue: submitRes.queue, eta: submitRes.estimated_wait_seconds });
 
-interface SubmitResponse {
-  job_id: string;
-  status: 'queued';
-  queue: 'pending' | 'slow';
-  queue_position: number;
-  estimated_wait_seconds: number | null;
-}
+  const POLL_INTERVAL = 3000;
+  const MAX_TIME = 10 * 60 * 1000;
+  const start = Date.now();
 
-interface JobStatus {
-  job_id: string;
-  status: 'queued' | 'processing' | 'completed' | 'failed';
-  queue: 'pending' | 'slow' | null;
-  progress_pct: number | null;
-  progress_detail: string | null;
-  fps: number | null;
-  runner: string | null;
-  result_cached: boolean;
-  error: string | null;
-  attempts: number;
-  created_at: number | null;
-  started_at: number | null;
-  completed_at: number | null;
-}
+  while (Date.now() - start < MAX_TIME) {
+    await new Promise(r => setTimeout(r, POLL_INTERVAL));
+    const status = await getJobStatus(config, jobId);
 
-async function submitJob(config: ClipConfig, input: ClipJobInput): Promise<SubmitResponse> {
-  const res = await fetch(`${config.endpoint}/predict`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${config.apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ input }),
-  });
+    if (status.status === 'completed') {
+      const data = await downloadOutput(config, jobId);
+      return { data, jobId };
+    }
+    if (status.status === 'failed') throw new Error(status.error || 'Clip processing failed');
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`Clip API returned ${res.status}: ${text || res.statusText}`);
+    const detail = status.progress_detail
+      ?? (status.status === 'queued' ? 'Waiting in queue\u2026' : 'Processing\u2026');
+    await onProgress({ pct: status.progress_pct, detail, queue: status.queue, fps: status.fps });
   }
 
-  return res.json() as Promise<SubmitResponse>;
-}
-
-async function getJobStatus(config: ClipConfig, jobId: string): Promise<JobStatus> {
-  const res = await fetch(`${config.endpoint}/jobs/${jobId}`, {
-    headers: { 'Authorization': `Bearer ${config.apiKey}` },
-  });
-
-  if (res.ok) return res.json() as Promise<JobStatus>;
-
-  if (res.status === 404) throw new Error(`Job ${jobId} not found`);
-  throw new Error(`Failed to check job status (${res.status})`);
-}
-
-async function downloadOutput(config: ClipConfig, jobId: string): Promise<ArrayBuffer> {
-  const res = await fetch(`${config.endpoint}/jobs/${jobId}/output`, {
-    headers: { 'Authorization': `Bearer ${config.apiKey}` },
-  });
-
-  if (!res.ok) {
-    if (res.status === 404) throw new Error('Clip output expired (TTL is 1 hour). Please try again.');
-    throw new Error(`Failed to download clip (${res.status})`);
-  }
-
-  return res.arrayBuffer();
+  throw new Error('Clip processing timed out after 10 minutes');
 }
