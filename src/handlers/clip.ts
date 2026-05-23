@@ -71,7 +71,7 @@ export const UI_ALT_VARIANTS = [
 ] as const;
 
 export const RENDER_TYPES_WITH_ANONYMIZATION = new Set([
-  'driver-debug', 'driver', '360', '360-ui', '360_forward_upon_wide',
+  'driver-debug', 'driver', '360', '360-ui', '360-forward-upon-wide',
 ]);
 
 const activeUsers = new Set<string>();
