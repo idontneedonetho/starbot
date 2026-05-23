@@ -793,4 +793,38 @@ export class ClipCommands {
     await handleClipRequest(interaction, input);
   }
 
+  @ButtonComponent({ id: /^clip_pub_/ })
+  async publishClip(interaction: ButtonInteraction) {
+    const jobId = interaction.customId.slice('clip_pub_'.length);
+    const cached = getCachedClip(jobId);
+
+    if (!cached) {
+      const embed = new EmbedBuilder()
+        .setColor(COLORS.amber)
+        .setTitle('Clip Expired')
+        .setDescription('Cached clip has expired. Please create a new one.');
+      await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const channel = interaction.channel;
+    if (!channel?.isSendable()) {
+      await interaction.reply({
+        content: 'Cannot send messages in this channel.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const attachment = new AttachmentBuilder(cached.buffer, { name: 'clip.mp4' });
+    await channel.send({ content: `<@${interaction.user.id}>`, files: [attachment] });
+
+    deleteCachedClip(jobId);
+
+    const updated = new EmbedBuilder()
+      .setColor(COLORS.green)
+      .setTitle('Published')
+      .setDescription('Your clip has been shared in the channel.');
+    await interaction.update({ embeds: [updated], components: [], files: [], attachments: [] });
+  }
 }
