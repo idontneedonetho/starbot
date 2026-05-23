@@ -136,3 +136,69 @@ function cacheClip(jobId: string, data: ArrayBuffer, renderType: string): void {
     createdAt: now,
   });
 }
+
+interface SubmitResponse {
+  job_id: string;
+  status: 'queued';
+  queue: 'pending' | 'slow';
+  queue_position: number;
+  estimated_wait_seconds: number | null;
+}
+
+interface JobStatus {
+  job_id: string;
+  status: 'queued' | 'processing' | 'completed' | 'failed';
+  queue: 'pending' | 'slow' | null;
+  progress_pct: number | null;
+  progress_detail: string | null;
+  fps: number | null;
+  runner: string | null;
+  result_cached: boolean;
+  error: string | null;
+  attempts: number;
+  created_at: number | null;
+  started_at: number | null;
+  completed_at: number | null;
+}
+
+async function submitJob(config: ClipConfig, input: ClipJobInput): Promise<SubmitResponse> {
+  const res = await fetch(`${config.endpoint}/predict`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${config.apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ input }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Clip API returned ${res.status}: ${text || res.statusText}`);
+  }
+
+  return res.json() as Promise<SubmitResponse>;
+}
+
+async function getJobStatus(config: ClipConfig, jobId: string): Promise<JobStatus> {
+  const res = await fetch(`${config.endpoint}/jobs/${jobId}`, {
+    headers: { 'Authorization': `Bearer ${config.apiKey}` },
+  });
+
+  if (res.ok) return res.json() as Promise<JobStatus>;
+
+  if (res.status === 404) throw new Error(`Job ${jobId} not found`);
+  throw new Error(`Failed to check job status (${res.status})`);
+}
+
+async function downloadOutput(config: ClipConfig, jobId: string): Promise<ArrayBuffer> {
+  const res = await fetch(`${config.endpoint}/jobs/${jobId}/output`, {
+    headers: { 'Authorization': `Bearer ${config.apiKey}` },
+  });
+
+  if (!res.ok) {
+    if (res.status === 404) throw new Error('Clip output expired (TTL is 1 hour). Please try again.');
+    throw new Error(`Failed to download clip (${res.status})`);
+  }
+
+  return res.arrayBuffer();
+}
