@@ -4,6 +4,7 @@ import { loadConfig } from './config.js';
 import './handlers/events.js';
 import './handlers/buttons.js';
 import './handlers/modals.js';
+import './handlers/clip-commands.js';
 
 const config = loadConfig();
 
