@@ -432,13 +432,15 @@ export async function handleClipRequest(
     const onProgress = createProgressUpdater(interaction);
     const { data, jobId } = await processClip(config, input, onProgress);
 
-    const maxBytes = 25 * 1024 * 1024;
+    const rawMaxMb = parseInt(process.env.GUILD_MAX_FILE_MB || '25', 10);
+    const maxFileMb = isNaN(rawMaxMb) || rawMaxMb <= 0 ? 25 : rawMaxMb;
+    const maxBytes = maxFileMb * 1024 * 1024;
     if (data.byteLength > maxBytes) {
       const embed = new EmbedBuilder()
         .setColor(COLORS.amber)
         .setTitle('Clip Too Large')
         .setDescription(
-          `Result is **${(data.byteLength / 1024 / 1024).toFixed(1)} MB** — Discord limit is 25 MB.\n` +
+          `Result is **${(data.byteLength / 1024 / 1024).toFixed(1)} MB** — Discord limit is ${maxFileMb} MB.\n` +
           `Try a lower \`file-size\` value (target was ${input.fileSize ?? 9} MB).`,
         );
       await interaction.editReply({ embeds: [embed] });
