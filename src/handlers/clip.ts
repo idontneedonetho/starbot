@@ -482,7 +482,7 @@ export async function handleClipRequest(
     console.error('[clip]', msg);
     try {
       const embed = new EmbedBuilder()
-        .setColor(0xe74c3c)
+        .setColor(COLORS.red)
         .setTitle('Clip Failed')
         .setDescription(msg);
       await interaction.editReply({ embeds: [embed] });
