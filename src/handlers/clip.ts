@@ -41,7 +41,7 @@ export const RENDER_TYPE_MAP: Record<string, string> = {
 };
 
 export function getAnonymizationOptions(config: ClipConfig | null): string[] {
-  if (!config || config.allowFaceSwap) return [...ANONYMIZATION_PROFILES];
+  if (config?.allowFaceSwap) return [...ANONYMIZATION_PROFILES];
   return ANONYMIZATION_PROFILES.filter(p => !p.includes('face swap'));
 }
 
