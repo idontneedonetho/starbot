@@ -37,6 +37,13 @@ export class BotEvents {
 
     console.log(`Logged in as ${client.user!.tag}`);
 
+    const client_ = client as Client;
+    try {
+      await client_.initApplicationCommands();
+    } catch (err) {
+      console.error('Failed to init application commands:', err);
+    }
+
     const guild = client.guilds.cache.get(config.guildId);
     if (!guild) {
       console.error(`Guild ${config.guildId} not found`);
