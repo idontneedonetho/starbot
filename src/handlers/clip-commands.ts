@@ -49,6 +49,41 @@ import { COLORS } from '../util.js';
 const MODAL_ID = 'clip_form';
 const guildId = loadConfig().guildId;
 
+const URL_OPTION = {
+  name: 'url',
+  description: 'connect.comma.ai route URL with time range',
+  required: true,
+  type: ApplicationCommandOptionType.String,
+} as const;
+
+const FILE_SIZE_OPTION = {
+  name: 'file-size',
+  description: 'Target file size in MB (5–200, default: 9)',
+  required: false,
+  type: ApplicationCommandOptionType.Integer,
+} as const;
+
+const INCLUDE_AUDIO_OPTION = {
+  name: 'include-audio',
+  description: 'Include audio from qcamera (fails if unavailable)',
+  required: false,
+  type: ApplicationCommandOptionType.Boolean,
+} as const;
+
+const ANON_PROFILE_OPTION = {
+  name: 'anonymization-profile',
+  description: 'Face anonymization for driver camera renders',
+  required: false,
+  type: ApplicationCommandOptionType.String,
+} as const;
+
+const PRS_OPTION = {
+  name: 'passenger-redaction-style',
+  description: 'How hidden passengers are obscured (blur by default)',
+  required: false,
+  type: ApplicationCommandOptionType.String,
+} as const;
+
 const pendingForm = new Map<string, { input: ClipJobInput; createdAt: number }>();
 
 function setPendingForm(userId: string, input: ClipJobInput) {
@@ -145,45 +180,25 @@ export class ClipCommands {
 
   @Slash({ description: 'openpilot UI overlay render', name: 'ui' })
   async ui(
-    @SlashOption({
-      name: 'url',
-      description: 'connect.comma.ai route URL with time range',
-      required: true,
-      type: ApplicationCommandOptionType.String,
-    })
+    @SlashOption(URL_OPTION)
     url: string,
-    @SlashOption({
-      name: 'file-size',
-      description: 'Target file size in MB (5\u2013200, default: 9)',
-      required: false,
-      type: ApplicationCommandOptionType.Integer,
-    })
+    @SlashOption(FILE_SIZE_OPTION)
     fileSize: number | undefined,
-    @SlashOption({
-      name: 'include-audio',
-      description: 'Include audio from qcamera (fails if unavailable)',
-      required: false,
-      type: ApplicationCommandOptionType.Boolean,
-    })
+    @SlashOption(INCLUDE_AUDIO_OPTION)
     includeAudio: boolean | undefined,
     interaction: CommandInteraction,
   ) {
     await handleClipRequest(interaction, {
       route: url,
       renderType: 'ui',
-      fileSize: fileSize ?? undefined,
+      fileSize,
       includeAudio: includeAudio || undefined,
     });
   }
 
   @Slash({ description: 'Alternate UI composition (requires variant)', name: 'ui-alt' })
   async uiAlt(
-    @SlashOption({
-      name: 'url',
-      description: 'connect.comma.ai route URL with time range',
-      required: true,
-      type: ApplicationCommandOptionType.String,
-    })
+    @SlashOption(URL_OPTION)
     url: string,
     @SlashChoice(...UI_ALT_SLASH_CHOICES)
     @SlashOption({
@@ -193,19 +208,9 @@ export class ClipCommands {
       type: ApplicationCommandOptionType.String,
     })
     variant: string,
-    @SlashOption({
-      name: 'file-size',
-      description: 'Target file size in MB (5\u2013200, default: 9)',
-      required: false,
-      type: ApplicationCommandOptionType.Integer,
-    })
+    @SlashOption(FILE_SIZE_OPTION)
     fileSize: number | undefined,
-    @SlashOption({
-      name: 'include-audio',
-      description: 'Include audio from qcamera (fails if unavailable)',
-      required: false,
-      type: ApplicationCommandOptionType.Boolean,
-    })
+    @SlashOption(INCLUDE_AUDIO_OPTION)
     includeAudio: boolean | undefined,
     interaction: CommandInteraction,
   ) {
@@ -213,49 +218,24 @@ export class ClipCommands {
       route: url,
       renderType: 'ui-alt',
       uiAltVariant: variant,
-      fileSize: fileSize ?? undefined,
+      fileSize,
       includeAudio: includeAudio || undefined,
     });
   }
 
   @Slash({ description: 'Raw driver camera', name: 'driver-debug' })
   async driverDebug(
-    @SlashOption({
-      name: 'url',
-      description: 'connect.comma.ai route URL with time range',
-      required: true,
-      type: ApplicationCommandOptionType.String,
-    })
+    @SlashOption(URL_OPTION)
     url: string,
     @SlashChoice(...ANONYMIZATION_SLASH_CHOICES)
-    @SlashOption({
-      name: 'anonymization-profile',
-      description: 'Face anonymization for driver camera renders',
-      required: false,
-      type: ApplicationCommandOptionType.String,
-    })
+    @SlashOption(ANON_PROFILE_OPTION)
     anonymizationProfile: string | undefined,
     @SlashChoice(...PRS_SLASH_CHOICES)
-    @SlashOption({
-      name: 'passenger-redaction-style',
-      description: 'How hidden passengers are obscured (blur by default)',
-      required: false,
-      type: ApplicationCommandOptionType.String,
-    })
+    @SlashOption(PRS_OPTION)
     passengerRedactionStyle: string | undefined,
-    @SlashOption({
-      name: 'file-size',
-      description: 'Target file size in MB (5\u2013200, default: 9)',
-      required: false,
-      type: ApplicationCommandOptionType.Integer,
-    })
+    @SlashOption(FILE_SIZE_OPTION)
     fileSize: number | undefined,
-    @SlashOption({
-      name: 'include-audio',
-      description: 'Include audio from qcamera (fails if unavailable)',
-      required: false,
-      type: ApplicationCommandOptionType.Boolean,
-    })
+    @SlashOption(INCLUDE_AUDIO_OPTION)
     includeAudio: boolean | undefined,
     interaction: CommandInteraction,
   ) {
@@ -264,115 +244,60 @@ export class ClipCommands {
       renderType: 'driver-debug',
       anonymizationProfile: validateAnonymization(anonymizationProfile),
       passengerRedactionStyle: passengerRedactionStyle || undefined,
-      fileSize: fileSize ?? undefined,
+      fileSize,
       includeAudio: includeAudio || undefined,
     });
   }
 
   @Slash({ description: 'Road camera, fast transcode', name: 'forward' })
   async forward(
-    @SlashOption({
-      name: 'url',
-      description: 'connect.comma.ai route URL with time range',
-      required: true,
-      type: ApplicationCommandOptionType.String,
-    })
+    @SlashOption(URL_OPTION)
     url: string,
-    @SlashOption({
-      name: 'file-size',
-      description: 'Target file size in MB (5\u2013200, default: 9)',
-      required: false,
-      type: ApplicationCommandOptionType.Integer,
-    })
+    @SlashOption(FILE_SIZE_OPTION)
     fileSize: number | undefined,
-    @SlashOption({
-      name: 'include-audio',
-      description: 'Include audio from qcamera (fails if unavailable)',
-      required: false,
-      type: ApplicationCommandOptionType.Boolean,
-    })
+    @SlashOption(INCLUDE_AUDIO_OPTION)
     includeAudio: boolean | undefined,
     interaction: CommandInteraction,
   ) {
     await handleClipRequest(interaction, {
       route: url,
       renderType: 'forward',
-      fileSize: fileSize ?? undefined,
+      fileSize,
       includeAudio: includeAudio || undefined,
     });
   }
 
   @Slash({ description: 'Wide-angle camera, fast transcode', name: 'wide' })
   async wide(
-    @SlashOption({
-      name: 'url',
-      description: 'connect.comma.ai route URL with time range',
-      required: true,
-      type: ApplicationCommandOptionType.String,
-    })
+    @SlashOption(URL_OPTION)
     url: string,
-    @SlashOption({
-      name: 'file-size',
-      description: 'Target file size in MB (5\u2013200, default: 9)',
-      required: false,
-      type: ApplicationCommandOptionType.Integer,
-    })
+    @SlashOption(FILE_SIZE_OPTION)
     fileSize: number | undefined,
-    @SlashOption({
-      name: 'include-audio',
-      description: 'Include audio from qcamera (fails if unavailable)',
-      required: false,
-      type: ApplicationCommandOptionType.Boolean,
-    })
+    @SlashOption(INCLUDE_AUDIO_OPTION)
     includeAudio: boolean | undefined,
     interaction: CommandInteraction,
   ) {
     await handleClipRequest(interaction, {
       route: url,
       renderType: 'wide',
-      fileSize: fileSize ?? undefined,
+      fileSize,
       includeAudio: includeAudio || undefined,
     });
   }
 
   @Slash({ description: 'Driver camera, fast transcode', name: 'driver' })
   async driver(
-    @SlashOption({
-      name: 'url',
-      description: 'connect.comma.ai route URL with time range',
-      required: true,
-      type: ApplicationCommandOptionType.String,
-    })
+    @SlashOption(URL_OPTION)
     url: string,
     @SlashChoice(...ANONYMIZATION_SLASH_CHOICES)
-    @SlashOption({
-      name: 'anonymization-profile',
-      description: 'Face anonymization for driver camera renders',
-      required: false,
-      type: ApplicationCommandOptionType.String,
-    })
+    @SlashOption(ANON_PROFILE_OPTION)
     anonymizationProfile: string | undefined,
     @SlashChoice(...PRS_SLASH_CHOICES)
-    @SlashOption({
-      name: 'passenger-redaction-style',
-      description: 'How hidden passengers are obscured (blur by default)',
-      required: false,
-      type: ApplicationCommandOptionType.String,
-    })
+    @SlashOption(PRS_OPTION)
     passengerRedactionStyle: string | undefined,
-    @SlashOption({
-      name: 'file-size',
-      description: 'Target file size in MB (5\u2013200, default: 9)',
-      required: false,
-      type: ApplicationCommandOptionType.Integer,
-    })
+    @SlashOption(FILE_SIZE_OPTION)
     fileSize: number | undefined,
-    @SlashOption({
-      name: 'include-audio',
-      description: 'Include audio from qcamera (fails if unavailable)',
-      required: false,
-      type: ApplicationCommandOptionType.Boolean,
-    })
+    @SlashOption(INCLUDE_AUDIO_OPTION)
     includeAudio: boolean | undefined,
     interaction: CommandInteraction,
   ) {
@@ -381,49 +306,24 @@ export class ClipCommands {
       renderType: 'driver',
       anonymizationProfile: validateAnonymization(anonymizationProfile),
       passengerRedactionStyle: passengerRedactionStyle || undefined,
-      fileSize: fileSize ?? undefined,
+      fileSize,
       includeAudio: includeAudio || undefined,
     });
   }
 
   @Slash({ description: 'Equirectangular 360\u00b0 sphere', name: '360' })
   async s360(
-    @SlashOption({
-      name: 'url',
-      description: 'connect.comma.ai route URL with time range',
-      required: true,
-      type: ApplicationCommandOptionType.String,
-    })
+    @SlashOption(URL_OPTION)
     url: string,
     @SlashChoice(...ANONYMIZATION_SLASH_CHOICES)
-    @SlashOption({
-      name: 'anonymization-profile',
-      description: 'Face anonymization for driver camera renders',
-      required: false,
-      type: ApplicationCommandOptionType.String,
-    })
+    @SlashOption(ANON_PROFILE_OPTION)
     anonymizationProfile: string | undefined,
     @SlashChoice(...PRS_SLASH_CHOICES)
-    @SlashOption({
-      name: 'passenger-redaction-style',
-      description: 'How hidden passengers are obscured (blur by default)',
-      required: false,
-      type: ApplicationCommandOptionType.String,
-    })
+    @SlashOption(PRS_OPTION)
     passengerRedactionStyle: string | undefined,
-    @SlashOption({
-      name: 'file-size',
-      description: 'Target file size in MB (5\u2013200, default: 9)',
-      required: false,
-      type: ApplicationCommandOptionType.Integer,
-    })
+    @SlashOption(FILE_SIZE_OPTION)
     fileSize: number | undefined,
-    @SlashOption({
-      name: 'include-audio',
-      description: 'Include audio from qcamera (fails if unavailable)',
-      required: false,
-      type: ApplicationCommandOptionType.Boolean,
-    })
+    @SlashOption(INCLUDE_AUDIO_OPTION)
     includeAudio: boolean | undefined,
     interaction: CommandInteraction,
   ) {
@@ -432,49 +332,24 @@ export class ClipCommands {
       renderType: '360',
       anonymizationProfile: validateAnonymization(anonymizationProfile),
       passengerRedactionStyle: passengerRedactionStyle || undefined,
-      fileSize: fileSize ?? undefined,
+      fileSize,
       includeAudio: includeAudio || undefined,
     });
   }
 
   @Slash({ description: '360\u00b0 with openpilot HUD overlay', name: '360-ui' })
   async s360Ui(
-    @SlashOption({
-      name: 'url',
-      description: 'connect.comma.ai route URL with time range',
-      required: true,
-      type: ApplicationCommandOptionType.String,
-    })
+    @SlashOption(URL_OPTION)
     url: string,
     @SlashChoice(...ANONYMIZATION_SLASH_CHOICES)
-    @SlashOption({
-      name: 'anonymization-profile',
-      description: 'Face anonymization for driver camera renders',
-      required: false,
-      type: ApplicationCommandOptionType.String,
-    })
+    @SlashOption(ANON_PROFILE_OPTION)
     anonymizationProfile: string | undefined,
     @SlashChoice(...PRS_SLASH_CHOICES)
-    @SlashOption({
-      name: 'passenger-redaction-style',
-      description: 'How hidden passengers are obscured (blur by default)',
-      required: false,
-      type: ApplicationCommandOptionType.String,
-    })
+    @SlashOption(PRS_OPTION)
     passengerRedactionStyle: string | undefined,
-    @SlashOption({
-      name: 'file-size',
-      description: 'Target file size in MB (5\u2013200, default: 9)',
-      required: false,
-      type: ApplicationCommandOptionType.Integer,
-    })
+    @SlashOption(FILE_SIZE_OPTION)
     fileSize: number | undefined,
-    @SlashOption({
-      name: 'include-audio',
-      description: 'Include audio from qcamera (fails if unavailable)',
-      required: false,
-      type: ApplicationCommandOptionType.Boolean,
-    })
+    @SlashOption(INCLUDE_AUDIO_OPTION)
     includeAudio: boolean | undefined,
     interaction: CommandInteraction,
   ) {
@@ -483,82 +358,42 @@ export class ClipCommands {
       renderType: '360-ui',
       anonymizationProfile: validateAnonymization(anonymizationProfile),
       passengerRedactionStyle: passengerRedactionStyle || undefined,
-      fileSize: fileSize ?? undefined,
+      fileSize,
       includeAudio: includeAudio || undefined,
     });
   }
 
   @Slash({ description: 'Forward camera overlaid on wide', name: 'forward-upon-wide' })
   async forwardUponWide(
-    @SlashOption({
-      name: 'url',
-      description: 'connect.comma.ai route URL with time range',
-      required: true,
-      type: ApplicationCommandOptionType.String,
-    })
+    @SlashOption(URL_OPTION)
     url: string,
-    @SlashOption({
-      name: 'file-size',
-      description: 'Target file size in MB (5\u2013200, default: 9)',
-      required: false,
-      type: ApplicationCommandOptionType.Integer,
-    })
+    @SlashOption(FILE_SIZE_OPTION)
     fileSize: number | undefined,
-    @SlashOption({
-      name: 'include-audio',
-      description: 'Include audio from qcamera (fails if unavailable)',
-      required: false,
-      type: ApplicationCommandOptionType.Boolean,
-    })
+    @SlashOption(INCLUDE_AUDIO_OPTION)
     includeAudio: boolean | undefined,
     interaction: CommandInteraction,
   ) {
     await handleClipRequest(interaction, {
       route: url,
       renderType: 'forward_upon_wide',
-      fileSize: fileSize ?? undefined,
+      fileSize,
       includeAudio: includeAudio || undefined,
     });
   }
 
   @Slash({ description: '360\u00b0 + forward on wide', name: '360-forward-upon-wide' })
   async s360ForwardUponWide(
-    @SlashOption({
-      name: 'url',
-      description: 'connect.comma.ai route URL with time range',
-      required: true,
-      type: ApplicationCommandOptionType.String,
-    })
+    @SlashOption(URL_OPTION)
     url: string,
     @SlashChoice(...ANONYMIZATION_SLASH_CHOICES)
-    @SlashOption({
-      name: 'anonymization-profile',
-      description: 'Face anonymization for driver camera renders',
-      required: false,
-      type: ApplicationCommandOptionType.String,
-    })
+    @SlashOption(ANON_PROFILE_OPTION)
     anonymizationProfile: string | undefined,
     @SlashChoice(...PRS_SLASH_CHOICES)
-    @SlashOption({
-      name: 'passenger-redaction-style',
-      description: 'How hidden passengers are obscured (blur by default)',
-      required: false,
-      type: ApplicationCommandOptionType.String,
-    })
+    @SlashOption(PRS_OPTION)
     passengerRedactionStyle: string | undefined,
-    @SlashOption({
-      name: 'file-size',
-      description: 'Target file size in MB (5\u2013200, default: 9)',
-      required: false,
-      type: ApplicationCommandOptionType.Integer,
-    })
+    @SlashOption(FILE_SIZE_OPTION)
     fileSize: number | undefined,
-    @SlashOption({
-      name: 'include-audio',
-      description: 'Include audio from qcamera (fails if unavailable)',
-      required: false,
-      type: ApplicationCommandOptionType.Boolean,
-    })
+    @SlashOption(INCLUDE_AUDIO_OPTION)
     includeAudio: boolean | undefined,
     interaction: CommandInteraction,
   ) {
@@ -567,7 +402,7 @@ export class ClipCommands {
       renderType: '360_forward_upon_wide',
       anonymizationProfile: validateAnonymization(anonymizationProfile),
       passengerRedactionStyle: passengerRedactionStyle || undefined,
-      fileSize: fileSize ?? undefined,
+      fileSize,
       includeAudio: includeAudio || undefined,
     });
   }
