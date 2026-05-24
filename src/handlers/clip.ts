@@ -427,11 +427,11 @@ export async function handleClipRequest(
     return;
   }
 
-  if (!interaction.deferred && !interaction.replied) {
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  }
-
   try {
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    }
+
     const onProgress = createProgressUpdater(interaction);
     const { data, jobId } = await processClip(config, input, onProgress);
 
