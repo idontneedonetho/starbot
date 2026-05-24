@@ -58,13 +58,6 @@ export const ANONYMIZATION_PROFILES = Object.keys(ANONYMIZATION_LABELS);
 
 export const VALID_RENDER_TYPES = Object.keys(RENDER_TYPE_MAP);
 
-export const PASSENGER_REDACTION_STYLES = [
-  'blur',
-  'silhouette',
-  'black_silhouette',
-  'ir_tint',
-] as const;
-
 export const PASSENGER_REDACTION_LABELS: Record<string, string> = {
   'blur': 'Blur',
   'silhouette': 'Silhouette',
@@ -72,11 +65,27 @@ export const PASSENGER_REDACTION_LABELS: Record<string, string> = {
   'ir_tint': 'IR Tint',
 };
 
-export const UI_ALT_VARIANTS = [
-  'device',
-  'stacked_forward_over_wide',
-  'stacked_wide_over_forward',
-] as const;
+export const PASSENGER_REDACTION_STYLES = Object.keys(PASSENGER_REDACTION_LABELS);
+
+export const ANONYMIZATION_SLASH_CHOICES: { name: string; value: string }[] = Object.entries(ANONYMIZATION_LABELS).map(
+  ([value, name]) => ({ name, value }),
+);
+
+export const PRS_SLASH_CHOICES: { name: string; value: string }[] = Object.entries(PASSENGER_REDACTION_LABELS).map(
+  ([value, name]) => ({ name, value }),
+);
+
+export const UI_ALT_VARIANT_LABELS: Record<string, string> = {
+  'device': 'Device',
+  'stacked_forward_over_wide': 'Stacked Forward / Wide',
+  'stacked_wide_over_forward': 'Stacked Wide / Forward',
+};
+
+export const UI_ALT_VARIANTS = Object.keys(UI_ALT_VARIANT_LABELS);
+
+export const UI_ALT_SLASH_CHOICES: { name: string; value: string }[] = Object.entries(UI_ALT_VARIANT_LABELS).map(
+  ([value, name]) => ({ name, value }),
+);
 
 export const RENDER_TYPES_WITH_ANONYMIZATION = new Set([
   'driver-debug', 'driver', '360', '360-ui', '360-forward-upon-wide',

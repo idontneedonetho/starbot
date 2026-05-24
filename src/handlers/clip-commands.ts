@@ -32,7 +32,11 @@ import {
   getClipConfig,
   getAnonymizationOptions,
   ANONYMIZATION_LABELS,
+  ANONYMIZATION_SLASH_CHOICES,
   PASSENGER_REDACTION_LABELS,
+  PRS_SLASH_CHOICES,
+  UI_ALT_SLASH_CHOICES,
+  UI_ALT_VARIANT_LABELS,
   RENDER_TYPE_MAP,
   RENDER_TYPES_WITH_ANONYMIZATION,
   PASSENGER_REDACTION_STYLES,
@@ -183,11 +187,7 @@ export class ClipCommands {
       type: ApplicationCommandOptionType.String,
     })
     url: string,
-    @SlashChoice(
-      { name: 'Device', value: 'device' },
-      { name: 'Stacked Forward / Wide', value: 'stacked_forward_over_wide' },
-      { name: 'Stacked Wide / Forward', value: 'stacked_wide_over_forward' },
-    )
+    @SlashChoice(...UI_ALT_SLASH_CHOICES)
     @SlashOption({
       name: 'variant',
       description: 'UI composition variant',
@@ -229,14 +229,7 @@ export class ClipCommands {
       type: ApplicationCommandOptionType.String,
     })
     url: string,
-    @SlashChoice(
-      { name: 'None', value: 'none' },
-      { name: 'Driver Unchanged, Passenger Hidden', value: 'driver unchanged, passenger hidden' },
-      { name: 'Driver Unchanged, Passenger Face Swap', value: 'driver unchanged, passenger face swap' },
-      { name: 'Driver Face Swap, Passenger Unchanged', value: 'driver face swap, passenger unchanged' },
-      { name: 'Driver Face Swap, Passenger Hidden', value: 'driver face swap, passenger hidden' },
-      { name: 'Driver Face Swap, Passenger Face Swap', value: 'driver face swap, passenger face swap' },
-    )
+    @SlashChoice(...ANONYMIZATION_SLASH_CHOICES)
     @SlashOption({
       name: 'anonymization-profile',
       description: 'Face anonymization for driver camera renders',
@@ -244,12 +237,7 @@ export class ClipCommands {
       type: ApplicationCommandOptionType.String,
     })
     anonymizationProfile: string | undefined,
-    @SlashChoice(
-      { name: 'Blur', value: 'blur' },
-      { name: 'Silhouette', value: 'silhouette' },
-      { name: 'Black Silhouette', value: 'black_silhouette' },
-      { name: 'IR Tint', value: 'ir_tint' },
-    )
+    @SlashChoice(...PRS_SLASH_CHOICES)
     @SlashOption({
       name: 'passenger-redaction-style',
       description: 'How hidden passengers are obscured (blur by default)',
@@ -358,14 +346,7 @@ export class ClipCommands {
       type: ApplicationCommandOptionType.String,
     })
     url: string,
-    @SlashChoice(
-      { name: 'None', value: 'none' },
-      { name: 'Driver Unchanged, Passenger Hidden', value: 'driver unchanged, passenger hidden' },
-      { name: 'Driver Unchanged, Passenger Face Swap', value: 'driver unchanged, passenger face swap' },
-      { name: 'Driver Face Swap, Passenger Unchanged', value: 'driver face swap, passenger unchanged' },
-      { name: 'Driver Face Swap, Passenger Hidden', value: 'driver face swap, passenger hidden' },
-      { name: 'Driver Face Swap, Passenger Face Swap', value: 'driver face swap, passenger face swap' },
-    )
+    @SlashChoice(...ANONYMIZATION_SLASH_CHOICES)
     @SlashOption({
       name: 'anonymization-profile',
       description: 'Face anonymization for driver camera renders',
@@ -373,12 +354,7 @@ export class ClipCommands {
       type: ApplicationCommandOptionType.String,
     })
     anonymizationProfile: string | undefined,
-    @SlashChoice(
-      { name: 'Blur', value: 'blur' },
-      { name: 'Silhouette', value: 'silhouette' },
-      { name: 'Black Silhouette', value: 'black_silhouette' },
-      { name: 'IR Tint', value: 'ir_tint' },
-    )
+    @SlashChoice(...PRS_SLASH_CHOICES)
     @SlashOption({
       name: 'passenger-redaction-style',
       description: 'How hidden passengers are obscured (blur by default)',
@@ -421,14 +397,7 @@ export class ClipCommands {
       type: ApplicationCommandOptionType.String,
     })
     url: string,
-    @SlashChoice(
-      { name: 'None', value: 'none' },
-      { name: 'Driver Unchanged, Passenger Hidden', value: 'driver unchanged, passenger hidden' },
-      { name: 'Driver Unchanged, Passenger Face Swap', value: 'driver unchanged, passenger face swap' },
-      { name: 'Driver Face Swap, Passenger Unchanged', value: 'driver face swap, passenger unchanged' },
-      { name: 'Driver Face Swap, Passenger Hidden', value: 'driver face swap, passenger hidden' },
-      { name: 'Driver Face Swap, Passenger Face Swap', value: 'driver face swap, passenger face swap' },
-    )
+    @SlashChoice(...ANONYMIZATION_SLASH_CHOICES)
     @SlashOption({
       name: 'anonymization-profile',
       description: 'Face anonymization for driver camera renders',
@@ -436,12 +405,7 @@ export class ClipCommands {
       type: ApplicationCommandOptionType.String,
     })
     anonymizationProfile: string | undefined,
-    @SlashChoice(
-      { name: 'Blur', value: 'blur' },
-      { name: 'Silhouette', value: 'silhouette' },
-      { name: 'Black Silhouette', value: 'black_silhouette' },
-      { name: 'IR Tint', value: 'ir_tint' },
-    )
+    @SlashChoice(...PRS_SLASH_CHOICES)
     @SlashOption({
       name: 'passenger-redaction-style',
       description: 'How hidden passengers are obscured (blur by default)',
@@ -484,14 +448,7 @@ export class ClipCommands {
       type: ApplicationCommandOptionType.String,
     })
     url: string,
-    @SlashChoice(
-      { name: 'None', value: 'none' },
-      { name: 'Driver Unchanged, Passenger Hidden', value: 'driver unchanged, passenger hidden' },
-      { name: 'Driver Unchanged, Passenger Face Swap', value: 'driver unchanged, passenger face swap' },
-      { name: 'Driver Face Swap, Passenger Unchanged', value: 'driver face swap, passenger unchanged' },
-      { name: 'Driver Face Swap, Passenger Hidden', value: 'driver face swap, passenger hidden' },
-      { name: 'Driver Face Swap, Passenger Face Swap', value: 'driver face swap, passenger face swap' },
-    )
+    @SlashChoice(...ANONYMIZATION_SLASH_CHOICES)
     @SlashOption({
       name: 'anonymization-profile',
       description: 'Face anonymization for driver camera renders',
@@ -499,12 +456,7 @@ export class ClipCommands {
       type: ApplicationCommandOptionType.String,
     })
     anonymizationProfile: string | undefined,
-    @SlashChoice(
-      { name: 'Blur', value: 'blur' },
-      { name: 'Silhouette', value: 'silhouette' },
-      { name: 'Black Silhouette', value: 'black_silhouette' },
-      { name: 'IR Tint', value: 'ir_tint' },
-    )
+    @SlashChoice(...PRS_SLASH_CHOICES)
     @SlashOption({
       name: 'passenger-redaction-style',
       description: 'How hidden passengers are obscured (blur by default)',
@@ -580,14 +532,7 @@ export class ClipCommands {
       type: ApplicationCommandOptionType.String,
     })
     url: string,
-    @SlashChoice(
-      { name: 'None', value: 'none' },
-      { name: 'Driver Unchanged, Passenger Hidden', value: 'driver unchanged, passenger hidden' },
-      { name: 'Driver Unchanged, Passenger Face Swap', value: 'driver unchanged, passenger face swap' },
-      { name: 'Driver Face Swap, Passenger Unchanged', value: 'driver face swap, passenger unchanged' },
-      { name: 'Driver Face Swap, Passenger Hidden', value: 'driver face swap, passenger hidden' },
-      { name: 'Driver Face Swap, Passenger Face Swap', value: 'driver face swap, passenger face swap' },
-    )
+    @SlashChoice(...ANONYMIZATION_SLASH_CHOICES)
     @SlashOption({
       name: 'anonymization-profile',
       description: 'Face anonymization for driver camera renders',
@@ -595,12 +540,7 @@ export class ClipCommands {
       type: ApplicationCommandOptionType.String,
     })
     anonymizationProfile: string | undefined,
-    @SlashChoice(
-      { name: 'Blur', value: 'blur' },
-      { name: 'Silhouette', value: 'silhouette' },
-      { name: 'Black Silhouette', value: 'black_silhouette' },
-      { name: 'IR Tint', value: 'ir_tint' },
-    )
+    @SlashChoice(...PRS_SLASH_CHOICES)
     @SlashOption({
       name: 'passenger-redaction-style',
       description: 'How hidden passengers are obscured (blur by default)',
@@ -702,9 +642,9 @@ export class ClipCommands {
         .setPlaceholder('Select a variant\u2026')
         .setMinValues(1)
         .addOptions(
-          { label: 'Device', value: 'device', description: 'Standard device view' },
-          { label: 'Stacked Forward / Wide', value: 'stacked_forward_over_wide', description: 'Forward on top, wide below' },
-          { label: 'Stacked Wide / Forward', value: 'stacked_wide_over_forward', description: 'Wide on top, forward below' },
+          { label: UI_ALT_VARIANT_LABELS['device'], value: 'device', description: 'Standard device view' },
+          { label: UI_ALT_VARIANT_LABELS['stacked_forward_over_wide'], value: 'stacked_forward_over_wide', description: 'Forward on top, wide below' },
+          { label: UI_ALT_VARIANT_LABELS['stacked_wide_over_forward'], value: 'stacked_wide_over_forward', description: 'Wide on top, forward below' },
         );
       const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select);
       const embed = new EmbedBuilder()
