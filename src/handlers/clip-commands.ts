@@ -62,10 +62,8 @@ function setPendingForm(userId: string, input: ClipJobInput) {
 function getPendingForm(userId: string): ClipJobInput | undefined {
   const entry = pendingForm.get(userId);
   if (!entry) return undefined;
-  if (Date.now() - entry.createdAt > 5 * 60 * 1000) {
-    pendingForm.delete(userId);
-    return undefined;
-  }
+  pendingForm.delete(userId);
+  if (Date.now() - entry.createdAt > 5 * 60 * 1000) return undefined;
   return entry.input;
 }
 
