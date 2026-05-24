@@ -67,9 +67,12 @@ export const PASSENGER_REDACTION_LABELS: Record<string, string> = {
 
 export const PASSENGER_REDACTION_STYLES = Object.keys(PASSENGER_REDACTION_LABELS);
 
-export const ANONYMIZATION_SLASH_CHOICES: { name: string; value: string }[] = Object.entries(ANONYMIZATION_LABELS).map(
-  ([value, name]) => ({ name, value }),
-);
+export const ANONYMIZATION_SLASH_CHOICES: { name: string; value: string }[] = (() => {
+  const allowFaceSwap = process.env.OP_REPLAY_CLIPPER_ALLOW_FACE_SWAP === 'true';
+  return ANONYMIZATION_PROFILES
+    .filter(p => allowFaceSwap || !p.includes('face swap'))
+    .map(value => ({ name: ANONYMIZATION_LABELS[value], value }));
+})();
 
 export const PRS_SLASH_CHOICES: { name: string; value: string }[] = Object.entries(PASSENGER_REDACTION_LABELS).map(
   ([value, name]) => ({ name, value }),
