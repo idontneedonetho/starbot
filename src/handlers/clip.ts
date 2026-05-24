@@ -94,6 +94,11 @@ export const RENDER_TYPES_WITH_ANONYMIZATION = new Set([
   'driver-debug', 'driver', '360', '360-ui', '360-forward-upon-wide',
 ]);
 
+export const PROFILES_REQUIRING_PRS = new Set([
+  'driver unchanged, passenger hidden',
+  'driver face swap, passenger hidden',
+]);
+
 const activeUsers = new Set<string>();
 
 export function acquireUserLock(userId: string): boolean {

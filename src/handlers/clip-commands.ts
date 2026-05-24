@@ -40,6 +40,7 @@ import {
   RENDER_TYPE_MAP,
   RENDER_TYPES_WITH_ANONYMIZATION,
   PASSENGER_REDACTION_STYLES,
+  PROFILES_REQUIRING_PRS,
   VALID_RENDER_TYPES,
   type ClipJobInput,
 } from './clip.js';
@@ -507,7 +508,7 @@ export class ClipCommands {
     if (profile && profile !== 'none') {
       input.anonymizationProfile = profile;
 
-      const needsPrs = profile.includes('passenger hidden');
+      const needsPrs = PROFILES_REQUIRING_PRS.has(profile);
       if (needsPrs) {
         setPendingForm(interaction.user.id, input);
         const prsSelect = new StringSelectMenuBuilder()
