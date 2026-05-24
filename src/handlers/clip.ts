@@ -247,7 +247,7 @@ async function downloadOutput(config: ClipConfig, jobId: string): Promise<ArrayB
 }
 
 function progressBar(pct: number): string {
-  const filled = Math.round(pct / 5);
+  const filled = Math.min(20, Math.round(pct / 5));
   return `${'█'.repeat(filled)}${'░'.repeat(20 - filled)} ${Math.round(pct)}%`;
 }
 
