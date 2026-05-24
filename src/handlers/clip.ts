@@ -143,42 +143,6 @@ export function parseRouteUrl(url: string): { route: string; duration: number } 
   }
 }
 
-interface CachedClip {
-  buffer: Buffer;
-  renderType: string;
-  sizeBytes: number;
-  createdAt: number;
-}
-
-const clipCache = new Map<string, CachedClip>();
-const CACHE_TTL = 5 * 60 * 1000;
-
-export function getCachedClip(jobId: string): CachedClip | undefined {
-  const c = clipCache.get(jobId);
-  if (!c) return undefined;
-  if (Date.now() - c.createdAt > CACHE_TTL) {
-    clipCache.delete(jobId);
-    return undefined;
-  }
-  return c;
-}
-
-export function deleteCachedClip(jobId: string): void {
-  clipCache.delete(jobId);
-}
-
-function cacheClip(jobId: string, data: ArrayBuffer, renderType: string): void {
-  const now = Date.now();
-  for (const [k, v] of clipCache) {
-    if (now - v.createdAt > CACHE_TTL) clipCache.delete(k);
-  }
-  clipCache.set(jobId, {
-    buffer: Buffer.from(data),
-    renderType,
-    sizeBytes: data.byteLength,
-    createdAt: now,
-  });
-}
 
 interface SubmitResponse {
   job_id: string;
@@ -209,6 +173,10 @@ interface SseProgressEvent {
   detail: string;
 }
 
+interface SseCompletedEvent {
+  output_url: string;
+  expires_at: number | null;
+}
 
 interface SseFailedEvent {
   error: string;
@@ -232,7 +200,7 @@ async function submitJob(config: ClipConfig, input: ClipJobInput): Promise<Submi
   return res.json() as Promise<SubmitResponse>;
 }
 
-async function downloadOutput(config: ClipConfig, jobId: string): Promise<ArrayBuffer> {
+export async function downloadOutput(config: ClipConfig, jobId: string): Promise<ArrayBuffer> {
   const res = await fetch(`${config.endpoint}/jobs/${jobId}/output`, {
     headers: { 'Authorization': `Bearer ${config.apiKey}` },
   });
@@ -308,13 +276,13 @@ export async function processClip(
   config: ClipConfig,
   input: ClipJobInput,
   onProgress: ProgressCallback,
-): Promise<{ data: ArrayBuffer; jobId: string }> {
+): Promise<{ data: ArrayBuffer; jobId: string; expiresAt: number | null }> {
   const submitRes = await submitJob(config, input);
   const jobId = submitRes.job_id;
   const pos = submitRes.queue_position === -1 ? 0 : submitRes.queue_position;
   await onProgress({ pct: null, detail: 'Queued', queuePosition: pos, queue: submitRes.queue, eta: submitRes.estimated_wait_seconds });
 
-  return new Promise<{ data: ArrayBuffer; jobId: string }>((resolve, reject) => {
+  return new Promise<{ data: ArrayBuffer; jobId: string; expiresAt: number | null }>((resolve, reject) => {
     const MAX_TIME = 10 * 60 * 1000;
     const timeout = setTimeout(() => {
       es.close();
@@ -346,13 +314,13 @@ export async function processClip(
       onProgress({ pct: d.pct, detail: d.detail, fps: d.fps }).catch(() => {});
     });
 
-    es.addEventListener('completed', async (_e: Event | MessageEvent) => {
-      // const d = JSON.parse((_e as MessageEvent).data) as SseCompletedEvent;
+    es.addEventListener('completed', async (e: Event | MessageEvent) => {
+      const d = JSON.parse((e as MessageEvent).data) as SseCompletedEvent;
       clearTimeout(timeout);
       es.close();
       try {
         const data = await downloadOutput(config, jobId);
-        resolve({ data, jobId });
+        resolve({ data, jobId, expiresAt: d.expires_at });
       } catch (err) {
         reject(err);
       }
@@ -430,7 +398,7 @@ export async function handleClipRequest(
     }
 
     const onProgress = createProgressUpdater(interaction);
-    const { data, jobId } = await processClip(config, input, onProgress);
+    const { data, jobId, expiresAt } = await processClip(config, input, onProgress);
 
     const rawMaxMb = parseInt(process.env.GUILD_MAX_FILE_MB || '25', 10);
     const maxFileMb = isNaN(rawMaxMb) || rawMaxMb <= 0 ? 25 : rawMaxMb;
@@ -450,14 +418,13 @@ export async function handleClipRequest(
     const renderLabel = input.renderType ?? 'ui';
     const sizeLabel = `${(data.byteLength / 1024 / 1024).toFixed(1)} MB`;
 
-    cacheClip(jobId, data, renderLabel);
-
     const embed = new EmbedBuilder()
       .setColor(COLORS.green)
       .setTitle('Clip Ready')
       .addFields(
         { name: 'Type', value: `\`${renderLabel}\``, inline: true },
         { name: 'Size', value: sizeLabel, inline: true },
+        ...(expiresAt ? [{ name: 'Expires', value: `<t:${Math.floor(expiresAt)}:R>`, inline: true }] : []),
       )
       .setFooter({ text: 'Click Publish to share in channel' });
 

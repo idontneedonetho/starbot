@@ -27,8 +27,7 @@ import {
 } from 'discord.js';
 import {
   handleClipRequest,
-  getCachedClip,
-  deleteCachedClip,
+  downloadOutput,
   getClipConfig,
   getAnonymizationOptions,
   ANONYMIZATION_LABELS,
@@ -580,36 +579,44 @@ export class ClipCommands {
 
   @ButtonComponent({ id: /^clip_pub_/ })
   async publishClip(interaction: ButtonInteraction) {
-    const jobId = interaction.customId.slice('clip_pub_'.length);
-    const cached = getCachedClip(jobId);
+    await interaction.deferUpdate();
 
-    if (!cached) {
-      const embed = new EmbedBuilder()
-        .setColor(COLORS.amber)
-        .setTitle('Clip Expired')
-        .setDescription('Cached clip has expired. Please create a new one.');
-      await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+    const jobId = interaction.customId.slice('clip_pub_'.length);
+    const config = getClipConfig();
+
+    if (!config) {
+      await interaction.editReply({
+        embeds: [new EmbedBuilder().setColor(COLORS.amber).setTitle('Service Unavailable').setDescription('Clip service is not configured.')],
+        components: [],
+      });
+      return;
+    }
+
+    let data: ArrayBuffer;
+    try {
+      data = await downloadOutput(config, jobId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      await interaction.editReply({
+        embeds: [new EmbedBuilder().setColor(COLORS.amber).setTitle('Clip Expired').setDescription(msg)],
+        components: [],
+      });
       return;
     }
 
     const channel = interaction.channel;
     if (!channel?.isSendable()) {
-      await interaction.reply({
-        content: 'Cannot send messages in this channel.',
-        flags: MessageFlags.Ephemeral,
-      });
+      await interaction.editReply({ content: 'Cannot send messages in this channel.', components: [] });
       return;
     }
 
-    const attachment = new AttachmentBuilder(cached.buffer, { name: 'clip.mp4' });
+    const attachment = new AttachmentBuilder(Buffer.from(data), { name: 'clip.mp4' });
     await channel.send({ content: `<@${interaction.user.id}>`, files: [attachment] });
 
-    deleteCachedClip(jobId);
-
-    const updated = new EmbedBuilder()
-      .setColor(COLORS.green)
-      .setTitle('Published')
-      .setDescription('Your clip has been shared in the channel.');
-    await interaction.update({ embeds: [updated], components: [], files: [], attachments: [] });
+    await interaction.editReply({
+      embeds: [new EmbedBuilder().setColor(COLORS.green).setTitle('Published').setDescription('Your clip has been shared in the channel.')],
+      components: [],
+      attachments: [],
+    });
   }
 }
