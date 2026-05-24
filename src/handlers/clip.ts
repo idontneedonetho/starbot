@@ -202,9 +202,6 @@ interface SseRequeuedEvent {
   queue: string;
 }
 
-interface SseStartedEvent {
-  runner: string;
-}
 
 interface SseProgressEvent {
   pct: number;
@@ -212,9 +209,6 @@ interface SseProgressEvent {
   detail: string;
 }
 
-interface SseCompletedEvent {
-  output_url: string;
-}
 
 interface SseFailedEvent {
   error: string;
@@ -342,9 +336,8 @@ export async function processClip(
       onProgress({ pct: null, detail: `Retrying (${d.attempts}/${d.max_attempts}): ${d.reason}`, queuePosition: d.queue_position, queue: d.queue, force: true }).catch(() => {});
     });
 
-    es.addEventListener('started', (e: Event | MessageEvent) => {
-      const d = JSON.parse((e as MessageEvent).data) as SseStartedEvent;
-      void d;
+    es.addEventListener('started', (_e: Event | MessageEvent) => {
+      // const d = JSON.parse((_e as MessageEvent).data) as SseStartedEvent;
       onProgress({ pct: null, detail: 'Processing\u2026', force: true }).catch(() => {});
     });
 
@@ -353,9 +346,8 @@ export async function processClip(
       onProgress({ pct: d.pct, detail: d.detail, fps: d.fps }).catch(() => {});
     });
 
-    es.addEventListener('completed', async (e: Event | MessageEvent) => {
-      const d = JSON.parse((e as MessageEvent).data) as SseCompletedEvent;
-      void d;
+    es.addEventListener('completed', async (_e: Event | MessageEvent) => {
+      // const d = JSON.parse((_e as MessageEvent).data) as SseCompletedEvent;
       clearTimeout(timeout);
       es.close();
       try {
