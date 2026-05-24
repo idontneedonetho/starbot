@@ -32,6 +32,7 @@ import {
   getClipConfig,
   getAnonymizationOptions,
   ANONYMIZATION_LABELS,
+  PASSENGER_REDACTION_LABELS,
   RENDER_TYPE_MAP,
   RENDER_TYPES_WITH_ANONYMIZATION,
   PASSENGER_REDACTION_STYLES,
@@ -740,7 +741,7 @@ export class ClipCommands {
           .setCustomId('clip_followup_prs')
           .setPlaceholder('Blur (default)')
           .addOptions(
-            ...PASSENGER_REDACTION_STYLES.map(s => ({ label: s, value: s })),
+            ...PASSENGER_REDACTION_STYLES.map(s => ({ label: PASSENGER_REDACTION_LABELS[s], value: s })),
           );
         const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(prsSelect);
         const embed = new EmbedBuilder()

@@ -65,6 +65,13 @@ export const PASSENGER_REDACTION_STYLES = [
   'ir_tint',
 ] as const;
 
+export const PASSENGER_REDACTION_LABELS: Record<string, string> = {
+  'blur': 'Blur',
+  'silhouette': 'Silhouette',
+  'black_silhouette': 'Black Silhouette',
+  'ir_tint': 'IR Tint',
+};
+
 export const UI_ALT_VARIANTS = [
   'device',
   'stacked_forward_over_wide',
