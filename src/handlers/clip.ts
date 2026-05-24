@@ -239,6 +239,7 @@ export interface ProgressUpdate {
   queue?: string | null;
   eta?: number | null;
   fps?: number | null;
+  force?: boolean;
 }
 
 export type ProgressCallback = (update: ProgressUpdate) => Promise<void>;
@@ -249,7 +250,7 @@ export function createProgressUpdater(
   let lastUpdate = 0;
   return async (update) => {
     const now = Date.now();
-    if (now - lastUpdate < 4000) return;
+    if (!update.force && now - lastUpdate < 4000) return;
     lastUpdate = now;
     try {
       const embed = new EmbedBuilder().setColor(COLORS.blurple).setTitle('Creating Clip');
@@ -314,13 +315,13 @@ export async function processClip(
 
     es.addEventListener('requeued', (e: Event | MessageEvent) => {
       const d = JSON.parse((e as MessageEvent).data) as SseRequeuedEvent;
-      onProgress({ pct: null, detail: `Retrying (${d.attempts}/${d.max_attempts}): ${d.reason}`, queuePosition: d.queue_position, queue: d.queue }).catch(() => {});
+      onProgress({ pct: null, detail: `Retrying (${d.attempts}/${d.max_attempts}): ${d.reason}`, queuePosition: d.queue_position, queue: d.queue, force: true }).catch(() => {});
     });
 
     es.addEventListener('started', (e: Event | MessageEvent) => {
       const d = JSON.parse((e as MessageEvent).data) as SseStartedEvent;
       void d;
-      onProgress({ pct: null, detail: 'Processing\u2026' }).catch(() => {});
+      onProgress({ pct: null, detail: 'Processing\u2026', force: true }).catch(() => {});
     });
 
     es.addEventListener('progress', (e: Event | MessageEvent) => {
