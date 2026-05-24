@@ -487,23 +487,3 @@ export async function handleClipRequest(
   }
 }
 
-export function parseAdvancedOptions(text: string): Partial<ClipJobInput> {
-  const result: Partial<ClipJobInput> = {};
-  for (const line of text.split('\n')) {
-    const colonIdx = line.indexOf(':');
-    if (colonIdx === -1) continue;
-    const key = line.slice(0, colonIdx).trim().toLowerCase();
-    const val = line.slice(colonIdx + 1).trim();
-
-    if (key === 'includeaudio') {
-      result.includeAudio = val === 'true';
-    } else if (key === 'anonymizationprofile' && (ANONYMIZATION_PROFILES as readonly string[]).includes(val)) {
-      result.anonymizationProfile = val;
-    } else if (key === 'passengerredactionstyle' && (PASSENGER_REDACTION_STYLES as readonly string[]).includes(val)) {
-      result.passengerRedactionStyle = val;
-    } else if (key === 'uialtvariant' && (UI_ALT_VARIANTS as readonly string[]).includes(val)) {
-      result.uiAltVariant = val;
-    }
-  }
-  return result;
-}
