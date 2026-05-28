@@ -16,7 +16,7 @@ import {
 } from 'discord.js';
 import { loadConfig } from '../config.js';
 import { COLORS } from '../util.js';
-import { getForum, resolveTagIds, ROUTE_REGEX, validateRoute, addAdditionalRoutesToTracker, stripRouteIds, buildActionRow, TRACKER_FIELD_PREFIX } from './report.js';
+import { getForum, resolveTagIds, normalizeRouteInput, parseNormalizedRoute, validateRoute, addAdditionalRoutesToTracker, stripRouteIds, buildActionRow, TRACKER_FIELD_PREFIX } from './report.js';
 
 function hasStaffRole(member: GuildMember): boolean {
   return member.roles.cache.has(loadConfig().staffRole);
@@ -113,9 +113,9 @@ export async function handleAdditionalReportButton(interaction: ButtonInteractio
   const routeInput = new TextInputBuilder({
     custom_id: 'route_id',
     style: TextInputStyle.Short,
-    placeholder: 'e.g. a1b2c3d4e5f6a7b8/0000aaaa--98c2d4e6f8',
+    placeholder: 'dongle_id/route_name or connect.comma.ai URL',
     required: true,
-    max_length: 128,
+    max_length: 256,
   });
   modal.addLabelComponents(new LabelBuilder().setLabel('Route ID').setTextInputComponent(routeInput));
 
@@ -137,15 +137,25 @@ export async function handleAdditionalReportSubmit(interaction: ModalSubmitInter
   const routeId = interaction.fields.getTextInputValue('route_id');
   const details = interaction.fields.getTextInputValue('details');
 
-  const match = routeId.match(new RegExp(`^${ROUTE_REGEX.source}$`, 'i'));
-  if (!match) {
+  let normalizedRoute: string;
+  try {
+    normalizedRoute = normalizeRouteInput(routeId);
+  } catch (err) {
     await interaction.editReply({
-      content: `Invalid route ID. Use the format \`dongle_id/route_name\` (e.g. \`a1b2c3d4e5f6a7b8/0000aaaa--98c2d4e6f8\`).`,
+      content: `Invalid route ID. ${err instanceof Error ? err.message : 'Use the format `dongle_id/route_name` or a connect.comma.ai URL.'}`,
     });
     return;
   }
 
-  const [, dongleId, routeName, iteration] = match;
+  const parsed = parseNormalizedRoute(normalizedRoute);
+  if (!parsed) {
+    await interaction.editReply({
+      content: `Invalid route ID. Use the format \`dongle_id/route_name\` (e.g. \`a1b2c3d4e5f6a7b8/0000aaaa--98c2d4e6f8\`) or a connect.comma.ai URL.`,
+    });
+    return;
+  }
+
+  const { dongleId, routeName, iteration } = parsed;
   const { valid, public: isPublic } = await validateRoute(dongleId, routeName);
   if (!valid) {
     await interaction.editReply({ content: 'That route does not exist. Please check the Route ID and try again.' });
@@ -223,7 +233,7 @@ export async function handleAdditionalReportSubmit(interaction: ModalSubmitInter
   // Add to tracker with source attribution.
   if (trackerThreadId) {
     await addAdditionalRoutesToTracker(
-      guild, trackerThreadId, [{ dongleId, routeName, iteration: iteration || undefined }],
+      guild, trackerThreadId, [{ dongleId, routeName, iteration }],
       msg.url, `Additional Report #${additionalReportId}`,
     );
   }

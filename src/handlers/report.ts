@@ -67,30 +67,99 @@ export function resolveTagIds(forum: ForumChannel, names: string[]): string[] {
     .filter((id): id is string => id != null);
 }
 
-// Route ID regex — matches dongle/route or dongle|route with optional iteration.
-// Route names use the comma.ai format: 8hex--10hex (e.g. 0000000b--97f3b3b1ee).
+// Matches dongle/route or dongle|route with optional iteration (used for scanning free-form text).
 export const ROUTE_REGEX = /([a-f0-9]{16})[\/|]([a-f0-9]{8}--[a-f0-9]{10})(?:\/([a-f0-9]{8}--[a-f0-9]{10}))?/gi;
+
+// Anchored regex for validating a single normalized route string (dongle_id/route_name[/iteration]).
+const ROUTE_ID_REGEX = /^([a-f0-9]{16})[\/|]([a-f0-9]{8}--[a-f0-9]{10})(?:\/([a-f0-9]{8}--[a-f0-9]{10}|\d+))?$/i;
+
+// Matches connect.comma.ai URLs with optional start[/end] seconds.
+const CONNECT_URL_REGEX = /https:\/\/connect\.comma\.ai\/([a-f0-9]{16})\/([a-f0-9]{8}--[a-f0-9]{10})(?:\/(\d+)(?:\/(\d+))?)?/gi;
+
+export function normalizeRouteInput(input: string): string {
+  input = input.trim();
+
+  if (input.startsWith('https://connect.comma.ai/')) {
+    const path = input.slice('https://connect.comma.ai/'.length).replace(/\/+$/, '');
+    const parts = path.split('/');
+    if (parts.length === 2) return `${parts[0]}/${parts[1]}`;
+    if (parts.length === 3) {
+      const [dongleId, routeName, secStr] = parts;
+      if (!/^\d+$/.test(secStr)) throw new Error(`Invalid seconds value in URL: "${secStr}"`);
+      return `${dongleId}/${routeName}/${Math.floor(parseInt(secStr, 10) / 60)}`;
+    }
+    if (parts.length === 4) {
+      const [dongleId, routeName, startStr] = parts;
+      if (!/^\d+$/.test(startStr)) throw new Error(`Invalid seconds value in URL: "${startStr}"`);
+      return `${dongleId}/${routeName}/${Math.floor(parseInt(startStr, 10) / 60)}`;
+    }
+    throw new Error(`Invalid connect.comma.ai URL format`);
+  }
+
+  const pipeMatch = input.match(/^([a-f0-9]{16})\|([a-f0-9]{8}--[a-f0-9]{10})$/i);
+  if (pipeMatch) return `${pipeMatch[1]}/${pipeMatch[2]}`;
+
+  const parts = input.split('/');
+  if (parts.length >= 2 && parts.length <= 4) {
+    if (!/^[a-f0-9]{16}$/i.test(parts[0]))
+      throw new Error(`Invalid dongle ID "${parts[0]}": expected 16 hex characters.`);
+    if (!/^[a-f0-9]{8}--[a-f0-9]{10}$/i.test(parts[1]))
+      throw new Error(`Invalid route name "${parts[1]}": expected format like \`0000aaaa--1234567890\`.`);
+    return input;
+  }
+
+  throw new Error(`Unrecognized route format: expected "dongleId/routeName[/seg]" or a connect.comma.ai URL`);
+}
+
+export function parseNormalizedRoute(input: string): ExtractedRoute | null {
+  const match = input.match(ROUTE_ID_REGEX);
+  if (!match) return null;
+  return {
+    dongleId: match[1],
+    routeName: match[2],
+    iteration: match[3],
+  };
+}
 
 function extractRouteIds(text: string): ExtractedRoute[] {
   const results: ExtractedRoute[] = [];
   const seen = new Set<string>();
-  const regex = new RegExp(ROUTE_REGEX.source, 'gi');
+
+  const urlRegex = new RegExp(CONNECT_URL_REGEX.source, 'gi');
   let m: RegExpExecArray | null;
+  while ((m = urlRegex.exec(text)) !== null) {
+    let normalized: string;
+    try {
+      normalized = normalizeRouteInput(m[0]);
+    } catch {
+      continue;
+    }
+    const parsed = parseNormalizedRoute(normalized);
+    if (!parsed) continue;
+    const key = formatRoute(parsed.dongleId, parsed.routeName, parsed.iteration);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    seen.add(formatRoute(parsed.dongleId, parsed.routeName));
+    results.push(parsed);
+  }
+
+  const regex = new RegExp(ROUTE_REGEX.source, 'gi');
   while ((m = regex.exec(text)) !== null) {
     const key = formatRoute(m[1], m[2], m[3]);
     if (seen.has(key)) continue;
     seen.add(key);
-    results.push({
-      dongleId: m[1],
-      routeName: m[2],
-      iteration: m[3],
-    });
+    results.push({ dongleId: m[1], routeName: m[2], iteration: m[3] });
   }
+
   return results;
 }
 
 export function stripRouteIds(text: string): string {
-  return text.replace(ROUTE_REGEX, '').replace(/\s+/g, ' ').trim();
+  return text
+    .replace(CONNECT_URL_REGEX, '')
+    .replace(ROUTE_REGEX, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 export async function validateRoute(dongleId: string, routeName: string): Promise<{ valid: boolean; public: boolean }> {
@@ -203,7 +272,7 @@ async function createRouteTrackerThread(
   if (!routesForum) return null;
 
   const routeStr = formatRoute(dongleId, routeName, iteration);
-  const routeUrl = `https://connect.comma.ai/${routeStr}`;
+  const routeUrl = `https://connect.comma.ai/${dongleId}/${routeName}`;
 
   // Check if a tracker thread already exists for this public post.
   const existing = await findRouteThread(routesForum, publicThreadTitle);
@@ -270,8 +339,9 @@ export async function addAdditionalRoutesToTracker(
     if (!embed) return;
     const updated = EmbedBuilder.from(embed);
     const links = additionalRoutes.map(r => {
-      const url = `https://connect.comma.ai/${formatRoute(r.dongleId, r.routeName, r.iteration)}`;
-      const base = `[${r.dongleId}/${r.routeName}](${url})`;
+      const routeStr = formatRoute(r.dongleId, r.routeName, r.iteration);
+      const url = `https://connect.comma.ai/${r.dongleId}/${r.routeName}`;
+      const base = `[${routeStr}](${url})`;
       return sourceUrl && sourceName ? `${base} — [${sourceName}](${sourceUrl})` : base;
     }).join('\n');
     if (!embed.fields?.some((f: { value?: string }) => f.value?.includes(links))) {
@@ -485,9 +555,9 @@ async function showBugModal(interaction: ButtonInteraction) {
   const routeIdInput = new TextInputBuilder({
     custom_id: 'route_id',
     style: TextInputStyle.Short,
-    placeholder: 'e.g. a1b2c3d4e5f6a7b8/0000aaaa--98c2d4e6f8',
+    placeholder: 'dongle_id/route_name or connect.comma.ai URL',
     required: true,
-    max_length: 128,
+    max_length: 256,
   });
   modal.addLabelComponents(new LabelBuilder().setLabel('Route ID').setDescription('Visible only to server admins').setTextInputComponent(routeIdInput));
 
@@ -560,23 +630,30 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
   const reproIntent = interaction.fields.getTextInputValue('reproducibility_intent');
   const details = interaction.fields.getTextInputValue('details');
 
-  // Validate the dedicated route ID field — required.
-  const dedicatedMatch = routeIdInput.match(new RegExp(`^${ROUTE_REGEX.source}$`, 'i'));
-  if (!dedicatedMatch) {
+  let normalizedRoute: string;
+  try {
+    normalizedRoute = normalizeRouteInput(routeIdInput);
+  } catch (err) {
     await interaction.editReply({
-      content: `Invalid route ID. You entered:\n\`${routeIdInput}\`\n\nUse the format \`dongle_id/route_name\` (e.g. \`a1b2c3d4e5f6a7b8/0000aaaa--98c2d4e6f8\`).`,
+      content: `Invalid route ID. You entered:\n\`${routeIdInput}\`\n\n${err instanceof Error ? err.message : 'Use the format `dongle_id/route_name` or a connect.comma.ai URL.'}`,
     });
     return;
   }
 
-  // Collect all route IDs: dedicated field first, then scan other text fields.
+  const dedicatedRoute = parseNormalizedRoute(normalizedRoute);
+  if (!dedicatedRoute) {
+    await interaction.editReply({
+      content: `Invalid route ID. You entered:\n\`${routeIdInput}\`\n\nUse the format \`dongle_id/route_name\` (e.g. \`a1b2c3d4e5f6a7b8/0000aaaa--98c2d4e6f8\`) or a connect.comma.ai URL.`,
+    });
+    return;
+  }
+
   const allRoutes: ExtractedRoute[] = [];
   const seenKeys = new Set<string>();
 
-  const [, dDongleId, dRouteName, dIteration] = dedicatedMatch;
-  const dedicatedKey = formatRoute(dDongleId, dRouteName, dIteration);
+  const dedicatedKey = formatRoute(dedicatedRoute.dongleId, dedicatedRoute.routeName, dedicatedRoute.iteration);
   seenKeys.add(dedicatedKey);
-  allRoutes.push({ dongleId: dDongleId, routeName: dRouteName, iteration: dIteration });
+  allRoutes.push(dedicatedRoute);
 
   // Scan all text fields for additional route IDs.
   const allText = [observed, expected, reproIntent, ...(details ? [details] : [])].join('\n');
@@ -654,7 +731,7 @@ export async function handleConfirmRoute(interaction: ButtonInteraction) {
     return;
   }
 
-  const routeUrl = `https://connect.comma.ai/${formatRoute(dongleId, routeName, iteration)}`;
+  const routeUrl = `https://connect.comma.ai/${dongleId}/${routeName}`;
 
   let nowPublic = false;
   try {
