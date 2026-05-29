@@ -34,6 +34,7 @@ interface ExtractedRoute {
   dongleId: string;
   routeName: string;
   iteration?: string;
+  routeNumber?: number;
 }
 
 export const TRACKER_FIELD_PREFIX = '[Mods Route Tracker →]';
@@ -68,7 +69,7 @@ export function resolveTagIds(forum: ForumChannel, names: string[]): string[] {
 }
 
 // Matches dongle/route or dongle|route with optional iteration (used for scanning free-form text).
-export const ROUTE_REGEX = /([a-f0-9]{16})[\/|]([a-f0-9]{8}--[a-f0-9]{10})(?:\/([a-f0-9]{8}--[a-f0-9]{10}))?/gi;
+export const ROUTE_REGEX = /([a-f0-9]{16})[\/|]([a-f0-9]{8}--[a-f0-9]{10})(?:\/([a-f0-9]{8}--[a-f0-9]{10}|\d+))?/gi;
 
 // Anchored regex for validating a single normalized route string (dongle_id/route_name[/iteration]).
 const ROUTE_ID_REGEX = /^([a-f0-9]{16})[\/|]([a-f0-9]{8}--[a-f0-9]{10})(?:\/([a-f0-9]{8}--[a-f0-9]{10}|\d+))?$/i;
@@ -152,6 +153,45 @@ function extractRouteIds(text: string): ExtractedRoute[] {
   }
 
   return results;
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function replaceRouteIds(
+  text: string,
+  validRoutes: Array<ExtractedRoute & { routeNumber: number }>,
+): string {
+  let result = text;
+  // Process iteration routes first; bare-route regexes also use negative lookaheads as a
+  // second line of defence so they don't subsume more-specific iteration patterns.
+  const sorted = [...validRoutes].sort((a, b) => (b.iteration ? 1 : 0) - (a.iteration ? 1 : 0));
+  for (const { dongleId, routeName, iteration, routeNumber } of sorted) {
+    const label = `**[ROUTE ${routeNumber}]**`;
+    const d = escapeRegex(dongleId);
+    const r = escapeRegex(routeName);
+    if (iteration) {
+      const i = escapeRegex(iteration);
+      // URL: match any URL that has at least one numeric segment (seconds → segment conversion
+      // may differ, so we claim all segmented URLs for this dongle/route).
+      // Bare: match exactly this route's iteration.
+      result = result
+        .replace(new RegExp(`https://connect\\.comma\\.ai/${d}/${r}/\\d+(?:/\\d+)?`, 'gi'), label)
+        .replace(new RegExp(`${d}[/|]${r}/${i}`, 'gi'), label);
+    } else {
+      // URL: only match the base URL — stop before any trailing slash (would be a segment).
+      // Bare: only match when not immediately followed by an iteration suffix.
+      result = result
+        .replace(new RegExp(`https://connect\\.comma\\.ai/${d}/${r}(?!/)`, 'gi'), label)
+        .replace(new RegExp(`${d}[/|]${r}(?!/(?:[a-f0-9]{8}--[a-f0-9]{10}|\\d+))`, 'gi'), label);
+    }
+  }
+  return result
+    .replace(new RegExp(CONNECT_URL_REGEX.source, 'gi'), '')
+    .replace(new RegExp(ROUTE_REGEX.source, 'gi'), '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 export function stripRouteIds(text: string): string {
@@ -267,12 +307,14 @@ async function createRouteTrackerThread(
   iteration: string | undefined,
   threadUrl: string,
   publicThreadTitle: string,
+  routeNumber?: number,
 ): Promise<{ url: string; threadId: string } | null> {
   const routesForum = await getForum(guild, config.routesChannelId);
   if (!routesForum) return null;
 
   const routeStr = formatRoute(dongleId, routeName, iteration);
   const routeUrl = `https://connect.comma.ai/${dongleId}/${routeName}`;
+  const routeLabel = routeNumber ? `**[ROUTE ${routeNumber}]** ` : '';
 
   // Check if a tracker thread already exists for this public post.
   const existing = await findRouteThread(routesForum, publicThreadTitle);
@@ -285,9 +327,9 @@ async function createRouteTrackerThread(
         if (!embed.fields?.some((f: { value?: string }) => f.value?.includes(routeUrl))) {
           const existingField = updated.data.fields?.find(f => f.name === 'Additional Routes');
           if (existingField) {
-            existingField.value += `\n[${routeStr}](${routeUrl})`;
+            existingField.value += `\n${routeLabel}[${routeStr}](${routeUrl})`;
           } else {
-            updated.addFields({ name: 'Additional Routes', value: `[${routeStr}](${routeUrl})` });
+            updated.addFields({ name: 'Additional Routes', value: `${routeLabel}[${routeStr}](${routeUrl})` });
           }
           await starter.edit({ embeds: [updated] });
         }
@@ -301,7 +343,7 @@ async function createRouteTrackerThread(
     .setColor(COLORS.amber)
     .setTitle(publicThreadTitle)
     .addFields(
-      { name: 'Route', value: `[${routeStr}](${routeUrl})` },
+      { name: 'Route', value: `${routeLabel}[${routeStr}](${routeUrl})` },
     )
     .setTimestamp();
 
@@ -325,7 +367,7 @@ async function createRouteTrackerThread(
 export async function addAdditionalRoutesToTracker(
   guild: Guild,
   threadId: string,
-  additionalRoutes: Array<{ dongleId: string; routeName: string; iteration?: string }>,
+  additionalRoutes: ExtractedRoute[],
   sourceUrl?: string,
   sourceName?: string,
 ): Promise<void> {
@@ -341,7 +383,7 @@ export async function addAdditionalRoutesToTracker(
     const links = additionalRoutes.map(r => {
       const routeStr = formatRoute(r.dongleId, r.routeName, r.iteration);
       const url = `https://connect.comma.ai/${r.dongleId}/${r.routeName}`;
-      const base = `[${routeStr}](${url})`;
+      const base = `${r.routeNumber ? `**[ROUTE ${r.routeNumber}]** ` : ''}[${routeStr}](${url})`;
       return sourceUrl && sourceName ? `${base} — [${sourceName}](${sourceUrl})` : base;
     }).join('\n');
     if (!embed.fields?.some((f: { value?: string }) => f.value?.includes(links))) {
@@ -491,6 +533,7 @@ async function submitReport(
       guild, config,
       primary.dongleId, primary.routeName, primary.iteration,
       thread.url, thread.name,
+      primary.routeNumber,
     );
     if (tracker) {
       params.embed.addFields({ name: '\u200B', value: `${TRACKER_FIELD_PREFIX}(${tracker.url})` });
@@ -681,12 +724,13 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
   }
 
   const validRoutes = validatedRoutes.filter(r => r.valid);
+  const numberedRoutes = validRoutes.map((r, i) => ({ ...r, routeNumber: i + 1 }));
 
-  // Strip route IDs from public-facing text fields.
-  const cleanObserved = stripRouteIds(observed);
-  const cleanExpected = stripRouteIds(expected);
-  const cleanReproIntent = stripRouteIds(reproIntent);
-  const cleanDetails = details ? stripRouteIds(details) : null;
+  // Replace route IDs in public-facing text fields with numbered labels.
+  const cleanObserved = replaceRouteIds(observed, numberedRoutes);
+  const cleanExpected = replaceRouteIds(expected, numberedRoutes);
+  const cleanReproIntent = replaceRouteIds(reproIntent, numberedRoutes);
+  const cleanDetails = details ? replaceRouteIds(details, numberedRoutes) : null;
 
   const reportEmbed = new EmbedBuilder()
     .setColor(COLORS.blurple)
@@ -701,14 +745,14 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
     reportEmbed.addFields({ name: 'Additional Details', value: cleanDetails });
   }
 
-  const nonPublic = validRoutes.filter(r => !r.public);
-  const primaryNonPublic = nonPublic.length > 0 && nonPublic[0].dongleId === validRoutes[0].dongleId ? nonPublic[0] : undefined;
+  const nonPublic = numberedRoutes.filter(r => !r.public);
+  const primaryNonPublic = nonPublic.length > 0 && nonPublic[0].dongleId === numberedRoutes[0].dongleId ? nonPublic[0] : undefined;
 
   await submitReport(interaction, {
     embed: reportEmbed,
     titleSource: cleanObserved,
     wikiQuery: `${cleanObserved} ${cleanExpected} ${cleanReproIntent}`,
-    validRoutes,
+    validRoutes: numberedRoutes,
     label: 'Bug Report',
     emoji: '🐛',
     tagNames: ['OPEN', 'BUG'],
@@ -802,7 +846,14 @@ export async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, 
   const emoji = type === 'feedback' ? '💬' : '✨';
   const label = type === 'feedback' ? 'Feedback' : 'Feature Request';
 
-  const cleanContent = stripRouteIds(content);
+  // Scan and validate route IDs before stripping so we can number them.
+  const routes = extractRouteIds(content);
+  const validatedRoutes: Array<ExtractedRoute & { valid: boolean; public: boolean }> = [];
+  for (const v of await Promise.all(routes.map(r => validateRoute(r.dongleId, r.routeName)))) {
+    validatedRoutes.push({ ...routes[validatedRoutes.length], ...v });
+  }
+  const numberedRoutes = validatedRoutes.filter(r => r.valid).map((r, i) => ({ ...r, routeNumber: i + 1 }));
+  const cleanContent = replaceRouteIds(content, numberedRoutes);
 
   const embed = new EmbedBuilder()
     .setColor(type === 'feedback' ? COLORS.green : COLORS.blurple)
@@ -810,18 +861,11 @@ export async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, 
     .setDescription(cleanContent.length > 4096 ? cleanContent.slice(0, 4093) + '...' : cleanContent)
     .setTimestamp();
 
-  // Scan content for route IDs.
-  const routes = extractRouteIds(content);
-  const validatedRoutes: Array<ExtractedRoute & { valid: boolean; public: boolean }> = [];
-  for (const v of await Promise.all(routes.map(r => validateRoute(r.dongleId, r.routeName)))) {
-    validatedRoutes.push({ ...routes[validatedRoutes.length], ...v });
-  }
-
   await submitReport(interaction, {
     embed,
     titleSource: cleanContent,
     wikiQuery: cleanContent,
-    validRoutes: validatedRoutes,
+    validRoutes: numberedRoutes,
     label,
     emoji,
     tagNames: type === 'feedback' ? ['OPEN', 'FEEDBACK'] : ['OPEN', 'FEATURE REQUEST'],
