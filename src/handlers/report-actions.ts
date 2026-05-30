@@ -154,8 +154,12 @@ export async function handleAdditionalReportSubmit(interaction: ModalSubmitInter
     });
     return;
   }
+  // Preserve verbatim input so the tracker shows what the user wrote.
+  const trimmedInput = routeId.trim();
+  parsed.originalText = trimmedInput;
+  parsed.isUrl = /^https:\/\/connect\.comma\.ai\//i.test(trimmedInput);
 
-  const { dongleId, routeName, iteration } = parsed;
+  const { dongleId, routeName } = parsed;
   const { valid, public: isPublic } = await validateRoute(dongleId, routeName);
   if (!valid) {
     await interaction.editReply({ content: 'That route does not exist. Please check the Route ID and try again.' });
@@ -233,7 +237,7 @@ export async function handleAdditionalReportSubmit(interaction: ModalSubmitInter
   // Add to tracker with source attribution.
   if (trackerThreadId) {
     await addAdditionalRoutesToTracker(
-      guild, trackerThreadId, [{ dongleId, routeName, iteration }],
+      guild, trackerThreadId, [parsed],
       msg.url, `Additional Report #${additionalReportId}`,
     );
   }
