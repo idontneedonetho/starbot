@@ -278,11 +278,15 @@ export function buildActionRow(ticketId: string): ActionRowBuilder<ButtonBuilder
 }
 
 function formatThreadTitle(emoji: string, label: string, title: string | null, ticketId: string): string {
+  const MAX = 100;
   if (title) {
     const raw = `${emoji} ${label} - ${title} (${ticketId})`;
-    if (raw.length <= 100) return raw;
-    const maxLen = 100 - emoji.length - label.length - ticketId.length - 6;
-    const truncated = title.slice(0, Math.max(0, maxLen - 1)) + '…';
+    if (raw.length <= MAX) return raw;
+    // Derive budget from the actual surrounding chars to avoid manual-count drift.
+    const overhead = `${emoji} ${label} -  (${ticketId})`.length;
+    const maxTitleLen = MAX - overhead;
+    if (maxTitleLen <= 1) return `${emoji} ${label} - ${ticketId}`;
+    const truncated = title.slice(0, maxTitleLen - 1) + '…';
     return `${emoji} ${label} - ${truncated} (${ticketId})`;
   }
   return `${emoji} ${label} - ${ticketId}`;
