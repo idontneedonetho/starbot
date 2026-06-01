@@ -9,6 +9,9 @@ import {
   MessageFlags,
 } from 'discord.js';
 import { loadConfig } from '../config.js';
+import { createLogger } from '../logger.js';
+
+const log = createLogger('identification');
 
 export async function handleIdentityButton(interaction: ButtonInteraction) {
   const modal = new ModalBuilder()
@@ -82,7 +85,7 @@ export async function handleIdentitySubmit(interaction: ModalSubmitInteraction) 
   try {
     await interaction.member.roles.add(config.verifiedRole);
   } catch (err) {
-    console.error('Failed to assign verified role:', err);
+    log.error({ err }, 'Failed to assign verified role');
     await interaction.reply({
       content: `Nickname set to **${nickname}**, but I couldn't assign the verified role. Make sure the bot has **Manage Roles** permission and its role is above yours.`,
       flags: MessageFlags.Ephemeral,
@@ -93,7 +96,7 @@ export async function handleIdentitySubmit(interaction: ModalSubmitInteraction) 
   try {
     await interaction.member.roles.remove(config.pendingRole);
   } catch (err) {
-    console.error('Failed to remove pending role:', err);
+    log.error({ err }, 'Failed to remove pending role');
   }
 
   await interaction.reply({ content: `Nickname set to **${nickname}**`, flags: MessageFlags.Ephemeral });

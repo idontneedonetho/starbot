@@ -1,6 +1,9 @@
 import fs from 'fs';
 import path from 'path';
+import { createLogger } from '../logger.js';
 import { type WikiPage } from './types.js';
+
+const log = createLogger('wiki:fetcher');
 
 const DOCS_SUBDIR = 'docs';
 const GITHUB_API = 'https://api.github.com';
@@ -71,7 +74,7 @@ export async function fetchWikiPages(
     try {
       const cached = JSON.parse(fs.readFileSync(pagesPath, 'utf-8')) as WikiPage[];
       if (cached.length > 0) {
-        console.log(`Wiki loaded from cache (${cached.length} pages)`);
+        log.info(`Wiki loaded from cache (${cached.length} pages)`);
         return cached;
       }
     } catch {}
@@ -96,7 +99,7 @@ export async function fetchWikiPages(
 
   fs.writeFileSync(treeShaPath, JSON.stringify({ sha: currentSha }), 'utf-8');
   fs.writeFileSync(pagesPath, JSON.stringify(pages), 'utf-8');
-  console.log(`Wiki fetched from GitHub (${pages.length} pages)`);
+  log.info(`Wiki fetched from GitHub (${pages.length} pages)`);
 
   return pages;
 }

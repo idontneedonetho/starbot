@@ -9,12 +9,15 @@ import {
 } from 'discord.js';
 import { readFileSync } from 'fs';
 import { loadConfig } from '../config.js';
+import { createLogger } from '../logger.js';
 import { fetchWikiPages } from '../wiki/fetcher.js';
 import { buildIndex } from '../wiki/indexer.js';
 import { setIndex, setInitFailed, getInitStatus, getIndex } from '../wiki/wiki.js';
 import { searchWiki, formatWikiResults } from '../wiki/searcher.js';
 import { WikiRateLimit } from './guards.js';
 import { COLORS } from '../util.js';
+
+const log = createLogger('events');
 
 function getCommitHash(): string | null {
   try {
@@ -35,18 +38,18 @@ export class BotEvents {
   async ready([client]: ArgsOf<Events.ClientReady>) {
     const config = loadConfig();
 
-    console.log(`Logged in as ${client.user!.tag}`);
+    log.info(`Logged in as ${client.user!.tag}`);
 
     const client_ = client as Client;
     try {
       await client_.initApplicationCommands();
     } catch (err) {
-      console.error('Failed to init application commands:', err);
+      log.error({ err }, 'Failed to init application commands');
     }
 
     const guild = client.guilds.cache.get(config.guildId);
     if (!guild) {
-      console.error(`Guild ${config.guildId} not found`);
+      log.error(`Guild ${config.guildId} not found`);
       return;
     }
 
@@ -56,7 +59,7 @@ export class BotEvents {
         { label: 'Set Nickname & Vehicle', customId: 'set_identity', style: ButtonStyle.Primary, emoji: '🎭' },
       ],
       'Welcome to **StarPilot Server**! To gain access to the rest of the community, please set your server nickname and register your primary vehicle.\n\nYou can click this button at any time to update your vehicle or name in the future.',
-    ).catch(err => console.error('Failed to set up identification button:', err));
+    ).catch(err => log.error({ err }, 'Failed to set up identification button'));
 
     await this.ensureButtonMessage(
       guild, config.reportButtonChannelId,
@@ -66,7 +69,7 @@ export class BotEvents {
         { label: 'Feature Request', customId: 'report_feature', style: ButtonStyle.Success, emoji: '✨' },
       ],
       '### Submit a Report\n\nEncountered an issue with navigation? Have an idea for a new feature? Let us know!\n\n> **Bug reports** require a **Route ID** — visible only to **server admins**',
-    ).catch(err => console.error('Failed to set up report button:', err));
+    ).catch(err => log.error({ err }, 'Failed to set up report button'));
 
     // Initialize wiki search
     try {
@@ -74,19 +77,19 @@ export class BotEvents {
       if (wikiPages.length > 0) {
         const idx = await buildIndex(wikiPages, config.wikiCacheDir);
         setIndex(idx);
-        console.log(`Wiki initialized with ${wikiPages.length} pages`);
+        log.info(`Wiki initialized with ${wikiPages.length} pages`);
       } else {
-        console.log('Wiki fetch returned no pages');
+        log.info('Wiki fetch returned no pages');
         setInitFailed();
       }
     } catch (err) {
-      console.error('Failed to initialize wiki:', err);
+      log.error({ err }, 'Failed to initialize wiki');
       setInitFailed();
     }
 
     const status = getInitStatus();
-    console.log(`Wiki status: ${status}`);
-    console.log('StarPilot bot is ready');
+    log.info(`Wiki status: ${status}`);
+    log.info('StarPilot bot is ready');
 
     const commitHash = getCommitHash();
     if (commitHash) {
@@ -136,7 +139,7 @@ export class BotEvents {
     try {
       await message.react(reactionEmoji);
       reactionAdded = true;
-    } catch (err) { console.warn('[events] Failed to add reaction:', err); }
+    } catch (err) { log.warn({ err }, 'Failed to add reaction'); }
 
     try {
       const results = await searchWiki(index, query);
@@ -151,14 +154,14 @@ export class BotEvents {
         await message.reply("I couldn't find a relevant wiki page.");
       }
     } catch (err) {
-      console.error('Wiki search error:', err);
+      log.error({ err }, 'Wiki search error');
       await message.reply('Something went wrong while searching the wiki.');
     } finally {
       if (reactionAdded) {
         try {
           const reaction = message.reactions.cache.get(reactionEmoji);
           if (reaction) await reaction.users.remove(message.client.user!.id);
-        } catch (err) { console.warn('[events] Failed to remove reaction:', err); }
+        } catch (err) { log.warn({ err }, 'Failed to remove reaction'); }
       }
     }
   }
@@ -171,7 +174,7 @@ export class BotEvents {
   ) {
     const channel = await guild.channels.fetch(channelId);
     if (!channel?.isTextBased()) {
-      console.error(`Channel ${channelId} not found or not text-based`);
+      log.error(`Channel ${channelId} not found or not text-based`);
       return;
     }
 
@@ -181,13 +184,13 @@ export class BotEvents {
         ({ message: m }) => m.author.id === guild.client.user!.id && m.components.length > 0,
       );
       if (existing) return;
-    } catch (err) { console.warn('[events] Failed to fetch pinned messages:', err); }
+    } catch (err) { log.warn({ err }, 'Failed to fetch pinned messages'); }
 
     const message = await channel.send({
       content,
       components: [this.buttonRow(buttons)],
     });
-    await message.pin().catch(err => console.error('Failed to pin button:', err));
+    await message.pin().catch(err => log.error({ err }, 'Failed to pin button'));
   }
 
   private buttonRow(buttons: Array<{ label: string; customId: string; style: ButtonStyle; emoji: string }>) {

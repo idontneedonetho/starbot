@@ -1,6 +1,7 @@
 import { Client } from 'discordx';
 import { IntentsBitField } from 'discord.js';
 import { loadConfig } from './config.js';
+import { root as log } from './logger.js';
 import './handlers/events.js';
 import './handlers/buttons.js';
 import './handlers/modals.js';
@@ -15,24 +16,24 @@ const client = new Client({
     IntentsBitField.Flags.GuildMessages,
     IntentsBitField.Flags.MessageContent,
   ],
-  silent: false,
+  silent: true,
 });
 
 client.login(config.token);
 
 function shutdown() {
-  console.log('Shutting down...');
+  log.info('Shutting down...');
   client.destroy();
   process.exit(0);
 }
 
 process.on('unhandledRejection', (err) => {
-  console.error('Unhandled rejection:', err);
+  log.fatal({ err }, 'Unhandled rejection');
   shutdown();
 });
 
 process.on('uncaughtException', (err) => {
-  console.error('Uncaught exception:', err);
+  log.fatal({ err }, 'Uncaught exception');
   shutdown();
 });
 

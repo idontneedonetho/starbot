@@ -8,7 +8,10 @@ import {
   ButtonStyle,
 } from 'discord.js';
 import { EventSource } from 'eventsource';
+import { createLogger } from '../logger.js';
 import { COLORS } from '../util.js';
+
+const log = createLogger('clip');
 
 export interface ClipConfig {
   endpoint: string;
@@ -448,7 +451,7 @@ export async function handleClipRequest(
     await interaction.editReply({ embeds: [embed], files: [attachment], components: [row] });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
-    console.error('[clip]', msg);
+    log.error({ err }, msg);
     try {
       const embed = new EmbedBuilder()
         .setColor(COLORS.red)
