@@ -40,6 +40,8 @@ import {
   RENDER_TYPES_WITH_ANONYMIZATION,
   PASSENGER_REDACTION_STYLES,
   PROFILES_REQUIRING_PRS,
+  RENDER_TYPE_OPTIONS,
+  RENDER_TYPE_LABELS,
   VALID_RENDER_TYPES,
   type ClipJobInput,
 } from './clip.js';
@@ -135,16 +137,12 @@ export class ClipCommands {
       .setPlaceholder('Select a render type\u2026')
       .setMinValues(1)
       .addOptions(
-        { label: 'UI', value: 'ui', description: 'openpilot UI overlay (default)', default: true },
-        { label: 'UI Alt', value: 'ui-alt', description: 'Alternate UI composition' },
-        { label: 'Driver Debug', value: 'driver-debug', description: 'Raw driver camera' },
-        { label: 'Forward', value: 'forward', description: 'Road camera, fast transcode' },
-        { label: 'Wide', value: 'wide', description: 'Wide-angle camera, fast transcode' },
-        { label: 'Driver', value: 'driver', description: 'Driver camera, fast transcode' },
-        { label: '360', value: '360', description: 'Equirectangular 360\u00b0 sphere' },
-        { label: '360 UI', value: '360-ui', description: '360\u00b0 with HUD overlay' },
-        { label: 'Forward Upon Wide', value: 'forward-upon-wide', description: 'Forward overlaid on wide' },
-        { label: '360 Forward Upon Wide', value: '360-forward-upon-wide', description: '360\u00b0 + forward on wide (8K)' },
+        ...RENDER_TYPE_OPTIONS.map((o, i) => ({
+          label: o.label,
+          value: o.key,
+          description: o.description,
+          default: i === 0,
+        })),
       );
     modal.addLabelComponents(
       new LabelBuilder().setLabel('Render Type').setStringSelectMenuComponent(rtSelect),
@@ -581,7 +579,9 @@ export class ClipCommands {
   async publishClip(interaction: ButtonInteraction) {
     await interaction.deferUpdate();
 
-    const jobId = interaction.customId.slice('clip_pub_'.length);
+    const customIdParts = interaction.customId.slice('clip_pub_'.length).split(':');
+    const jobId = customIdParts[0];
+    const renderType = customIdParts[1];
     const config = getClipConfig();
 
     if (!config) {
@@ -611,7 +611,11 @@ export class ClipCommands {
     }
 
     const attachment = new AttachmentBuilder(Buffer.from(data), { name: 'clip.mp4' });
-    await channel.send({ content: `<@${interaction.user.id}>`, files: [attachment] });
+    const friendlyType = renderType ? (RENDER_TYPE_LABELS[renderType] ?? renderType) : null;
+    const content = friendlyType
+      ? `Clip shared by <@${interaction.user.id}>\n-# Render Type: \`${friendlyType}\``
+      : `Clip shared by <@${interaction.user.id}>`;
+    await channel.send({ content, files: [attachment] });
 
     await interaction.editReply({
       embeds: [new EmbedBuilder().setColor(COLORS.green).setTitle('Published').setDescription('Your clip has been shared in the channel.')],

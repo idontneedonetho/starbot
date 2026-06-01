@@ -27,18 +27,28 @@ export interface ClipJobInput {
   passengerRedactionStyle?: string;
 }
 
-export const RENDER_TYPE_MAP: Record<string, string> = {
-  'ui': 'ui',
-  'ui-alt': 'ui-alt',
-  'driver-debug': 'driver-debug',
-  'forward': 'forward',
-  'wide': 'wide',
-  'driver': 'driver',
-  '360': '360',
-  '360-ui': '360-ui',
-  'forward-upon-wide': 'forward_upon_wide',
-  '360-forward-upon-wide': '360_forward_upon_wide',
-};
+export const RENDER_TYPE_OPTIONS = [
+  { key: 'ui', label: 'UI', apiValue: 'ui', description: 'openpilot UI overlay (default)' },
+  { key: 'ui-alt', label: 'UI Alt', apiValue: 'ui-alt', description: 'Alternate UI composition' },
+  { key: 'driver-debug', label: 'Driver Debug', apiValue: 'driver-debug', description: 'Raw driver camera' },
+  { key: 'forward', label: 'Forward', apiValue: 'forward', description: 'Road camera, fast transcode' },
+  { key: 'wide', label: 'Wide', apiValue: 'wide', description: 'Wide-angle camera, fast transcode' },
+  { key: 'driver', label: 'Driver', apiValue: 'driver', description: 'Driver camera, fast transcode' },
+  { key: '360', label: '360\u00b0', apiValue: '360', description: 'Equirectangular 360\u00b0 sphere' },
+  { key: '360-ui', label: '360\u00b0 UI', apiValue: '360-ui', description: '360\u00b0 with HUD overlay' },
+  { key: 'forward-upon-wide', label: 'Forward Upon Wide', apiValue: 'forward_upon_wide', description: 'Forward overlaid on wide' },
+  { key: '360-forward-upon-wide', label: '360\u00b0 Forward Upon Wide', apiValue: '360_forward_upon_wide', description: '360\u00b0 + forward on wide (8K)' },
+] as const;
+
+export const RENDER_TYPE_MAP: Record<string, string> = Object.fromEntries(
+  RENDER_TYPE_OPTIONS.map(o => [o.key, o.apiValue]),
+);
+
+export const RENDER_TYPE_LABELS: Record<string, string> = Object.fromEntries(
+  RENDER_TYPE_OPTIONS.map(o => [o.apiValue, o.label]),
+);
+
+export const VALID_RENDER_TYPES = RENDER_TYPE_OPTIONS.map(o => o.key);
 
 export function getAnonymizationOptions(config: ClipConfig | null): string[] {
   if (config?.allowFaceSwap) return [...ANONYMIZATION_PROFILES];
@@ -55,8 +65,6 @@ export const ANONYMIZATION_LABELS: Record<string, string> = {
 };
 
 export const ANONYMIZATION_PROFILES = Object.keys(ANONYMIZATION_LABELS);
-
-export const VALID_RENDER_TYPES = Object.keys(RENDER_TYPE_MAP);
 
 export const PASSENGER_REDACTION_LABELS: Record<string, string> = {
   'blur': 'Blur',
@@ -432,7 +440,7 @@ export async function handleClipRequest(
 
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
-        .setCustomId(`clip_pub_${jobId}`)
+        .setCustomId(`clip_pub_${jobId}:${renderLabel}`)
         .setLabel('Publish')
         .setStyle(ButtonStyle.Primary),
     );
