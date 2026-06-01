@@ -174,7 +174,9 @@ export function replaceRouteIds(
   return text
     .replace(new RegExp(ANY_ROUTE_REGEX.source, 'gi'), match => labelByText.get(match.toLowerCase()) ?? '')
     .replace(CONNECT_URL_STRIP_REGEX, '')
-    .replace(/\s+/g, ' ')
+    .split('\n')
+    .map(line => line.replace(/\s+/g, ' ').trim())
+    .join('\n')
     .trim();
 }
 
@@ -182,7 +184,9 @@ export function stripRouteIds(text: string): string {
   return text
     .replace(CONNECT_URL_REGEX, '')
     .replace(ROUTE_REGEX, '')
-    .replace(/\s+/g, ' ')
+    .split('\n')
+    .map(line => line.replace(/\s+/g, ' ').trim())
+    .join('\n')
     .trim();
 }
 
