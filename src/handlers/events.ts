@@ -103,6 +103,15 @@ export class BotEvents {
   @On({ event: Events.MessageCreate })
   @Guard(WikiRateLimit)
   async messageCreate([message]: ArgsOf<Events.MessageCreate>) {
+    if (message.reference?.messageId) {
+      try {
+        const referenced = await message.channel.messages.fetch(message.reference.messageId);
+        if (referenced.author.id === message.client.user!.id && referenced.content.startsWith('Clip shared by')) {
+          return;
+        }
+      } catch { /* referenced message may not be accessible */ }
+    }
+
     const query = message.content.replace(/<@!?\d+>/g, '').trim();
     if (!query) {
       await message.reply('Mention me with a question to search the wiki.');
