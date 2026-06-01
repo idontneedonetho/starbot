@@ -18,10 +18,13 @@ import {
   StringSelectMenuBuilder,
 } from 'discord.js';
 import { loadConfig } from '../config.js';
+import { createLogger } from '../logger.js';
 import { getIndex } from '../wiki/wiki.js';
 import { embedBatch } from '../wiki/embedder.js';
 import { searchWiki, formatWikiResults } from '../wiki/searcher.js';
 import { COLORS, dot } from '../util.js';
+
+const log = createLogger('report');
 
 interface ParsedConfirmRoute {
   ticketId: string;
@@ -62,7 +65,7 @@ export async function getForum(guild: Guild, id: string): Promise<ForumChannel |
     const ch = await guild.channels.fetch(id);
     return ch instanceof ForumChannel ? ch : null;
   } catch (err) {
-    console.warn('[report] Failed to fetch forum channel:', err);
+    log.warn({ err }, 'Failed to fetch forum channel');
     return null;
   }
 }
@@ -197,7 +200,7 @@ export async function validateRoute(dongleId: string, routeName: string): Promis
     if (res.ok) return { valid: true, public: true };
     if (res.status === 403 || res.status === 401) return { valid: true, public: false };
   } catch (err) {
-    console.warn('[report] Route validation API unreachable:', err);
+    log.warn({ err }, 'Route validation API unreachable');
   }
   return { valid: false, public: false };
 }
@@ -282,7 +285,7 @@ async function addWikiSuggestions(embed: EmbedBuilder, query: string): Promise<v
       }
     }
   } catch (err) {
-    console.error('Failed to fetch wiki suggestions:', err);
+    log.error({ err }, 'Failed to fetch wiki suggestions');
   }
 }
 
@@ -428,7 +431,7 @@ export async function addAdditionalRoutesToTracker(
       await starter.edit({ embeds: [updated] });
     }
   } catch (err) {
-    console.warn('[report] Failed to add additional routes to tracker:', err);
+    log.warn({ err }, 'Failed to add additional routes to tracker');
   }
 }
 
@@ -541,7 +544,7 @@ async function submitReport(
       appliedTags: tagIds,
     });
   } catch (err) {
-    console.error('Failed to create thread:', err);
+    log.error({ err }, 'Failed to create thread');
     await interaction.editReply({ content: 'Failed to create thread. Contact an admin.' });
     return;
   }
@@ -551,7 +554,7 @@ async function submitReport(
   try {
     await thread.edit({ name: formatThreadTitle(params.emoji, params.label, generatedTitle, ticketId) });
   } catch (err) {
-    console.error('Failed to rename thread:', err);
+    log.error({ err }, 'Failed to rename thread');
   }
 
   params.embed.setTitle(`${params.label} ${ticketId}`);
@@ -580,7 +583,7 @@ async function submitReport(
     await thread.send({
       content: `<@${interaction.user.id}> Your route is valid but not yet public. Once you've made it public, click the button below to link it to this report.\n\nNeed help? Follow [these instructions](<https://wiki.firestar.link/faq/#how-do-i-upload-logs-for-troubleshooting>).`,
       components: [new ActionRowBuilder<ButtonBuilder>().addComponents(btn)],
-    }).catch(err => console.error('Failed to send primary confirm button:', err));
+    }).catch(err => log.error({ err }, 'Failed to send primary confirm button'));
   }
 
   const remainingNonPublic = params.primaryNonPublicRoute
@@ -591,7 +594,7 @@ async function submitReport(
     await thread.send({
       content: `<@${interaction.user.id}> Some additional routes are not yet public. Once you've made them public, click the button below to link them to this report.`,
       components: confirmRows,
-    }).catch(err => console.error('Failed to send additional confirm buttons:', err));
+    }).catch(err => log.error({ err }, 'Failed to send additional confirm buttons'));
   }
 
   await addWikiSuggestions(params.embed, params.wikiQuery);
@@ -599,7 +602,7 @@ async function submitReport(
   if (starter) {
     const actionRow = buildActionRow(ticketId);
     await starter.edit({ embeds: [params.embed], components: [actionRow] }).catch(err => {
-      console.error('Failed to edit starter message:', err);
+      log.error({ err }, 'Failed to edit starter message');
     });
   }
 
@@ -702,6 +705,16 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
   const reproIntent = interaction.fields.getTextInputValue('reproducibility_intent');
   const branchValues = interaction.fields.getStringSelectValues('current_branch');
   const branch = branchValues.length > 0 ? branchValues[0] : 'StarPilot';
+
+  log.info({
+    userId: interaction.user.id,
+    type: 'bug',
+    route: routeIdInput,
+    branch,
+    observed,
+    expected,
+    reproIntent,
+  }, 'Bug report submitted');
 
   let normalizedRoute: string;
   try {
@@ -810,7 +823,7 @@ export async function handleConfirmRoute(interaction: ButtonInteraction) {
     const res = await fetch(`https://api.comma.ai/v1/route/${dongleId}|${routeName}/files`);
     nowPublic = res.ok;
   } catch (err) {
-    console.warn('[report] Route check API unreachable on confirm:', err);
+    log.warn({ err }, 'Route check API unreachable on confirm');
   }
 
   const thread = interaction.channel;
@@ -873,6 +886,12 @@ export async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, 
 
   const emoji = type === 'feedback' ? '💬' : '✨';
   const label = type === 'feedback' ? 'Feedback' : 'Feature Request';
+
+  log.info({
+    userId: interaction.user.id,
+    type,
+    content,
+  }, `${label} submitted`);
 
   // Scan and validate route IDs before stripping so we can number them.
   const routes = extractRouteIds(content);

@@ -15,8 +15,11 @@ import {
   MessageFlags,
 } from 'discord.js';
 import { loadConfig } from '../config.js';
+import { createLogger } from '../logger.js';
 import { COLORS } from '../util.js';
 import { getForum, resolveTagIds, normalizeRouteInput, parseNormalizedRoute, validateRoute, addAdditionalRoutesToTracker, stripRouteIds, buildActionRow, TRACKER_FIELD_PREFIX } from './report.js';
+
+const log = createLogger('report-actions');
 
 function hasStaffRole(member: GuildMember): boolean {
   return member.roles.cache.has(loadConfig().staffRole);
@@ -50,7 +53,7 @@ export async function handleAssign(interaction: ButtonInteraction) {
     return;
   }
 
-  await thread.members.add(interaction.user.id).catch(err => console.warn('[assign] Failed to add member to thread:', err));
+  await thread.members.add(interaction.user.id).catch(err => log.warn({ err }, 'Failed to add member to thread'));
 
   const starter = await thread.fetchStarterMessage();
   if (starter) {
@@ -95,7 +98,7 @@ export async function handleClose(interaction: ButtonInteraction) {
     if (embed) {
       const updated = EmbedBuilder.from(embed);
       updated.addFields({ name: '\u200B', value: `🔒 Closed by <@${interaction.user.id}>` });
-      await starter.edit({ embeds: [updated] }).catch(err => console.warn('[close] Failed to edit starter:', err));
+      await starter.edit({ embeds: [updated] }).catch(err => log.warn({ err }, 'Failed to edit starter'));
     }
   }
 
@@ -136,6 +139,13 @@ export async function handleAdditionalReportSubmit(interaction: ModalSubmitInter
 
   const routeId = interaction.fields.getTextInputValue('route_id');
   const details = interaction.fields.getTextInputValue('details');
+
+  log.info({
+    userId: interaction.user.id,
+    type: 'additional',
+    route: routeId,
+    details: details || null,
+  }, 'Additional report submitted');
 
   let normalizedRoute: string;
   try {
@@ -394,7 +404,7 @@ export async function handleSplitToThread(interaction: ButtonInteraction) {
   const splitStarter = await newThread.fetchStarterMessage();
   if (splitStarter) {
     const actionRow = buildActionRow(splitTicketId);
-    await splitStarter.edit({ components: [actionRow] }).catch(err => console.warn('[split] Failed to add action buttons:', err));
+    await splitStarter.edit({ components: [actionRow] }).catch(err => log.warn({ err }, 'Failed to add action buttons'));
   }
 
   // Add an inline split field to the OP's starter embed (inserted before Original Post).
@@ -408,10 +418,10 @@ export async function handleSplitToThread(interaction: ButtonInteraction) {
   } else {
     updatedEmbed.addFields(splitField);
   }
-  await starter.edit({ embeds: [updatedEmbed] }).catch(err => console.warn('[split] Failed to edit OP embed:', err));
+  await starter.edit({ embeds: [updatedEmbed] }).catch(err => log.warn({ err }, 'Failed to edit OP embed'));
 
   // Edit the additional report message to show the split link and remove the button.
   const updatedAdditionalEmbed = EmbedBuilder.from(additionalEmbed!);
   updatedAdditionalEmbed.addFields({ name: '✂️ Split to', value: `[${newThread.name}](${newThread.url})`, inline: true });
-  await interaction.message.edit({ embeds: [updatedAdditionalEmbed], components: [] }).catch(err => console.warn('[split] Failed to edit additional embed:', err));
+  await interaction.message.edit({ embeds: [updatedAdditionalEmbed], components: [] }).catch(err => log.warn({ err }, 'Failed to edit additional embed'));
 }
