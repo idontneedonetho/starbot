@@ -643,7 +643,7 @@ async function showBugModal(interaction: ButtonInteraction) {
       { label: 'StarPilot', value: 'StarPilot', description: 'The default branch, if you\'re unsure, pick this.', default: true },
       { label: 'Dom', value: 'Dom', description: 'Bleeding edge' },
     );
-  modal.addLabelComponents(new LabelBuilder().setLabel('Current Branch').setStringSelectMenuComponent(branchSelect));
+  modal.addLabelComponents(new LabelBuilder().setLabel('Branch').setDescription('The branch you were on when you experienced this issue').setStringSelectMenuComponent(branchSelect));
 
   const observedInput = new TextInputBuilder({
     custom_id: 'observed',
@@ -779,7 +779,7 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
     .setColor(COLORS.blurple)
     .addFields(
       { name: 'By', value: `<@${interaction.user.id}>`, inline: true },
-      { name: 'Current Branch', value: branch, inline: true },
+      { name: 'Branch', value: branch, inline: true },
       { name: 'Observed Behavior', value: cleanObserved },
       { name: 'Expected Behavior', value: cleanExpected },
       { name: 'Reproducibility, Intent & Details', value: cleanReproIntent },
