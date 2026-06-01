@@ -15,6 +15,7 @@ import {
   MessageFlags,
   ForumChannel,
   ThreadChannel,
+  StringSelectMenuBuilder,
 } from 'discord.js';
 import { loadConfig } from '../config.js';
 import { getIndex } from '../wiki/wiki.js';
@@ -631,6 +632,16 @@ async function showBugModal(interaction: ButtonInteraction) {
   });
   modal.addLabelComponents(new LabelBuilder().setLabel('Route ID').setDescription('Visible only to server admins').setTextInputComponent(routeIdInput));
 
+  const branchSelect = new StringSelectMenuBuilder()
+    .setCustomId('current_branch')
+    .setPlaceholder('Select a branch\u2026')
+    .setMinValues(1)
+    .addOptions(
+      { label: 'StarPilot', value: 'StarPilot', description: 'The default branch, if you\'re unsure, pick this.', default: true },
+      { label: 'Dom', value: 'Dom', description: 'Bleeding edge' },
+    );
+  modal.addLabelComponents(new LabelBuilder().setLabel('Current Branch').setStringSelectMenuComponent(branchSelect));
+
   const observedInput = new TextInputBuilder({
     custom_id: 'observed',
     style: TextInputStyle.Paragraph,
@@ -654,21 +665,12 @@ async function showBugModal(interaction: ButtonInteraction) {
   const reproIntentInput = new TextInputBuilder({
     custom_id: 'reproducibility_intent',
     style: TextInputStyle.Paragraph,
-    placeholder: 'Can you reproduce it? What is your ideal outcome?',
+    placeholder: 'Can you reproduce it? What is your ideal outcome? Any additional details?',
     required: true,
     min_length: 10,
     max_length: 1024,
   });
-  modal.addLabelComponents(new LabelBuilder().setLabel('Reproducibility & Intent').setTextInputComponent(reproIntentInput));
-
-  const detailsInput = new TextInputBuilder({
-    custom_id: 'details',
-    style: TextInputStyle.Paragraph,
-    placeholder: 'Optional extras...',
-    required: false,
-    max_length: 1024,
-  });
-  modal.addLabelComponents(new LabelBuilder().setLabel('Additional Details').setTextInputComponent(detailsInput));
+  modal.addLabelComponents(new LabelBuilder().setLabel('Reproducibility, Intent & Details').setTextInputComponent(reproIntentInput));
 
   await interaction.showModal(modal);
 }
@@ -698,7 +700,8 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
   const observed = interaction.fields.getTextInputValue('observed');
   const expected = interaction.fields.getTextInputValue('expected');
   const reproIntent = interaction.fields.getTextInputValue('reproducibility_intent');
-  const details = interaction.fields.getTextInputValue('details');
+  const branchValues = interaction.fields.getStringSelectValues('current_branch');
+  const branch = branchValues.length > 0 ? branchValues[0] : 'StarPilot';
 
   let normalizedRoute: string;
   try {
@@ -727,7 +730,7 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
   seenKeys.add(dedicatedTrimmed.toLowerCase());
   allRoutes.push(dedicatedRoute);
 
-  const allText = [observed, expected, reproIntent, ...(details ? [details] : [])].join('\n');
+  const allText = [observed, expected, reproIntent].join('\n');
   for (const r of extractRouteIds(allText)) {
     const key = (r.originalText ?? '').toLowerCase();
     if (key && !seenKeys.has(key)) {
@@ -758,21 +761,17 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
   const cleanObserved = replaceRouteIds(observed, replacementRoutes);
   const cleanExpected = replaceRouteIds(expected, replacementRoutes);
   const cleanReproIntent = replaceRouteIds(reproIntent, replacementRoutes);
-  const cleanDetails = details ? replaceRouteIds(details, replacementRoutes) : null;
 
   const reportEmbed = new EmbedBuilder()
     .setColor(COLORS.blurple)
     .addFields(
+      { name: 'By', value: `<@${interaction.user.id}>`, inline: true },
+      { name: 'Current Branch', value: branch, inline: true },
       { name: 'Observed Behavior', value: cleanObserved },
       { name: 'Expected Behavior', value: cleanExpected },
-      { name: 'Reproducibility & Intent', value: cleanReproIntent },
+      { name: 'Reproducibility, Intent & Details', value: cleanReproIntent },
     )
     .setTimestamp();
-
-  // Show the field even when content was fully stripped (e.g. only a route URL).
-  if (details) {
-    reportEmbed.addFields({ name: 'Additional Details', value: cleanDetails || '—' });
-  }
 
   const primaryNonPublic = dedicatedValidated.valid && !dedicatedValidated.public ? dedicatedValidated : undefined;
 
@@ -889,6 +888,7 @@ export async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, 
     .setColor(type === 'feedback' ? COLORS.green : COLORS.blurple)
     .setTitle(label)
     .setDescription(cleanContent.length > 4096 ? cleanContent.slice(0, 4093) + '...' : cleanContent)
+    .addFields({ name: 'By', value: `<@${interaction.user.id}>`, inline: true })
     .setTimestamp();
 
   await submitReport(interaction, {
