@@ -405,6 +405,7 @@ export async function handleSplitToThread(interaction: ButtonInteraction) {
   if (splitStarter) {
     const actionRow = buildActionRow(splitTicketId);
     await splitStarter.edit({ components: [actionRow] }).catch(err => log.warn({ err }, 'Failed to add action buttons'));
+    await splitStarter.pin().catch(err => log.warn({ err }, 'Failed to pin split starter'));
   }
 
   // Add an inline split field to the OP's starter embed (inserted before Original Post).

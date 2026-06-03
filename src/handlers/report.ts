@@ -604,6 +604,9 @@ async function submitReport(
     await starter.edit({ embeds: [params.embed], components: [actionRow] }).catch(err => {
       log.error({ err }, 'Failed to edit starter message');
     });
+    await starter.pin().catch(err => {
+      log.error({ err }, 'Failed to pin starter message');
+    });
   }
 
   await interaction.editReply({
