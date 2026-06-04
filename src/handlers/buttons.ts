@@ -1,7 +1,7 @@
 import { Discord, ButtonComponent } from 'discordx';
 import { type ButtonInteraction } from 'discord.js';
 import { handleIdentityButton } from './identification.js';
-import { handleBugButton, handleFeedbackButton, handleFeatureButton, handleConfirmRoute, handleRlogRecheck, handleRlogForceProceed } from './report.js';
+import { handleBugButton, handleFeedbackButton, handleFeatureButton, handleConfirmRoute, handleRlogRecheck, handleRlogForceProceed, handleRefreshRoutes } from './report.js';
 import { handleAssign, handleClose, handleAdditionalReportButton, handleMerge, handleSplitToThread } from './report-actions.js';
 
 @Discord()
@@ -64,5 +64,10 @@ export class BotButtons {
   @ButtonComponent({ id: /^split_/ })
   async splitToThread(interaction: ButtonInteraction) {
     await handleSplitToThread(interaction);
+  }
+
+  @ButtonComponent({ id: 'refresh_routes' })
+  async refreshRoutes(interaction: ButtonInteraction) {
+    await handleRefreshRoutes(interaction);
   }
 }

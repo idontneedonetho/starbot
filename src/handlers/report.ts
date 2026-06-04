@@ -16,7 +16,9 @@ import {
   ForumChannel,
   ThreadChannel,
   StringSelectMenuBuilder,
+  GuildMember,
 } from 'discord.js';
+import { LRUCache } from 'lru-cache';
 import { loadConfig } from '../config.js';
 import { createLogger } from '../logger.js';
 import { createStore } from '../store.js';
@@ -358,11 +360,31 @@ function routeShortForm(r: ExtractedRoute): string {
   return r.iteration ? `${base}/${r.iteration}` : base;
 }
 
+// Status emojis shared by the route-tracker renderer, the legend, and the refresh prefix-stripper.
+const STATUS_EMOJI = {
+  public: '🌎',
+  private: '⚫',
+  logs: '📜',
+  noLogs: '⚠️',
+  refresh: '🔄',
+} as const;
+
+// One-line legend rendered under the tracker's Original Post link (subtext markdown).
+const STATUS_LEGEND =
+  `${STATUS_EMOJI.public} = public | ${STATUS_EMOJI.private} = private | ` +
+  `${STATUS_EMOJI.logs} = logs | ${STATUS_EMOJI.noLogs} = no/partial logs`;
+
+// Matches the leading status-emoji prefix produced by routeStatusEmoji, so refresh can swap it.
+const STATUS_PREFIX_RE = new RegExp(
+  `^(?:${STATUS_EMOJI.public} (?:${STATUS_EMOJI.logs}|${STATUS_EMOJI.noLogs}) |${STATUS_EMOJI.private} )`,
+  'u',
+);
+
 // Leading status emojis: 🌎 public / ⚫ private; when public, 📜 rlogs present / ⚠️ rlogs missing.
 function routeStatusEmoji(r: ExtractedRoute): string {
   if (r.public === undefined) return '';
-  if (!r.public) return '⚫ ';
-  return `🌎 ${r.rlogsAvailable ? '📜' : '⚠️'} `;
+  if (!r.public) return `${STATUS_EMOJI.private} `;
+  return `${STATUS_EMOJI.public} ${r.rlogsAvailable ? STATUS_EMOJI.logs : STATUS_EMOJI.noLogs} `;
 }
 
 function routeLinkMarkdown(r: ExtractedRoute): string {
@@ -433,6 +455,82 @@ export function buildActionRow(ticketId: string): ActionRowBuilder<ButtonBuilder
   );
 }
 
+function buildRefreshRow(): ActionRowBuilder<ButtonBuilder> {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId('refresh_routes')
+      .setLabel('Refresh Status')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji(STATUS_EMOJI.refresh),
+  );
+}
+
+// Per-tracker cooldown for the Refresh Status button. LRU + TTL means entries auto-expire once the
+// cooldown elapses, so a key's mere presence signals "still cooling down" (no manual sweeping).
+const REFRESH_COOLDOWN_MS = 60_000;
+const refreshCooldowns = new LRUCache<string, number>({ max: 500, ttl: REFRESH_COOLDOWN_MS });
+
+// Re-validate one tracker route line and swap its leading status emoji; leaves the line otherwise
+// intact. Returns the line unchanged if it has no parseable route or the route can't be validated.
+async function refreshRouteLine(line: string): Promise<string> {
+  const shortMatch = line.match(/`([^`]+)`/);
+  if (!shortMatch) return line;
+  let components: RouteComponents;
+  try {
+    components = parseRouteComponents(shortMatch[1]);
+  } catch {
+    return line;
+  }
+  const v = await validateRoute(components.dongleId, components.routeName, components.startSegment, components.endSegment);
+  // Keep the prior status on a transient API failure rather than flipping it to "private".
+  if (!v.valid) return line;
+  const emoji = routeStatusEmoji({
+    dongleId: components.dongleId,
+    routeName: components.routeName,
+    public: v.public,
+    rlogsAvailable: v.rlogsAvailable,
+  });
+  return emoji + line.replace(STATUS_PREFIX_RE, '');
+}
+
+// Staff-only: re-check every route in the tracker embed and update the status emojis in place.
+export async function handleRefreshRoutes(interaction: ButtonInteraction): Promise<void> {
+  if (!(interaction.member instanceof GuildMember) || !interaction.member.roles.cache.has(loadConfig().staffRole)) {
+    await interaction.reply({ content: 'Only staff can refresh route status.', flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  const key = interaction.message.id;
+  const remaining = refreshCooldowns.getRemainingTTL(key);
+  if (remaining > 0) {
+    await interaction.reply({
+      content: `This tracker was just refreshed. Try again in ${Math.ceil(remaining / 1000)}s.`,
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+  refreshCooldowns.set(key, Date.now());
+
+  await interaction.deferUpdate();
+
+  const embed = interaction.message.embeds[0];
+  if (!embed) {
+    await interaction.followUp({ content: 'No route tracker embed to refresh.', flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  const updated = EmbedBuilder.from(embed);
+  for (const field of updated.data.fields ?? []) {
+    if (field.name !== 'Route' && field.name !== 'Additional Routes') continue;
+    const lines = field.value.split('\n');
+    field.value = (await Promise.all(lines.map(refreshRouteLine))).join('\n');
+  }
+
+  await interaction.message.edit({ embeds: [updated] }).catch(err =>
+    log.error({ err }, 'Failed to refresh route tracker'),
+  );
+}
+
 function formatThreadTitle(emoji: string, label: string, title: string | null, ticketId: string): string {
   const MAX = 100;
   if (title) {
@@ -497,6 +595,7 @@ async function createRouteTrackerThread(
   const routeEmbed = new EmbedBuilder()
     .setColor(COLORS.amber)
     .setTitle(publicThreadTitle)
+    .setFooter({ text: STATUS_LEGEND })
     .setTimestamp();
   if (primaryLink) {
     routeEmbed.addFields({ name: 'Route', value: primaryLink });
@@ -512,7 +611,7 @@ async function createRouteTrackerThread(
     routeEmbed.addFields(
       { name: '\u200B', value: `${ORIGINAL_POST_PREFIX}(${threadUrl})` },
     );
-    await starter.edit({ embeds: [routeEmbed] });
+    await starter.edit({ embeds: [routeEmbed], components: [buildRefreshRow()] });
   }
 
   return { url: routesThread.url, threadId: routesThread.id };
