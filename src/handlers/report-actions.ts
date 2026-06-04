@@ -60,7 +60,13 @@ export async function handleAssign(interaction: ButtonInteraction) {
     const embed = starter.embeds[0];
     if (embed) {
       const updated = EmbedBuilder.from(embed);
-      updated.addFields({ name: '👤 Assigned to', value: `<@${interaction.user.id}>` });
+      const assignIdx = embed.fields?.findIndex(f => f.name === '👤 Assigned to') ?? -1;
+      const assignField = { name: '👤 Assigned to', value: `<@${interaction.user.id}>` };
+      if (assignIdx >= 0) {
+        updated.spliceFields(assignIdx, 1, assignField);
+      } else {
+        updated.addFields(assignField);
+      }
       await starter.edit({ embeds: [updated] }).catch(() => {});
     }
   }
@@ -72,7 +78,9 @@ export async function handleAssign(interaction: ButtonInteraction) {
     if (forum) {
       const tagIds = resolveTagIds(forum, ['ASSIGNED']);
       if (tagIds.length > 0) {
-        await thread.setAppliedTags([...(thread.appliedTags as string[]), ...tagIds]).catch(() => {});
+        const existing = thread.appliedTags as string[];
+        const deduped = existing.filter(id => !tagIds.includes(id));
+        await thread.setAppliedTags([...deduped, ...tagIds]).catch(() => {});
       }
     }
   }
