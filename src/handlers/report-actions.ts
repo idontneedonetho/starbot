@@ -102,10 +102,10 @@ export async function handleClose(interaction: ButtonInteraction) {
     }
   }
 
+  await interaction.reply({ content: 'Report closed.', flags: MessageFlags.Ephemeral });
+
   const guild = interaction.guild;
   if (guild) await closeThread(thread, guild);
-
-  await interaction.reply({ content: 'Report closed.', flags: MessageFlags.Ephemeral });
 }
 
 export async function handleAdditionalReportButton(interaction: ButtonInteraction) {
