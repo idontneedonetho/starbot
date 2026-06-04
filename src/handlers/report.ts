@@ -557,7 +557,7 @@ async function findRouteThread(forum: ForumChannel, name: string): Promise<Threa
   }
 }
 
-async function createRouteTrackerThread(
+export async function createRouteTrackerThread(
   guild: Guild,
   config: ReturnType<typeof loadConfig>,
   primaryRoute: ExtractedRoute | undefined,
@@ -633,11 +633,22 @@ export async function addAdditionalRoutesToTracker(
     const embed = starter.embeds[0];
     if (!embed) return;
     const updated = EmbedBuilder.from(embed);
-    const links = additionalRoutes.map(r => {
-      const base = routeLinkMarkdown(r);
-      return sourceUrl && sourceName ? `${base} — [${sourceName}](${sourceUrl})` : base;
-    }).join('\n');
-    if (!embed.fields?.some((f: { value?: string }) => f.value?.includes(links))) {
+    const additionalField = embed.fields?.find(f => f.name === 'Additional Routes');
+    const existingValue = additionalField?.value ?? '';
+    const newLinks = additionalRoutes
+      .filter(r => {
+        const short = routeShortForm(r);
+        return !existingValue.includes(short);
+      })
+      .map(r => {
+        const base = routeLinkMarkdown(r);
+        return sourceUrl && sourceName ? `${base} — [${sourceName}](${sourceUrl})` : base;
+      });
+    if (newLinks.length === 0) return;
+    const links = newLinks.join('\n');
+    if (additionalField) {
+      additionalField.value += `\n${links}`;
+    } else {
       const origPostIdx = updated.data.fields?.findIndex(
         f => f.value?.startsWith(ORIGINAL_POST_PREFIX),
       ) ?? -1;
