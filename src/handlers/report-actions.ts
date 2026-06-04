@@ -170,11 +170,14 @@ export async function handleAdditionalReportSubmit(interaction: ModalSubmitInter
   parsed.isUrl = /^https:\/\/connect\.comma\.ai\//i.test(trimmedInput);
 
   const { dongleId, routeName } = parsed;
-  const { valid, public: isPublic } = await validateRoute(dongleId, routeName);
+  const { valid, public: isPublic, rlogsAvailable } = await validateRoute(dongleId, routeName);
   if (!valid) {
     await interaction.editReply({ content: 'That route does not exist. Please check the Route ID and try again.' });
     return;
   }
+
+  parsed.public = isPublic;
+  parsed.rlogsAvailable = rlogsAvailable;
 
   const thread = interaction.channel;
   if (!thread?.isThread()) {

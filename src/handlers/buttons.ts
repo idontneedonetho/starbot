@@ -1,7 +1,7 @@
 import { Discord, ButtonComponent } from 'discordx';
 import { type ButtonInteraction } from 'discord.js';
 import { handleIdentityButton } from './identification.js';
-import { handleBugButton, handleFeedbackButton, handleFeatureButton, handleConfirmRoute } from './report.js';
+import { handleBugButton, handleFeedbackButton, handleFeatureButton, handleConfirmRoute, handleRlogRecheck, handleRlogForceProceed } from './report.js';
 import { handleAssign, handleClose, handleAdditionalReportButton, handleMerge, handleSplitToThread } from './report-actions.js';
 
 @Discord()
@@ -29,6 +29,16 @@ export class BotButtons {
   @ButtonComponent({ id: /^cr_/ })
   async confirmRoute(interaction: ButtonInteraction) {
     await handleConfirmRoute(interaction);
+  }
+
+  @ButtonComponent({ id: /^rlogchk_/ })
+  async rlogRecheck(interaction: ButtonInteraction) {
+    await handleRlogRecheck(interaction);
+  }
+
+  @ButtonComponent({ id: /^rlogfrc_/ })
+  async rlogForceProceed(interaction: ButtonInteraction) {
+    await handleRlogForceProceed(interaction);
   }
 
   @ButtonComponent({ id: /^assign_/ })

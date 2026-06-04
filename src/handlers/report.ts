@@ -43,6 +43,18 @@ interface ExtractedRoute {
   originalText?: string;
   isUrl?: boolean;
   routeNumber?: number;
+  // Validation status, used to render the leading status emojis in the route tracker.
+  public?: boolean;
+  rlogsAvailable?: boolean;
+}
+
+// Fully decomposed route input: identity plus optional sub-route and segment bounds.
+interface RouteComponents {
+  dongleId: string;
+  routeName: string;
+  iteration?: string;
+  startSegment?: number;
+  endSegment?: number;
 }
 
 export const TRACKER_FIELD_PREFIX = '[Mods Route Tracker →]';
@@ -85,28 +97,42 @@ const ROUTE_ID_REGEX = /^([a-f0-9]{16})[\/|]([a-f0-9]{8}--[a-f0-9]{10})(?:\/([a-
 // Matches connect.comma.ai URLs with optional start[/end] seconds.
 const CONNECT_URL_REGEX = /https:\/\/connect\.comma\.ai\/([a-f0-9]{16})\/([a-f0-9]{8}--[a-f0-9]{10})(?:\/(\d+)(?:\/(\d+))?)?/gi;
 
-export function normalizeRouteInput(input: string): string {
+// connect.comma.ai URLs measure position in seconds; segments are 60s each.
+function secondsToSegment(secStr: string): number {
+  return Math.floor(parseInt(secStr, 10) / 60);
+}
+
+// Deconstruct any accepted route form into dongle/route plus optional sub-route or segment bounds.
+// Seconds (connect URLs) are converted to segment numbers; bare/pipe forms already use segments.
+// Throws with a user-facing message on malformed input.
+export function parseRouteComponents(input: string): RouteComponents {
   input = input.trim();
 
   if (input.startsWith('https://connect.comma.ai/')) {
     const path = input.slice('https://connect.comma.ai/'.length).replace(/\/+$/, '');
     const parts = path.split('/');
-    if (parts.length === 2) return `${parts[0]}/${parts[1]}`;
+    const [dongleId, routeName] = parts;
+    if (!/^[a-f0-9]{16}$/i.test(dongleId ?? ''))
+      throw new Error(`Invalid dongle ID "${dongleId}": expected 16 hex characters.`);
+    if (!/^[a-f0-9]{8}--[a-f0-9]{10}$/i.test(routeName ?? ''))
+      throw new Error(`Invalid route name "${routeName}": expected format like \`0000aaaa--1234567890\`.`);
+    if (parts.length === 2) return { dongleId, routeName };
     if (parts.length === 3) {
-      const [dongleId, routeName, secStr] = parts;
+      const secStr = parts[2];
       if (!/^\d+$/.test(secStr)) throw new Error(`Invalid seconds value in URL: "${secStr}"`);
-      return `${dongleId}/${routeName}/${Math.floor(parseInt(secStr, 10) / 60)}`;
+      return { dongleId, routeName, startSegment: secondsToSegment(secStr) };
     }
     if (parts.length === 4) {
-      const [dongleId, routeName, startStr] = parts;
-      if (!/^\d+$/.test(startStr)) throw new Error(`Invalid seconds value in URL: "${startStr}"`);
-      return `${dongleId}/${routeName}/${Math.floor(parseInt(startStr, 10) / 60)}`;
+      const [, , startStr, endStr] = parts;
+      if (!/^\d+$/.test(startStr)) throw new Error(`Invalid start seconds value in URL: "${startStr}"`);
+      if (!/^\d+$/.test(endStr)) throw new Error(`Invalid end seconds value in URL: "${endStr}"`);
+      return { dongleId, routeName, startSegment: secondsToSegment(startStr), endSegment: secondsToSegment(endStr) };
     }
     throw new Error(`Invalid connect.comma.ai URL format`);
   }
 
   const pipeMatch = input.match(/^([a-f0-9]{16})\|([a-f0-9]{8}--[a-f0-9]{10})$/i);
-  if (pipeMatch) return `${pipeMatch[1]}/${pipeMatch[2]}`;
+  if (pipeMatch) return { dongleId: pipeMatch[1], routeName: pipeMatch[2] };
 
   const parts = input.split('/');
   if (parts.length >= 2 && parts.length <= 4) {
@@ -114,10 +140,37 @@ export function normalizeRouteInput(input: string): string {
       throw new Error(`Invalid dongle ID "${parts[0]}": expected 16 hex characters.`);
     if (!/^[a-f0-9]{8}--[a-f0-9]{10}$/i.test(parts[1]))
       throw new Error(`Invalid route name "${parts[1]}": expected format like \`0000aaaa--1234567890\`.`);
-    return input;
+    const result: RouteComponents = { dongleId: parts[0], routeName: parts[1] };
+    if (parts.length >= 3) {
+      const third = parts[2];
+      if (/^[a-f0-9]{8}--[a-f0-9]{10}$/i.test(third)) {
+        result.iteration = third;
+        if (parts.length === 4)
+          throw new Error(`Unrecognized route format: a sub-route cannot be followed by a segment.`);
+      } else if (/^\d+$/.test(third)) {
+        result.startSegment = parseInt(third, 10);
+        if (parts.length === 4) {
+          if (!/^\d+$/.test(parts[3]))
+            throw new Error(`Invalid segment value "${parts[3]}": expected a number.`);
+          result.endSegment = parseInt(parts[3], 10);
+        }
+      } else {
+        throw new Error(`Invalid segment "${third}": expected a number or a sub-route ID.`);
+      }
+    }
+    return result;
   }
 
   throw new Error(`Unrecognized route format: expected "dongleId/routeName[/seg]" or a connect.comma.ai URL`);
+}
+
+// Canonical `dongle/route[/iteration|/startSegment]` string used for identity parsing.
+export function normalizeRouteInput(input: string): string {
+  const c = parseRouteComponents(input);
+  let out = `${c.dongleId}/${c.routeName}`;
+  if (c.iteration) out += `/${c.iteration}`;
+  else if (c.startSegment !== undefined) out += `/${c.startSegment}`;
+  return out;
 }
 
 export function parseNormalizedRoute(input: string): ExtractedRoute | null {
@@ -194,15 +247,78 @@ export function stripRouteIds(text: string): string {
     .trim();
 }
 
-export async function validateRoute(dongleId: string, routeName: string): Promise<{ valid: boolean; public: boolean }> {
+// Detail of the rlog-presence check, used to build a specific user-facing error.
+interface RlogCheckResult {
+  // 'whole' = entire route checked; 'segment' = a specific segment or range checked.
+  mode: 'whole' | 'segment';
+  missing: number[]; // segments lacking rlogs ('segment' mode)
+}
+
+interface RouteValidation {
+  valid: boolean;
+  public: boolean;
+  rlogsAvailable: boolean;
+  // Present only when the route is public and a check was performed.
+  rlogCheck?: RlogCheckResult;
+}
+
+// The /files response embeds the source filename (e.g. `dongle_route--6--rlog.zst`) in each
+// URL, so a substring match on `dongle_route--<seg>--rlog` tells us that segment's rlog exists.
+function segmentHasRlog(logs: string[], dongleId: string, routeName: string, seg: number): boolean {
+  const needle = `${dongleId}_${routeName}--${seg}--rlog`.toLowerCase();
+  return logs.some(u => u.toLowerCase().includes(needle));
+}
+
+export async function validateRoute(
+  dongleId: string,
+  routeName: string,
+  startSegment?: number,
+  endSegment?: number,
+): Promise<RouteValidation> {
   try {
     const res = await fetch(`https://api.comma.ai/v1/route/${dongleId}|${routeName}/files`);
-    if (res.ok) return { valid: true, public: true };
-    if (res.status === 403 || res.status === 401) return { valid: true, public: false };
+    if (res.ok) {
+      let rlogsAvailable = false;
+      let rlogCheck: RlogCheckResult | undefined;
+      try {
+        const data = await res.json() as { logs?: string[]; qlogs?: string[] };
+        const logs = Array.isArray(data.logs) ? data.logs : [];
+        const qlogs = Array.isArray(data.qlogs) ? data.qlogs : [];
+        if (startSegment !== undefined) {
+          const lo = Math.min(startSegment, endSegment ?? startSegment);
+          const hi = Math.max(startSegment, endSegment ?? startSegment);
+          const missing: number[] = [];
+          for (let s = lo; s <= hi; s++) {
+            if (!segmentHasRlog(logs, dongleId, routeName, s)) missing.push(s);
+          }
+          rlogsAvailable = missing.length === 0;
+          rlogCheck = { mode: 'segment', missing };
+        } else {
+          // qlogs/qcamera are the source of truth for how many segments should exist.
+          rlogsAvailable = qlogs.length > 0 && logs.length === qlogs.length;
+          rlogCheck = { mode: 'whole', missing: [] };
+        }
+      } catch (err) {
+        log.warn({ err }, 'Failed to parse route files response');
+      }
+      return { valid: true, public: true, rlogsAvailable, rlogCheck };
+    }
+    if (res.status === 403 || res.status === 401) return { valid: true, public: false, rlogsAvailable: false };
   } catch (err) {
     log.warn({ err }, 'Route validation API unreachable');
   }
-  return { valid: false, public: false };
+  return { valid: false, public: false, rlogsAvailable: false };
+}
+
+// Specific guidance for an rlog-check failure; tells the user which segment(s) to upload.
+function rlogFailureMessage(check: RlogCheckResult): string {
+  if (check.mode === 'whole') {
+    return 'All the logs must be uploaded. If you only have a few moments in the route to review, please use a route link / ID that is segmented.';
+  }
+  const segList = check.missing.join(', ');
+  const noun = check.missing.length === 1 ? 'segment' : 'segments';
+  // Subject is "The rlogs" (always plural), so the verb is always "don't".
+  return `The rlogs for ${noun} **${segList}** don't appear to be uploaded yet. Please upload the logs for ${noun} **${segList}** from your device, then check again.`;
 }
 
 export function formatRoute(dongleId: string, routeName: string, iteration?: string): string {
@@ -246,12 +362,19 @@ function routeShortForm(r: ExtractedRoute): string {
   return r.iteration ? `${base}/${r.iteration}` : base;
 }
 
+// Leading status emojis: 🌎 public / ⚫ private; when public, 📜 rlogs present / ⚠️ rlogs missing.
+function routeStatusEmoji(r: ExtractedRoute): string {
+  if (r.public === undefined) return '';
+  if (!r.public) return '⚫ ';
+  return `🌎 ${r.rlogsAvailable ? '📜' : '⚠️'} `;
+}
+
 function routeLinkMarkdown(r: ExtractedRoute): string {
   const url = routeLinkUrl(r);
   const short = routeShortForm(r);
   const original = r.originalText ?? short;
   const linkText = r.routeNumber ? `Route ${r.routeNumber}` : 'Route';
-  return `[${linkText}](${url}) — \`${short}\` — ||\`${original}\`||`;
+  return `${routeStatusEmoji(r)}[${linkText}](${url}) — \`${short}\` — ||\`${original}\`||`;
 }
 
 function buildConfirmRows(
@@ -504,14 +627,14 @@ async function generateThreadTitle(input: string): Promise<string | null> {
 }
 
 async function submitReport(
-  interaction: ModalSubmitInteraction,
+  interaction: ModalSubmitInteraction | ButtonInteraction,
   params: {
     embed: EmbedBuilder;
     titleSource: string;
     wikiQuery: string;
     // Undefined for feedback/feature flows where all routes are "additional".
-    dedicatedRoute?: ExtractedRoute & { valid: boolean; public: boolean };
-    additionalRoutes: Array<ExtractedRoute & { valid: boolean; public: boolean }>;
+    dedicatedRoute?: ExtractedRoute & RouteValidation;
+    additionalRoutes: Array<ExtractedRoute & RouteValidation>;
     label: string;
     emoji: string;
     tagNames: string[];
@@ -609,8 +732,11 @@ async function submitReport(
     });
   }
 
+  // components: [] only matters on the rlog-gate path (Check Again / Force Proceed), where it
+  // clears those buttons; on the normal modal flow the reply has no components, so it's a no-op.
   await interaction.editReply({
     content: `${params.label} **${ticketId}** submitted! [View thread](${thread.url})`,
+    components: [],
   });
 }
 
@@ -699,29 +825,68 @@ async function showFeedbackModal(interaction: ButtonInteraction, type: string) {
   await interaction.showModal(modal);
 }
 
+interface BugReportInput {
+  routeIdInput: string;
+  observed: string;
+  expected: string;
+  reproIntent: string;
+  branch: string;
+}
+
+interface PendingBugReport extends BugReportInput {
+  userId: string;
+  createdAt: number;
+}
+
+// Bug reports whose primary route failed the rlog check, awaiting "Check Again" / "Force Proceed".
+// In-memory is sufficient: the bot is single-instance and these are short-lived confirmations.
+const pendingBugReports = new Map<string, PendingBugReport>();
+const PENDING_BUG_TTL_MS = 15 * 60 * 1000;
+
+function prunePendingBugReports(): void {
+  const now = Date.now();
+  for (const [k, v] of pendingBugReports) {
+    if (now - v.createdAt > PENDING_BUG_TTL_MS) pendingBugReports.delete(k);
+  }
+}
+
 export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  const routeIdInput = interaction.fields.getTextInputValue('route_id');
-  const observed = interaction.fields.getTextInputValue('observed');
-  const expected = interaction.fields.getTextInputValue('expected');
-  const reproIntent = interaction.fields.getTextInputValue('reproducibility_intent');
   const branchValues = interaction.fields.getStringSelectValues('current_branch');
-  const branch = branchValues.length > 0 ? branchValues[0] : 'StarPilot';
+  const input: BugReportInput = {
+    routeIdInput: interaction.fields.getTextInputValue('route_id'),
+    observed: interaction.fields.getTextInputValue('observed'),
+    expected: interaction.fields.getTextInputValue('expected'),
+    reproIntent: interaction.fields.getTextInputValue('reproducibility_intent'),
+    branch: branchValues.length > 0 ? branchValues[0] : 'StarPilot',
+  };
 
   log.info({
     userId: interaction.user.id,
     type: 'bug',
-    route: routeIdInput,
-    branch,
-    observed,
-    expected,
-    reproIntent,
+    route: input.routeIdInput,
+    branch: input.branch,
+    observed: input.observed,
+    expected: input.expected,
+    reproIntent: input.reproIntent,
   }, 'Bug report submitted');
 
-  let normalizedRoute: string;
+  await processBugReport(interaction, input, false);
+}
+
+// Validates routes, gates on rlog availability, and (when cleared) creates the report.
+// Shared by the modal submit and the rlog gate buttons; `force` skips the rlog gate.
+async function processBugReport(
+  interaction: ModalSubmitInteraction | ButtonInteraction,
+  input: BugReportInput,
+  force: boolean,
+): Promise<void> {
+  const { routeIdInput, observed, expected, reproIntent, branch } = input;
+
+  let components: RouteComponents;
   try {
-    normalizedRoute = normalizeRouteInput(routeIdInput);
+    components = parseRouteComponents(routeIdInput);
   } catch (err) {
     await interaction.editReply({
       content: `Invalid route ID. You entered:\n\`${routeIdInput}\`\n\n${err instanceof Error ? err.message : 'Use the format `dongle_id/route_name` or a connect.comma.ai URL.'}`,
@@ -729,23 +894,18 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
     return;
   }
 
-  const dedicatedRoute = parseNormalizedRoute(normalizedRoute);
-  if (!dedicatedRoute) {
-    await interaction.editReply({
-      content: `Invalid route ID. You entered:\n\`${routeIdInput}\`\n\nUse the format \`dongle_id/route_name\` (e.g. \`a1b2c3d4e5f6a7b8/0000aaaa--98c2d4e6f8\`) or a connect.comma.ai URL.`,
-    });
-    return;
-  }
   // Preserve verbatim input so the tracker shows what the user wrote.
   const dedicatedTrimmed = routeIdInput.trim();
-  dedicatedRoute.originalText = dedicatedTrimmed;
-  dedicatedRoute.isUrl = /^https:\/\/connect\.comma\.ai\//i.test(dedicatedTrimmed);
+  const dedicatedRoute: ExtractedRoute = {
+    dongleId: components.dongleId,
+    routeName: components.routeName,
+    iteration: components.iteration,
+    originalText: dedicatedTrimmed,
+    isUrl: /^https:\/\/connect\.comma\.ai\//i.test(dedicatedTrimmed),
+  };
 
-  const allRoutes: ExtractedRoute[] = [];
-  const seenKeys = new Set<string>();
-  seenKeys.add(dedicatedTrimmed.toLowerCase());
-  allRoutes.push(dedicatedRoute);
-
+  const allRoutes: ExtractedRoute[] = [dedicatedRoute];
+  const seenKeys = new Set<string>([dedicatedTrimmed.toLowerCase()]);
   const allText = [observed, expected, reproIntent].join('\n');
   for (const r of extractRouteIds(allText)) {
     const key = (r.originalText ?? '').toLowerCase();
@@ -755,22 +915,47 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
     }
   }
 
-  // Validate all routes in parallel.
-  const validatedRoutes: Array<ExtractedRoute & { valid: boolean; public: boolean }> = [];
-  for (const v of await Promise.all(allRoutes.map(r => validateRoute(r.dongleId, r.routeName)))) {
-    validatedRoutes.push({ ...allRoutes[validatedRoutes.length], ...v });
-  }
+  // Validate all routes in parallel; the dedicated route is checked against its segment bounds.
+  const validations = await Promise.all(
+    allRoutes.map((r, i) =>
+      i === 0
+        ? validateRoute(r.dongleId, r.routeName, components.startSegment, components.endSegment)
+        : validateRoute(r.dongleId, r.routeName),
+    ),
+  );
+  const validatedRoutes = allRoutes.map((r, i) => ({ ...r, ...validations[i] }));
+  const dedicatedValidated = validatedRoutes[0];
 
-  // Dedicated route must be valid.
-  if (!validatedRoutes[0].valid) {
+  // Dedicated route must exist.
+  if (!dedicatedValidated.valid) {
     await interaction.editReply({
       content: `The route you entered doesn't appear to exist:\n\`${routeIdInput}\`\n\nPlease double-check the Route ID and try again.`,
     });
     return;
   }
 
+  // Gate on rlog availability for a public dedicated route. Non-public routes keep the existing
+  // Confirm Route flow, so they fall through (rlogCheck is only set when the route is public).
+  if (!force && dedicatedValidated.public && dedicatedValidated.rlogCheck && !dedicatedValidated.rlogsAvailable) {
+    const token = interaction.id;
+    pendingBugReports.set(token, { ...input, userId: interaction.user.id, createdAt: Date.now() });
+    prunePendingBugReports();
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`rlogchk_${token}`)
+        .setLabel('Check Again')
+        .setStyle(ButtonStyle.Primary)
+        .setEmoji('🔄'),
+      new ButtonBuilder()
+        .setCustomId(`rlogfrc_${token}`)
+        .setLabel("I know what I'm doing, submit anyway")
+        .setStyle(ButtonStyle.Danger),
+    );
+    await interaction.editReply({ content: rlogFailureMessage(dedicatedValidated.rlogCheck), components: [row] });
+    return;
+  }
+
   // Number all extracted routes (even invalid ones) so format-matching URLs still get redacted.
-  const dedicatedValidated = validatedRoutes[0];
   const numberedAdditional = validatedRoutes.slice(1).map((r, i) => ({ ...r, routeNumber: i + 1 }));
 
   const replacementRoutes: ExtractedRoute[] = [dedicatedValidated, ...numberedAdditional];
@@ -805,6 +990,38 @@ export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
   });
 }
 
+export async function handleRlogRecheck(interaction: ButtonInteraction) {
+  await handleRlogGateButton(interaction, false);
+}
+
+export async function handleRlogForceProceed(interaction: ButtonInteraction) {
+  await handleRlogGateButton(interaction, true);
+}
+
+async function handleRlogGateButton(interaction: ButtonInteraction, force: boolean): Promise<void> {
+  const token = interaction.customId.split('_')[1];
+  const pending = pendingBugReports.get(token);
+  if (!pending) {
+    await interaction.reply({
+      content: 'This request has expired. Please submit a new bug report.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+  if (interaction.user.id !== pending.userId) {
+    await interaction.reply({
+      content: 'Only the original reporter can use these buttons.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+  // Keep the pending entry: if submission fails (route gone, API/thread error) the buttons stay,
+  // so this token must remain valid for a retry. On success submitReport clears the buttons, and a
+  // still-failing re-check re-gates under a fresh token; stale entries are reaped by the TTL prune.
+  await interaction.deferUpdate();
+  await processBugReport(interaction, pending, force);
+}
+
 export async function handleConfirmRoute(interaction: ButtonInteraction) {
   const parsed = parseConfirmCustomId(interaction.customId);
   if (!parsed) {
@@ -821,13 +1038,8 @@ export async function handleConfirmRoute(interaction: ButtonInteraction) {
 
   const routeUrl = `https://connect.comma.ai/${dongleId}/${routeName}`;
 
-  let nowPublic = false;
-  try {
-    const res = await fetch(`https://api.comma.ai/v1/route/${dongleId}|${routeName}/files`);
-    nowPublic = res.ok;
-  } catch (err) {
-    log.warn({ err }, 'Route check API unreachable on confirm');
-  }
+  const confirmCheck = await validateRoute(dongleId, routeName);
+  const nowPublic = confirmCheck.public;
 
   const thread = interaction.channel;
   if (!thread || !thread.isThread()) {
@@ -864,7 +1076,9 @@ export async function handleConfirmRoute(interaction: ButtonInteraction) {
   let routesThreadUrl: string | null = null;
   if (guild) {
     const result = await createRouteTrackerThread(
-      guild, config, { dongleId, routeName, iteration }, thread.url, thread.name,
+      guild, config,
+      { dongleId, routeName, iteration, public: true, rlogsAvailable: confirmCheck.rlogsAvailable },
+      thread.url, thread.name,
     );
     if (result) {
       routesThreadUrl = result.url;
@@ -898,7 +1112,7 @@ export async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, 
 
   // Scan and validate route IDs before stripping so we can number them.
   const routes = extractRouteIds(content);
-  const validatedRoutes: Array<ExtractedRoute & { valid: boolean; public: boolean }> = [];
+  const validatedRoutes: Array<ExtractedRoute & RouteValidation> = [];
   for (const v of await Promise.all(routes.map(r => validateRoute(r.dongleId, r.routeName)))) {
     validatedRoutes.push({ ...routes[validatedRoutes.length], ...v });
   }
