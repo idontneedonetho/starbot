@@ -44,7 +44,6 @@ interface ExtractedRoute {
   originalText?: string;
   isUrl?: boolean;
   routeNumber?: number;
-  // Validation status, used to render the leading status emojis in the route tracker.
   public?: boolean;
   rlogsAvailable?: boolean;
 }
@@ -248,18 +247,15 @@ export function stripRouteIds(text: string): string {
     .trim();
 }
 
-// Detail of the rlog-presence check, used to build a specific user-facing error.
 interface RlogCheckResult {
-  // 'whole' = entire route checked; 'segment' = a specific segment or range checked.
   mode: 'whole' | 'segment';
-  missing: number[]; // segments lacking rlogs ('segment' mode)
+  missing: number[];
 }
 
 interface RouteValidation {
   valid: boolean;
   public: boolean;
   rlogsAvailable: boolean;
-  // Present only when the route is public and a check was performed.
   rlogCheck?: RlogCheckResult;
 }
 
@@ -318,7 +314,6 @@ function rlogFailureMessage(check: RlogCheckResult): string {
   }
   const segList = check.missing.join(', ');
   const noun = check.missing.length === 1 ? 'segment' : 'segments';
-  // Subject is "The rlogs" (always plural), so the verb is always "don't".
   return `The rlogs for ${noun} **${segList}** don't appear to be uploaded yet. Please upload the logs for ${noun} **${segList}** from your device, then check again.`;
 }
 
@@ -733,8 +728,6 @@ async function submitReport(
     });
   }
 
-  // components: [] only matters on the rlog-gate path (Check Again / Force Proceed), where it
-  // clears those buttons; on the normal modal flow the reply has no components, so it's a no-op.
   await interaction.editReply({
     content: `${params.label} **${ticketId}** submitted! [View thread](${thread.url})`,
     components: [],
@@ -1013,9 +1006,7 @@ async function handleRlogGateButton(interaction: ButtonInteraction, force: boole
     });
     return;
   }
-  // Keep the pending entry: if submission fails (route gone, API/thread error) the buttons stay,
-  // so this token must remain valid for a retry. On success submitReport clears the buttons, and a
-  // still-failing re-check re-gates under a fresh token; stale entries expire via the Keyv TTL.
+  // Keep the pending entry on failure so the buttons remain usable; stale entries expire via TTL.
   await interaction.deferUpdate();
   await processBugReport(interaction, pending, force);
 }
