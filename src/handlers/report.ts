@@ -941,6 +941,10 @@ async function processBugReport(
         .setStyle(ButtonStyle.Primary)
         .setEmoji('🔄'),
       new ButtonBuilder()
+        .setLabel('Need help?')
+        .setStyle(ButtonStyle.Link)
+        .setURL('https://wiki.firestar.link/faq/#how-do-i-upload-logs-for-troubleshooting'),
+      new ButtonBuilder()
         .setCustomId(`rlogfrc_${token}`)
         .setLabel("I know what I'm doing, submit anyway")
         .setStyle(ButtonStyle.Danger),
