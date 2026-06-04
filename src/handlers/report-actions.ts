@@ -17,7 +17,7 @@ import {
 import { loadConfig } from '../config.js';
 import { createLogger } from '../logger.js';
 import { COLORS } from '../util.js';
-import { getForum, resolveTagIds, normalizeRouteInput, parseNormalizedRoute, validateRoute, addAdditionalRoutesToTracker, stripRouteIds, buildActionRow, TRACKER_FIELD_PREFIX } from './report.js';
+import { getForum, resolveTagIds, normalizeRouteInput, parseNormalizedRoute, validateRoute, addAdditionalRoutesToTracker, stripRouteIds, buildActionRow, createRouteTrackerThread, TRACKER_FIELD_PREFIX } from './report.js';
 
 const log = createLogger('report-actions');
 
@@ -60,7 +60,13 @@ export async function handleAssign(interaction: ButtonInteraction) {
     const embed = starter.embeds[0];
     if (embed) {
       const updated = EmbedBuilder.from(embed);
-      updated.addFields({ name: '👤 Assigned to', value: `<@${interaction.user.id}>` });
+      const assignIdx = embed.fields?.findIndex(f => f.name === '👤 Assigned to') ?? -1;
+      const assignField = { name: '👤 Assigned to', value: `<@${interaction.user.id}>` };
+      if (assignIdx >= 0) {
+        updated.spliceFields(assignIdx, 1, assignField);
+      } else {
+        updated.addFields(assignField);
+      }
       await starter.edit({ embeds: [updated] }).catch(() => {});
     }
   }
@@ -72,7 +78,9 @@ export async function handleAssign(interaction: ButtonInteraction) {
     if (forum) {
       const tagIds = resolveTagIds(forum, ['ASSIGNED']);
       if (tagIds.length > 0) {
-        await thread.setAppliedTags([...(thread.appliedTags as string[]), ...tagIds]).catch(() => {});
+        const existing = thread.appliedTags as string[];
+        const deduped = existing.filter(id => !tagIds.includes(id));
+        await thread.setAppliedTags([...deduped, ...tagIds]).catch(() => {});
       }
     }
   }
@@ -102,10 +110,10 @@ export async function handleClose(interaction: ButtonInteraction) {
     }
   }
 
+  await interaction.reply({ content: 'Report closed.', flags: MessageFlags.Ephemeral });
+
   const guild = interaction.guild;
   if (guild) await closeThread(thread, guild);
-
-  await interaction.reply({ content: 'Report closed.', flags: MessageFlags.Ephemeral });
 }
 
 export async function handleAdditionalReportButton(interaction: ButtonInteraction) {
@@ -170,11 +178,14 @@ export async function handleAdditionalReportSubmit(interaction: ModalSubmitInter
   parsed.isUrl = /^https:\/\/connect\.comma\.ai\//i.test(trimmedInput);
 
   const { dongleId, routeName } = parsed;
-  const { valid, public: isPublic } = await validateRoute(dongleId, routeName);
+  const { valid, public: isPublic, rlogsAvailable } = await validateRoute(dongleId, routeName);
   if (!valid) {
     await interaction.editReply({ content: 'That route does not exist. Please check the Route ID and try again.' });
     return;
   }
+
+  parsed.public = isPublic;
+  parsed.rlogsAvailable = rlogsAvailable;
 
   const thread = interaction.channel;
   if (!thread?.isThread()) {
@@ -196,26 +207,42 @@ export async function handleAdditionalReportSubmit(interaction: ModalSubmitInter
   }
 
   const embed = starter.embeds[0];
-  if (!embed || !embed.fields) {
-    await interaction.editReply({ content: 'Could not find the tracker link in the starter embed.' });
+  if (!embed) {
+    await interaction.editReply({ content: 'Could not find the report embed.' });
     return;
   }
 
-  const trackerField = embed.fields.find(f =>
+  let trackerUrl: string | undefined;
+  let trackerThreadId: string | undefined;
+
+  const trackerField = embed.fields?.find(f =>
     f.value?.startsWith(TRACKER_FIELD_PREFIX),
   );
-  if (!trackerField) {
-    await interaction.editReply({ content: 'No route tracker thread found for this report.' });
-    return;
+  if (trackerField) {
+    trackerUrl = trackerField.value?.match(/\]\((.+?)\)/)?.[1];
+    if (trackerUrl) {
+      trackerThreadId = trackerUrl.split('/').pop() ?? undefined;
+    }
   }
-  const trackerUrl = trackerField.value?.match(/\]\((.+?)\)/)?.[1];
-  if (!trackerUrl) {
-    await interaction.editReply({ content: 'Could not parse the tracker link.' });
-    return;
+
+  if (!trackerUrl || !trackerThreadId) {
+    const config = loadConfig();
+    const tracker = await createRouteTrackerThread(
+      guild, config,
+      undefined,
+      thread.url, thread.name,
+    );
+    if (tracker) {
+      trackerUrl = tracker.url;
+      trackerThreadId = tracker.threadId;
+      const updated = EmbedBuilder.from(embed);
+      updated.addFields({ name: '\u200B', value: `${TRACKER_FIELD_PREFIX}(${tracker.url})` });
+      await starter.edit({ embeds: [updated] }).catch(err => log.warn({ err }, 'Failed to add tracker field to starter'));
+    }
   }
-  const trackerThreadId = trackerUrl.split('/').pop();
-  if (!trackerThreadId) {
-    await interaction.editReply({ content: 'Could not parse the tracker thread ID.' });
+
+  if (!trackerUrl || !trackerThreadId) {
+    await interaction.editReply({ content: 'Failed to create a route tracker thread.' });
     return;
   }
 
@@ -244,13 +271,10 @@ export async function handleAdditionalReportSubmit(interaction: ModalSubmitInter
     ],
   });
 
-  // Add to tracker with source attribution.
-  if (trackerThreadId) {
-    await addAdditionalRoutesToTracker(
-      guild, trackerThreadId, [parsed],
-      msg.url, `Additional Report #${additionalReportId}`,
-    );
-  }
+  await addAdditionalRoutesToTracker(
+    guild, trackerThreadId, [parsed],
+    msg.url, `Additional Report #${additionalReportId}`,
+  );
 
   await interaction.editReply({ content: `Route added to the tracker thread.${!isPublic ? ' The route is not yet public — make it public and use the Confirm button on the original report.' : ''}` });
 }
