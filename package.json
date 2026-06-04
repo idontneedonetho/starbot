@@ -12,10 +12,12 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^4.0.0",
+    "@keyv/sqlite": "6.0.0-alpha.3",
     "discord.js": "^14.0.0",
     "discordx": "^11.0.0",
     "dotenv": "^17.0.0",
     "eventsource": "^4.1.0",
+    "keyv": "6.0.0-alpha.3",
     "minisearch": "^7.0.0",
     "pino": "^10.3.1"
   },

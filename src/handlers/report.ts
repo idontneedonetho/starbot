@@ -19,6 +19,7 @@ import {
 } from 'discord.js';
 import { loadConfig } from '../config.js';
 import { createLogger } from '../logger.js';
+import { createStore } from '../store.js';
 import { getIndex } from '../wiki/wiki.js';
 import { embedBatch } from '../wiki/embedder.js';
 import { searchWiki, formatWikiResults } from '../wiki/searcher.js';
@@ -835,20 +836,14 @@ interface BugReportInput {
 
 interface PendingBugReport extends BugReportInput {
   userId: string;
-  createdAt: number;
 }
 
-// Bug reports whose primary route failed the rlog check, awaiting "Check Again" / "Force Proceed".
-// In-memory is sufficient: the bot is single-instance and these are short-lived confirmations.
-const pendingBugReports = new Map<string, PendingBugReport>();
 const PENDING_BUG_TTL_MS = 15 * 60 * 1000;
 
-function prunePendingBugReports(): void {
-  const now = Date.now();
-  for (const [k, v] of pendingBugReports) {
-    if (now - v.createdAt > PENDING_BUG_TTL_MS) pendingBugReports.delete(k);
-  }
-}
+// Bug reports whose primary route failed the rlog check, awaiting "Check Again" / "Force Proceed".
+// Persisted (see store.ts) so a bot restart doesn't drop pending gates; entries self-expire via the
+// TTL, so there's no manual sweep.
+const pendingStore = createStore<PendingBugReport>('pending-bug-reports', { ttl: PENDING_BUG_TTL_MS });
 
 export async function handleBugSubmit(interaction: ModalSubmitInteraction) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -938,8 +933,7 @@ async function processBugReport(
   // Confirm Route flow, so they fall through (rlogCheck is only set when the route is public).
   if (!force && dedicatedValidated.public && dedicatedValidated.rlogCheck && !dedicatedValidated.rlogsAvailable) {
     const token = interaction.id;
-    pendingBugReports.set(token, { ...input, userId: interaction.user.id, createdAt: Date.now() });
-    prunePendingBugReports();
+    await pendingStore.set(token, { ...input, userId: interaction.user.id });
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
         .setCustomId(`rlogchk_${token}`)
@@ -1000,7 +994,7 @@ export async function handleRlogForceProceed(interaction: ButtonInteraction) {
 
 async function handleRlogGateButton(interaction: ButtonInteraction, force: boolean): Promise<void> {
   const token = interaction.customId.split('_')[1];
-  const pending = pendingBugReports.get(token);
+  const pending = await pendingStore.get(token);
   if (!pending) {
     await interaction.reply({
       content: 'This request has expired. Please submit a new bug report.',
@@ -1017,7 +1011,7 @@ async function handleRlogGateButton(interaction: ButtonInteraction, force: boole
   }
   // Keep the pending entry: if submission fails (route gone, API/thread error) the buttons stay,
   // so this token must remain valid for a retry. On success submitReport clears the buttons, and a
-  // still-failing re-check re-gates under a fresh token; stale entries are reaped by the TTL prune.
+  // still-failing re-check re-gates under a fresh token; stale entries expire via the Keyv TTL.
   await interaction.deferUpdate();
   await processBugReport(interaction, pending, force);
 }
