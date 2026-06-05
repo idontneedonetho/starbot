@@ -7,6 +7,7 @@ export interface BotConfig {
   identificationChannelId: string;
   reportButtonChannelId: string;
   forumChannelId: string;
+  developmentChannelId: string;
   routesChannelId: string;
   verifiedRole: string;
   pendingRole: string;
@@ -31,6 +32,9 @@ export function loadConfig(): BotConfig {
   const forumChannelId = process.env.FORUM_CHANNEL_ID;
   if (!forumChannelId) throw new Error('FORUM_CHANNEL_ID is required');
 
+  const developmentChannelId = process.env.DEVELOPMENT_CHANNEL_ID;
+  if (!developmentChannelId) throw new Error('DEVELOPMENT_CHANNEL_ID is required');
+
   const routesChannelId = process.env.ROUTES_CHANNEL_ID;
   if (!routesChannelId) throw new Error('ROUTES_CHANNEL_ID is required');
 
@@ -52,6 +56,7 @@ export function loadConfig(): BotConfig {
     identificationChannelId,
     reportButtonChannelId,
     forumChannelId,
+    developmentChannelId,
     routesChannelId,
     verifiedRole,
     pendingRole,

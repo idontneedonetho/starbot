@@ -68,7 +68,31 @@ export class BotEvents {
         { label: 'Feedback', customId: 'report_feedback', style: ButtonStyle.Secondary, emoji: '💬' },
         { label: 'Feature Request', customId: 'report_feature', style: ButtonStyle.Success, emoji: '✨' },
       ],
-      '### Submit a Report\n\nEncountered an issue with navigation? Have an idea for a new feature? Let us know!\n\n> **Bug reports** require a **Route ID** — visible only to **server admins**',
+      undefined,
+      [
+        new EmbedBuilder()
+          .setDescription(
+            '## ✨ Before You Submit...\n\n' +
+            `**Note:** <#${config.forumChannelId}> serves as the official to-do list and triage queue for maintainers. To keep things manageable, actionable, and to reduce notification fatigue, please follow these guidelines before hitting submit.\n\n` +
+              '### 🐛 Bug Reports\n\n' +
+              ' -  **Fully Investigate First:** Ensure you have thoroughly tested and verified the bug before posting.\n' +
+              '- **Actionable Items Only:** Do not submit reports that end with "more investigation is required on my end." If you are still troubleshooting, hold off on submitting until you have the final, concrete details.\n' +
+              '- **Consolidate Your Thoughts:** Avoid treating reports like a live scratchpad. Gather all your findings into a single, comprehensive submission to avoid spamming the channel with self-corrections and stream-of-consciousness updates.\n\n' +
+              '### 💡 Feature Requests & PRs\n\n' +
+              '**Requests vs. Development:** Feature requests are designed to suggest ideas for the maintainers to review and potentially build.\n\n' +
+              `**Developing it yourself?** We absolutely love contributors and think it is awesome when you want to tackle a feature. If you plan to build it yourself, there is no need to open a feature request here. Instead, jump over to <#${config.developmentChannelId}> and start a thread. We are always happy to provide feedback, help troubleshoot problems, and cheer you on there!\n\n` +
+              '### 🆘 Route Logs!?\n\n' +
+              'A quick overview of routes and how to upload logs can be found [here](https://wiki.firestar.link/faq/#how-do-i-upload-logs-for-troubleshooting): https://wiki.firestar.link/faq/#how-do-i-upload-logs-for-troubleshooting',
+          )
+          .setColor(5822093),
+        new EmbedBuilder()
+          .setDescription(
+            '## 📝 Submit a Report\n\n' +
+            'Encountered an issue with navigation? Have an idea for a new feature? Let us know!\n\n' +
+              `> **Bug reports** _require_ a public **Route ID** — visible only to <@&${config.staffRole}>`,
+          )
+          .setColor(5822093),
+      ],
     ).catch(err => log.error({ err }, 'Failed to set up report button'));
 
     // Initialize wiki search
@@ -171,6 +195,7 @@ export class BotEvents {
     channelId: string,
     buttons: Array<{ label: string; customId: string; style: ButtonStyle; emoji: string }>,
     content?: string,
+    embeds?: EmbedBuilder[],
   ) {
     const channel = await guild.channels.fetch(channelId);
     if (!channel?.isTextBased()) {
@@ -188,6 +213,7 @@ export class BotEvents {
 
     const message = await channel.send({
       content,
+      embeds,
       components: [this.buttonRow(buttons)],
     });
     await message.pin().catch(err => log.error({ err }, 'Failed to pin button'));
