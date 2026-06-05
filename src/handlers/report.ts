@@ -25,7 +25,7 @@ import { createStore } from '../store.js';
 import { getIndex } from '../wiki/wiki.js';
 import { embedBatch } from '../wiki/embedder.js';
 import { searchWiki, formatWikiResults } from '../wiki/searcher.js';
-import { COLORS, dot } from '../util.js';
+import { COLORS, dot, formatGitBranch, formatGitCommit } from '../util.js';
 
 const log = createLogger('report');
 
@@ -293,8 +293,9 @@ export async function validateRoute(
           rlogsAvailable = missing.length === 0;
           rlogCheck = { mode: 'segment', missing };
         } else {
-          // qlogs/qcamera are the source of truth for how many segments should exist.
-          rlogsAvailable = qlogs.length > 0 && logs.length === qlogs.length;
+          const meta = await fetchRouteMetadata(dongleId, routeName);
+          const expectedSegments = meta != null ? meta.maxqlog + 1 : qlogs.length;
+          rlogsAvailable = expectedSegments > 0 && logs.length === expectedSegments;
           rlogCheck = { mode: 'whole', missing: [] };
         }
       } catch (err) {
@@ -470,6 +471,70 @@ function buildRefreshRow(): ActionRowBuilder<ButtonBuilder> {
 const REFRESH_COOLDOWN_MS = 60_000;
 const refreshCooldowns = new LRUCache<string, number>({ max: 500, ttl: REFRESH_COOLDOWN_MS });
 
+interface RouteSegmentMetadata {
+  /* 0 indexed, so maxqlog of 1 means there were 2 segments in the route */
+  maxqlog: number;
+  start_time_utc_millis: number;
+  end_time_utc_millis: number;
+  git_remote: string;
+  git_branch: string;
+  git_commit: string;
+  git_commit_date: string;
+  git_dirty: boolean;
+}
+
+const METADATA_CACHE_TTL_MS = 3 * 60_000;
+const metadataCache = new LRUCache<string, RouteSegmentMetadata>({ max: 200, ttl: METADATA_CACHE_TTL_MS });
+
+export async function fetchRouteMetadata(dongleId: string, routeName: string): Promise<RouteSegmentMetadata | null> {
+  const key = `${dongleId}|${routeName}`;
+  const cached = metadataCache.get(key);
+  if (cached) return cached;
+  try {
+    const res = await fetch(
+      `https://api.comma.ai/v1/devices/${dongleId}/routes_segments?route_str=${encodeURIComponent(key)}`,
+    );
+    if (!res.ok) return null;
+    const data = await res.json() as RouteSegmentMetadata[];
+    if (!Array.isArray(data) || data.length === 0) return null;
+    const entry = data[0];
+    const meta: RouteSegmentMetadata = {
+      maxqlog: entry.maxqlog,
+      start_time_utc_millis: entry.start_time_utc_millis,
+      end_time_utc_millis: entry.end_time_utc_millis,
+      git_remote: entry.git_remote,
+      git_branch: entry.git_branch,
+      git_commit: entry.git_commit,
+      git_commit_date: entry.git_commit_date,
+      git_dirty: entry.git_dirty,
+    };
+    metadataCache.set(key, meta);
+    return meta;
+  } catch (err) {
+    log.warn({ err }, 'Failed to fetch route metadata');
+    return null;
+  }
+}
+
+async function postRouteMetadata(channel: ThreadChannel, dongleId: string, routeName: string): Promise<void> {
+  const meta = await fetchRouteMetadata(dongleId, routeName);
+  if (!meta) return;
+  const embed = new EmbedBuilder()
+    .setColor(COLORS.amber)
+    .setTitle('Route Metadata')
+    .addFields(
+      { name: 'Route ID', value: `${dongleId}/${routeName}`, inline: true },
+      { name: 'Start Time', value: `<t:${Math.floor(meta.start_time_utc_millis / 1000)}:f>`, inline: true },
+      { name: 'End Time', value: `<t:${Math.floor(meta.end_time_utc_millis / 1000)}:f>`, inline: true },
+      { name: 'Git Remote', value: meta.git_remote, inline: true },
+      { name: 'Git Branch', value: formatGitBranch(meta.git_branch, meta.git_remote), inline: true },
+      { name: 'Git Commit', value: formatGitCommit(meta.git_commit, meta.git_remote), inline: true },
+      { name: 'Git Commit Date', value: meta.git_commit_date, inline: true },
+      { name: 'Git Dirty', value: String(meta.git_dirty), inline: true },
+    );
+  await channel.send({ embeds: [embed] }).catch(err => log.warn({ err }, 'Failed to post route metadata'));
+}
+
 // Re-validate one tracker route line and swap its leading status emoji; leaves the line otherwise
 // intact. Returns the line unchanged if it has no parseable route or the route can't be validated.
 async function refreshRouteLine(line: string): Promise<string> {
@@ -589,6 +654,9 @@ export async function createRouteTrackerThread(
         }
       }
     }
+    if (primaryRoute?.public) {
+      await postRouteMetadata(existing, primaryRoute.dongleId, primaryRoute.routeName);
+    }
     return { url: existing.url, threadId: existing.id };
   }
 
@@ -614,6 +682,10 @@ export async function createRouteTrackerThread(
     await starter.edit({ embeds: [routeEmbed], components: [buildRefreshRow()] });
   }
 
+  if (primaryRoute?.public) {
+    await postRouteMetadata(routesThread, primaryRoute.dongleId, primaryRoute.routeName);
+  }
+
   return { url: routesThread.url, threadId: routesThread.id };
 }
 
@@ -635,15 +707,14 @@ export async function addAdditionalRoutesToTracker(
     const updated = EmbedBuilder.from(embed);
     const additionalField = embed.fields?.find(f => f.name === 'Additional Routes');
     const existingValue = additionalField?.value ?? '';
-    const newLinks = additionalRoutes
-      .filter(r => {
-        const short = routeShortForm(r);
-        return !existingValue.includes(short);
-      })
-      .map(r => {
-        const base = routeLinkMarkdown(r);
-        return sourceUrl && sourceName ? `${base} — [${sourceName}](${sourceUrl})` : base;
-      });
+    const newRoutes = additionalRoutes.filter(r => {
+      const short = routeShortForm(r);
+      return !existingValue.includes(short);
+    });
+    const newLinks = newRoutes.map(r => {
+      const base = routeLinkMarkdown(r);
+      return sourceUrl && sourceName ? `${base} — [${sourceName}](${sourceUrl})` : base;
+    });
     if (newLinks.length === 0) return;
     const links = newLinks.join('\n');
     if (additionalField) {
@@ -658,6 +729,16 @@ export async function addAdditionalRoutesToTracker(
         updated.addFields({ name: 'Additional Routes', value: links });
       }
       await starter.edit({ embeds: [updated] });
+    }
+    const postedMeta = new Set<string>();
+    for (const r of newRoutes) {
+      if (r.public) {
+        const key = `${r.dongleId}/${r.routeName}`;
+        if (!postedMeta.has(key)) {
+          postedMeta.add(key);
+          await postRouteMetadata(channel, r.dongleId, r.routeName);
+        }
+      }
     }
   } catch (err) {
     log.warn({ err }, 'Failed to add additional routes to tracker');
