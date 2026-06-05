@@ -89,7 +89,7 @@ export class BotEvents {
           .setDescription(
             '## 📝 Submit a Report\n\n' +
             'Encountered an issue with navigation? Have an idea for a new feature? Let us know!\n\n' +
-              `> **Bug reports** _require_ a public **Route ID** — visible only to <@&${config.staffRole}>`,
+              `> **Bug reports** _require_ a public **route ID** — visible only to <@&${config.staffRole}>`,
           )
           .setColor(5822093),
       ],
