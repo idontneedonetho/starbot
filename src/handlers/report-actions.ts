@@ -17,7 +17,8 @@ import {
 import { loadConfig } from '../config.js';
 import { createLogger } from '../logger.js';
 import { COLORS } from '../util.js';
-import { getForum, resolveTagIds, normalizeRouteInput, parseNormalizedRoute, validateRoute, addAdditionalRoutesToTracker, stripRouteIds, buildActionRow, createRouteTrackerThread, TRACKER_FIELD_PREFIX } from './report.js';
+import { normalizeRouteInput, parseNormalizedRoute, validateRoute, stripRouteIds } from '../comma.js';
+import { getForum, resolveTagIds, addAdditionalRoutesToTracker, buildActionRow, createRouteTrackerThread, TRACKER_FIELD_PREFIX } from './report.js';
 
 const log = createLogger('report-actions');
 

@@ -26,6 +26,19 @@ import { getIndex } from '../wiki/wiki.js';
 import { embedBatch } from '../wiki/embedder.js';
 import { searchWiki, formatWikiResults } from '../wiki/searcher.js';
 import { COLORS, dot, formatGitBranch, formatGitCommit } from '../util.js';
+import {
+  parseRouteComponents,
+  extractRouteIds,
+  replaceRouteIds,
+  validateRoute,
+  fetchRouteMetadata,
+  secondsToSegment,
+  segmentToSeconds,
+  type RouteComponents,
+  type ExtractedRoute,
+  type RouteValidation,
+  type RlogCheckResult,
+} from '../comma.js';
 
 const log = createLogger('report');
 
@@ -35,28 +48,6 @@ interface ParsedConfirmRoute {
   dongleId: string;
   routeName: string;
   iteration?: string;
-}
-
-interface ExtractedRoute {
-  dongleId: string;
-  routeName: string;
-  iteration?: string;
-  // Identity for dedup and replacement is the lowercased originalText, so distinct text
-  // forms of the same drive get separate route numbers.
-  originalText?: string;
-  isUrl?: boolean;
-  routeNumber?: number;
-  public?: boolean;
-  rlogsAvailable?: boolean;
-}
-
-// Fully decomposed route input: identity plus optional sub-route and segment bounds.
-interface RouteComponents {
-  dongleId: string;
-  routeName: string;
-  iteration?: string;
-  startSegment?: number;
-  endSegment?: number;
 }
 
 export const TRACKER_FIELD_PREFIX = '[Mods Route Tracker →]';
@@ -90,226 +81,6 @@ export function resolveTagIds(forum: ForumChannel, names: string[]): string[] {
     .filter((id): id is string => id != null);
 }
 
-// Matches dongle/route or dongle|route with optional iteration (used for scanning free-form text).
-export const ROUTE_REGEX = /([a-f0-9]{16})[\/|]([a-f0-9]{8}--[a-f0-9]{10})(?:\/(?:[a-f0-9]{8}--[a-f0-9]{10}|\d+(?:\/\d+)?))?/gi;
-
-// Anchored regex for validating a single normalized route string (dongle_id/route_name[/iter_or_seg[/seg]]).
-const ROUTE_ID_REGEX = /^([a-f0-9]{16})[\/|]([a-f0-9]{8}--[a-f0-9]{10})(?:\/([a-f0-9]{8}--[a-f0-9]{10}|\d+(?:\/\d+)?))?$/i;
-
-// Matches connect.comma.ai URLs with optional start[/end] seconds.
-const CONNECT_URL_REGEX = /https:\/\/connect\.comma\.ai\/([a-f0-9]{16})\/([a-f0-9]{8}--[a-f0-9]{10})(?:\/(\d+)(?:\/(\d+))?)?/gi;
-
-// connect.comma.ai URLs measure position in seconds; segments are 60s each.
-function secondsToSegment(secStr: string): number {
-  return Math.floor(parseInt(secStr, 10) / 60);
-}
-
-// Deconstruct any accepted route form into dongle/route plus optional sub-route or segment bounds.
-// Seconds (connect URLs) are converted to segment numbers; bare/pipe forms already use segments.
-// Throws with a user-facing message on malformed input.
-export function parseRouteComponents(input: string): RouteComponents {
-  input = input.trim();
-
-  if (input.startsWith('https://connect.comma.ai/')) {
-    const path = input.slice('https://connect.comma.ai/'.length).replace(/\/+$/, '');
-    const parts = path.split('/');
-    const [dongleId, routeName] = parts;
-    if (!/^[a-f0-9]{16}$/i.test(dongleId ?? ''))
-      throw new Error(`Invalid dongle ID "${dongleId}": expected 16 hex characters.`);
-    if (!/^[a-f0-9]{8}--[a-f0-9]{10}$/i.test(routeName ?? ''))
-      throw new Error(`Invalid route name "${routeName}": expected format like \`0000aaaa--1234567890\`.`);
-    if (parts.length === 2) return { dongleId, routeName };
-    if (parts.length === 3) {
-      const secStr = parts[2];
-      if (!/^\d+$/.test(secStr)) throw new Error(`Invalid seconds value in URL: "${secStr}"`);
-      return { dongleId, routeName, startSegment: secondsToSegment(secStr) };
-    }
-    if (parts.length === 4) {
-      const [, , startStr, endStr] = parts;
-      if (!/^\d+$/.test(startStr)) throw new Error(`Invalid start seconds value in URL: "${startStr}"`);
-      if (!/^\d+$/.test(endStr)) throw new Error(`Invalid end seconds value in URL: "${endStr}"`);
-      return { dongleId, routeName, startSegment: secondsToSegment(startStr), endSegment: secondsToSegment(endStr) };
-    }
-    throw new Error(`Invalid connect.comma.ai URL format`);
-  }
-
-  const pipeMatch = input.match(/^([a-f0-9]{16})\|([a-f0-9]{8}--[a-f0-9]{10})$/i);
-  if (pipeMatch) return { dongleId: pipeMatch[1], routeName: pipeMatch[2] };
-
-  const parts = input.split('/');
-  if (parts.length >= 2 && parts.length <= 4) {
-    if (!/^[a-f0-9]{16}$/i.test(parts[0]))
-      throw new Error(`Invalid dongle ID "${parts[0]}": expected 16 hex characters.`);
-    if (!/^[a-f0-9]{8}--[a-f0-9]{10}$/i.test(parts[1]))
-      throw new Error(`Invalid route name "${parts[1]}": expected format like \`0000aaaa--1234567890\`.`);
-    const result: RouteComponents = { dongleId: parts[0], routeName: parts[1] };
-    if (parts.length >= 3) {
-      const third = parts[2];
-      if (/^[a-f0-9]{8}--[a-f0-9]{10}$/i.test(third)) {
-        result.iteration = third;
-        if (parts.length === 4)
-          throw new Error(`Unrecognized route format: a sub-route cannot be followed by a segment.`);
-      } else if (/^\d+$/.test(third)) {
-        result.startSegment = parseInt(third, 10);
-        if (parts.length === 4) {
-          if (!/^\d+$/.test(parts[3]))
-            throw new Error(`Invalid segment value "${parts[3]}": expected a number.`);
-          result.endSegment = parseInt(parts[3], 10);
-        }
-      } else {
-        throw new Error(`Invalid segment "${third}": expected a number or a sub-route ID.`);
-      }
-    }
-    return result;
-  }
-
-  throw new Error(`Unrecognized route format: expected "dongleId/routeName[/seg]" or a connect.comma.ai URL`);
-}
-
-// Canonical `dongle/route[/iteration|/startSegment]` string used for identity parsing.
-export function normalizeRouteInput(input: string): string {
-  const c = parseRouteComponents(input);
-  let out = `${c.dongleId}/${c.routeName}`;
-  if (c.iteration) out += `/${c.iteration}`;
-  else if (c.startSegment !== undefined) out += `/${c.startSegment}`;
-  return out;
-}
-
-export function parseNormalizedRoute(input: string): ExtractedRoute | null {
-  const match = input.match(ROUTE_ID_REGEX);
-  if (!match) return null;
-  // Numeric time-segments aren't part of route identity; only hex sub-routes count.
-  const iter = match[3] && /^[a-f0-9]{8}--[a-f0-9]{10}$/i.test(match[3]) ? match[3] : undefined;
-  return {
-    dongleId: match[1],
-    routeName: match[2],
-    iteration: iter,
-  };
-}
-
-// Captures: 1+2 = URL form (dongle, route); 3+4 = bare form (dongle, route).
-const ANY_ROUTE_REGEX = /(?:https:\/\/connect\.comma\.ai\/([a-f0-9]{16})\/([a-f0-9]{8}--[a-f0-9]{10})|([a-f0-9]{16})[\/|]([a-f0-9]{8}--[a-f0-9]{10}))(?:\/(?:[a-f0-9]{8}--[a-f0-9]{10}|\d+(?:\/\d+)?))?/gi;
-
-function extractRouteIds(text: string): ExtractedRoute[] {
-  const results: ExtractedRoute[] = [];
-  const seen = new Set<string>();
-  const regex = new RegExp(ANY_ROUTE_REGEX.source, 'gi');
-  let m: RegExpExecArray | null;
-  while ((m = regex.exec(text)) !== null) {
-    const original = m[0];
-    const key = original.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const isUrl = m[1] !== undefined;
-    const dongle = isUrl ? m[1] : m[3];
-    const route = isUrl ? m[2] : m[4];
-    const iterMatch = !isUrl ? original.match(/\/([a-f0-9]{8}--[a-f0-9]{10})$/i) : null;
-    results.push({
-      dongleId: dongle,
-      routeName: route,
-      iteration: iterMatch?.[1],
-      originalText: original,
-      isUrl,
-    });
-  }
-  return results;
-}
-
-// Lenient enough to catch malformed connect URLs so PII is stripped even if parsing fails.
-const CONNECT_URL_STRIP_REGEX = /https?:\/\/connect\.comma\.ai\/[^\s)<>"']*/gi;
-
-export function replaceRouteIds(
-  text: string,
-  routes: ExtractedRoute[],
-): string {
-  const labelByText = new Map<string, string>();
-  for (const r of routes) {
-    if (!r.originalText) continue;
-    const key = r.originalText.toLowerCase();
-    if (labelByText.has(key)) continue;
-    // Unnumbered routes (dedicated) are stripped — already shown as the primary tracker entry.
-    labelByText.set(key, r.routeNumber ? `**[Route ${r.routeNumber}]**` : '');
-  }
-  return text
-    .replace(new RegExp(ANY_ROUTE_REGEX.source, 'gi'), match => labelByText.get(match.toLowerCase()) ?? '')
-    .replace(CONNECT_URL_STRIP_REGEX, '')
-    .split('\n')
-    .map(line => line.replace(/\s+/g, ' ').trim())
-    .join('\n')
-    .trim();
-}
-
-export function stripRouteIds(text: string): string {
-  return text
-    .replace(CONNECT_URL_REGEX, '')
-    .replace(ROUTE_REGEX, '')
-    .split('\n')
-    .map(line => line.replace(/\s+/g, ' ').trim())
-    .join('\n')
-    .trim();
-}
-
-interface RlogCheckResult {
-  mode: 'whole' | 'segment';
-  missing: number[];
-}
-
-interface RouteValidation {
-  valid: boolean;
-  public: boolean;
-  rlogsAvailable: boolean;
-  rlogCheck?: RlogCheckResult;
-}
-
-// The /files response embeds the source filename (e.g. `dongle_route--6--rlog.zst`) in each
-// URL, so a substring match on `dongle_route--<seg>--rlog` tells us that segment's rlog exists.
-function segmentHasRlog(logs: string[], dongleId: string, routeName: string, seg: number): boolean {
-  const needle = `${dongleId}_${routeName}--${seg}--rlog`.toLowerCase();
-  return logs.some(u => u.toLowerCase().includes(needle));
-}
-
-export async function validateRoute(
-  dongleId: string,
-  routeName: string,
-  startSegment?: number,
-  endSegment?: number,
-): Promise<RouteValidation> {
-  try {
-    const res = await fetch(`https://api.comma.ai/v1/route/${dongleId}|${routeName}/files`);
-    if (res.ok) {
-      let rlogsAvailable = false;
-      let rlogCheck: RlogCheckResult | undefined;
-      try {
-        const data = await res.json() as { logs?: string[]; qlogs?: string[] };
-        const logs = Array.isArray(data.logs) ? data.logs : [];
-        const qlogs = Array.isArray(data.qlogs) ? data.qlogs : [];
-        if (startSegment !== undefined) {
-          const lo = Math.min(startSegment, endSegment ?? startSegment);
-          const hi = Math.max(startSegment, endSegment ?? startSegment);
-          const missing: number[] = [];
-          for (let s = lo; s <= hi; s++) {
-            if (!segmentHasRlog(logs, dongleId, routeName, s)) missing.push(s);
-          }
-          rlogsAvailable = missing.length === 0;
-          rlogCheck = { mode: 'segment', missing };
-        } else {
-          const meta = await fetchRouteMetadata(dongleId, routeName);
-          const expectedSegments = meta != null ? meta.maxqlog + 1 : qlogs.length;
-          rlogsAvailable = expectedSegments > 0 && logs.length === expectedSegments;
-          rlogCheck = { mode: 'whole', missing: [] };
-        }
-      } catch (err) {
-        log.warn({ err }, 'Failed to parse route files response');
-      }
-      return { valid: true, public: true, rlogsAvailable, rlogCheck };
-    }
-    if (res.status === 403 || res.status === 401) return { valid: true, public: false, rlogsAvailable: false };
-  } catch (err) {
-    log.warn({ err }, 'Route validation API unreachable');
-  }
-  return { valid: false, public: false, rlogsAvailable: false };
-}
-
 // Specific guidance for an rlog-check failure; tells the user which segment(s) to upload.
 function rlogFailureMessage(check: RlogCheckResult): string {
   if (check.mode === 'whole') {
@@ -320,18 +91,14 @@ function rlogFailureMessage(check: RlogCheckResult): string {
   return `The rlogs for ${noun} **${segList}** don't appear to be uploaded yet. Please upload the logs for ${noun} **${segList}** from your device, then check again.`;
 }
 
-export function formatRoute(dongleId: string, routeName: string, iteration?: string): string {
-  return iteration ? `${dongleId}/${routeName}/${iteration}` : `${dongleId}/${routeName}`;
-}
-
 function routeLinkUrl(r: ExtractedRoute): string {
   const orig = r.originalText;
   if (orig && /^https:\/\/connect\.comma\.ai\//i.test(orig)) return orig;
   if (orig) {
     const m = orig.match(/^[a-f0-9]{16}[\/|][a-f0-9]{8}--[a-f0-9]{10}(?:\/(\d+)(?:\/(\d+))?)?$/i);
     if (m && m[1] !== undefined) {
-      const s1 = parseInt(m[1], 10) * 60;
-      const s2 = m[2] !== undefined ? parseInt(m[2], 10) * 60 : null;
+      const s1 = segmentToSeconds(parseInt(m[1], 10));
+      const s2 = m[2] !== undefined ? segmentToSeconds(parseInt(m[2], 10)) : null;
       return `https://connect.comma.ai/${r.dongleId}/${r.routeName}/${s1}${s2 !== null ? '/' + s2 : ''}`;
     }
   }
@@ -346,9 +113,9 @@ function routeShortForm(r: ExtractedRoute): string {
     const url = orig.match(/^https:\/\/connect\.comma\.ai\/[a-f0-9]{16}\/[a-f0-9]{8}--[a-f0-9]{10}(?:\/(\d+)(?:\/(\d+))?)?\/?$/i);
     if (url) {
       if (url[1] === undefined) return base;
-      const seg1 = Math.floor(parseInt(url[1], 10) / 60);
+      const seg1 = secondsToSegment(url[1]);
       if (url[2] === undefined) return `${base}/${seg1}`;
-      const seg2 = Math.floor(parseInt(url[2], 10) / 60);
+      const seg2 = secondsToSegment(url[2]);
       return `${base}/${seg1}/${seg2}`;
     }
     const hex = orig.match(/^[a-f0-9]{16}[\/|][a-f0-9]{8}--[a-f0-9]{10}\/([a-f0-9]{8}--[a-f0-9]{10})$/i);
@@ -386,6 +153,11 @@ function routeStatusEmoji(r: ExtractedRoute): string {
   if (r.public === undefined) return '';
   if (!r.public) return `${STATUS_EMOJI.private} `;
   return `${STATUS_EMOJI.public} ${r.rlogsAvailable ? STATUS_EMOJI.logs : STATUS_EMOJI.noLogs} `;
+}
+
+// Replacement label for a numbered route reference scrubbed from report text (Discord markdown).
+function routeNumberLabel(routeNumber: number): string {
+  return `**[Route ${routeNumber}]**`;
 }
 
 function routeLinkMarkdown(r: ExtractedRoute): string {
@@ -470,51 +242,6 @@ function buildRefreshRow(): ActionRowBuilder<ButtonBuilder> {
 // cooldown elapses, so a key's mere presence signals "still cooling down" (no manual sweeping).
 const REFRESH_COOLDOWN_MS = 60_000;
 const refreshCooldowns = new LRUCache<string, number>({ max: 500, ttl: REFRESH_COOLDOWN_MS });
-
-interface RouteSegmentMetadata {
-  /* 0 indexed, so maxqlog of 1 means there were 2 segments in the route */
-  maxqlog: number;
-  start_time_utc_millis: number;
-  end_time_utc_millis: number;
-  git_remote: string;
-  git_branch: string;
-  git_commit: string;
-  git_commit_date: string;
-  git_dirty: boolean;
-}
-
-const METADATA_CACHE_TTL_MS = 3 * 60_000;
-const metadataCache = new LRUCache<string, RouteSegmentMetadata>({ max: 200, ttl: METADATA_CACHE_TTL_MS });
-
-export async function fetchRouteMetadata(dongleId: string, routeName: string): Promise<RouteSegmentMetadata | null> {
-  const key = `${dongleId}|${routeName}`;
-  const cached = metadataCache.get(key);
-  if (cached) return cached;
-  try {
-    const res = await fetch(
-      `https://api.comma.ai/v1/devices/${dongleId}/routes_segments?route_str=${encodeURIComponent(key)}`,
-    );
-    if (!res.ok) return null;
-    const data = await res.json() as RouteSegmentMetadata[];
-    if (!Array.isArray(data) || data.length === 0) return null;
-    const entry = data[0];
-    const meta: RouteSegmentMetadata = {
-      maxqlog: entry.maxqlog,
-      start_time_utc_millis: entry.start_time_utc_millis,
-      end_time_utc_millis: entry.end_time_utc_millis,
-      git_remote: entry.git_remote,
-      git_branch: entry.git_branch,
-      git_commit: entry.git_commit,
-      git_commit_date: entry.git_commit_date,
-      git_dirty: entry.git_dirty,
-    };
-    metadataCache.set(key, meta);
-    return meta;
-  } catch (err) {
-    log.warn({ err }, 'Failed to fetch route metadata');
-    return null;
-  }
-}
 
 async function postRouteMetadata(channel: ThreadChannel, dongleId: string, routeName: string): Promise<void> {
   const meta = await fetchRouteMetadata(dongleId, routeName);
@@ -1141,9 +868,9 @@ async function processBugReport(
   const numberedAdditional = validatedRoutes.slice(1).map((r, i) => ({ ...r, routeNumber: i + 1 }));
 
   const replacementRoutes: ExtractedRoute[] = [dedicatedValidated, ...numberedAdditional];
-  const cleanObserved = replaceRouteIds(observed, replacementRoutes);
-  const cleanExpected = replaceRouteIds(expected, replacementRoutes);
-  const cleanReproIntent = replaceRouteIds(reproIntent, replacementRoutes);
+  const cleanObserved = replaceRouteIds(observed, replacementRoutes, routeNumberLabel);
+  const cleanExpected = replaceRouteIds(expected, replacementRoutes, routeNumberLabel);
+  const cleanReproIntent = replaceRouteIds(reproIntent, replacementRoutes, routeNumberLabel);
 
   const reportEmbed = new EmbedBuilder()
     .setColor(COLORS.blurple)
@@ -1298,7 +1025,7 @@ export async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, 
   }
   // Number every extracted route (even invalid) so format-matching URLs still get redacted.
   const numberedRoutes = validatedRoutes.map((r, i) => ({ ...r, routeNumber: i + 1 }));
-  const cleanContent = replaceRouteIds(content, numberedRoutes);
+  const cleanContent = replaceRouteIds(content, numberedRoutes, routeNumberLabel);
 
   const embed = new EmbedBuilder()
     .setColor(type === 'feedback' ? COLORS.green : COLORS.blurple)
