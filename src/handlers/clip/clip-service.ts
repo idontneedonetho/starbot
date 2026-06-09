@@ -8,8 +8,8 @@ import {
   ButtonStyle,
 } from 'discord.js';
 import { EventSource } from 'eventsource';
-import { createLogger } from '../logger.js';
-import { COLORS } from '../util.js';
+import { createLogger } from '../../logger.js';
+import { COLORS } from '../../util.js';
 
 const log = createLogger('clip');
 
@@ -316,7 +316,6 @@ export async function processClip(
     });
 
     es.addEventListener('started', (_e: Event | MessageEvent) => {
-      // const d = JSON.parse((_e as MessageEvent).data) as SseStartedEvent;
       onProgress({ pct: null, detail: 'Processing\u2026', force: true }).catch(() => {});
     });
 
@@ -463,4 +462,3 @@ export async function handleClipRequest(
     releaseUserLock(userId);
   }
 }
-

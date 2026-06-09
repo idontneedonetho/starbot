@@ -44,9 +44,9 @@ import {
   RENDER_TYPE_LABELS,
   VALID_RENDER_TYPES,
   type ClipJobInput,
-} from './clip.js';
-import { loadConfig } from '../config.js';
-import { COLORS } from '../util.js';
+} from './clip-service.js';
+import { loadConfig } from '../../config.js';
+import { COLORS } from '../../util.js';
 
 const MODAL_ID = 'clip_form';
 const guildId = loadConfig().guildId;

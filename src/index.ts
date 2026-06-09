@@ -3,9 +3,10 @@ import { IntentsBitField } from 'discord.js';
 import { loadConfig } from './config.js';
 import { root as log } from './logger.js';
 import './handlers/events.js';
-import './handlers/buttons.js';
-import './handlers/modals.js';
-import './handlers/clip-commands.js';
+import './handlers/clip/index.js';
+import './handlers/identification/index.js';
+import './handlers/report/index.js';
+import './handlers/report/report-actions.js';
 
 const config = loadConfig();
 
