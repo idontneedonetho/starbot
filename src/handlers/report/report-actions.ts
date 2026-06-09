@@ -1,4 +1,5 @@
-import { Discord, ButtonComponent, ModalComponent } from 'discordx';
+import { Discord, ButtonComponent, ModalComponent, SelectMenuComponent, Slash, Guild } from 'discordx';
+import type { CommandInteraction, StringSelectMenuInteraction } from 'discord.js';
 import {
   type ButtonInteraction,
   type ModalSubmitInteraction,
@@ -13,6 +14,8 @@ import {
   ButtonBuilder,
   ButtonStyle,
   MessageFlags,
+  StringSelectMenuBuilder,
+  PermissionFlagsBits,
 } from 'discord.js';
 import { loadConfig } from '../../config.js';
 import { createLogger } from '../../logger.js';
@@ -41,85 +44,24 @@ async function closeThread(thread: ThreadChannel, guild: import('discord.js').Gu
   await thread.setArchived(true).catch(() => {});
 }
 
+async function updateThreadButtons(thread: ThreadChannel): Promise<string | null> {
+  const starter = await thread.fetchStarterMessage();
+  if (!starter) return null;
+
+  const embed = starter.embeds[0];
+  if (!embed) return null;
+
+  const titleMatch = embed.title?.match(/\((\d+)\)\s*$/);
+  const ticketId = titleMatch?.[1] ?? String(parseInt(thread.id.slice(-7), 10));
+
+  const actionRow = buildActionRow(ticketId);
+  const edited = await starter.edit({ components: [actionRow] }).catch(err => { log.warn({ err }, 'Failed to update thread buttons'); return null; });
+  if (!edited) return null;
+  return ticketId;
+}
+
 @Discord()
 export class BotReportActions {
-  @ButtonComponent({ id: /^assign_/ })
-  async assign(interaction: ButtonInteraction) {
-    if (!(interaction.member instanceof GuildMember) || !hasStaffRole(interaction.member)) {
-      await interaction.reply({ content: 'Only staff can assign reports.', flags: MessageFlags.Ephemeral });
-      return;
-    }
-
-    const thread = interaction.channel;
-    if (!thread?.isThread()) {
-      await interaction.reply({ content: 'This can only be used from a thread.', flags: MessageFlags.Ephemeral });
-      return;
-    }
-
-    await thread.members.add(interaction.user.id).catch(err => log.warn({ err }, 'Failed to add member to thread'));
-
-    const starter = await thread.fetchStarterMessage();
-    if (starter) {
-      const embed = starter.embeds[0];
-      if (embed) {
-        const updated = EmbedBuilder.from(embed);
-        const assignIdx = embed.fields?.findIndex(f => f.name === '\uD83D\uDC64 Assigned to') ?? -1;
-        const assignField = { name: '\uD83D\uDC64 Assigned to', value: `<@${interaction.user.id}>` };
-        if (assignIdx >= 0) {
-          updated.spliceFields(assignIdx, 1, assignField);
-        } else {
-          updated.addFields(assignField);
-        }
-        await starter.edit({ embeds: [updated] }).catch(() => {});
-      }
-    }
-
-    const config = loadConfig();
-    const guild = interaction.guild;
-    if (guild) {
-      const forum = await getForum(guild, config.forumChannelId);
-      if (forum) {
-        const tagIds = resolveTagIds(forum, ['ASSIGNED']);
-        if (tagIds.length > 0) {
-          const existing = thread.appliedTags as string[];
-          const deduped = existing.filter(id => !tagIds.includes(id));
-          await thread.setAppliedTags([...deduped, ...tagIds]).catch(() => {});
-        }
-      }
-    }
-
-    await interaction.reply({ content: 'You have been assigned to this report.', flags: MessageFlags.Ephemeral });
-  }
-
-  @ButtonComponent({ id: /^close_/ })
-  async close(interaction: ButtonInteraction) {
-    if (!(interaction.member instanceof GuildMember) || !hasStaffRole(interaction.member)) {
-      await interaction.reply({ content: 'Only staff can close reports.', flags: MessageFlags.Ephemeral });
-      return;
-    }
-
-    const thread = interaction.channel;
-    if (!thread?.isThread()) {
-      await interaction.reply({ content: 'This can only be used from a thread.', flags: MessageFlags.Ephemeral });
-      return;
-    }
-
-    const starter = await thread.fetchStarterMessage();
-    if (starter) {
-      const embed = starter.embeds[0];
-      if (embed) {
-        const updated = EmbedBuilder.from(embed);
-        updated.addFields({ name: '\u200B', value: `\uD83D\uDD12 Closed by <@${interaction.user.id}>` });
-        await starter.edit({ embeds: [updated] }).catch(err => log.warn({ err }, 'Failed to edit starter'));
-      }
-    }
-
-    await interaction.reply({ content: 'Report closed.', flags: MessageFlags.Ephemeral });
-
-    const guild = interaction.guild;
-    if (guild) await closeThread(thread, guild);
-  }
-
   @ButtonComponent({ id: /^additional_report_/ })
   async additionalReport(interaction: ButtonInteraction) {
     const modal = new ModalBuilder()
@@ -147,27 +89,117 @@ export class BotReportActions {
     await interaction.showModal(modal);
   }
 
-  @ButtonComponent({ id: /^merge_/ })
-  async merge(interaction: ButtonInteraction) {
+  @ButtonComponent({ id: /^staff_actions_/ })
+  async staffActions(interaction: ButtonInteraction) {
     if (!(interaction.member instanceof GuildMember) || !hasStaffRole(interaction.member)) {
-      await interaction.reply({ content: 'Only staff can merge reports.', flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: 'Only staff can use staff actions.', flags: MessageFlags.Ephemeral });
       return;
     }
 
-    const modal = new ModalBuilder()
-      .setCustomId(`merge_modal_${interaction.id}`)
-      .setTitle('Merge Report');
+    const ticketId = interaction.customId.replace('staff_actions_', '');
+    const select = new StringSelectMenuBuilder()
+      .setCustomId(`staff_select_${ticketId}`)
+      .setPlaceholder('Choose an action...')
+      .addOptions(
+        { label: 'Assign', value: 'assign', emoji: '👤', description: 'Assign yourself to this report' },
+        { label: 'Merge', value: 'merge', emoji: '🔀', description: 'Merge this report into another thread' },
+        { label: 'Close', value: 'close', emoji: '🔐', description: 'Close this report' },
+      );
+    const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select);
+    await interaction.reply({ content: 'Select a staff action:', components: [row], flags: MessageFlags.Ephemeral });
+  }
 
-    const targetInput = new TextInputBuilder({
-      custom_id: 'target_thread',
-      style: TextInputStyle.Short,
-      placeholder: 'Paste the target thread URL or ID',
-      required: true,
-      max_length: 200,
-    });
-    modal.addLabelComponents(new LabelBuilder().setLabel('Target Thread').setTextInputComponent(targetInput));
+  @SelectMenuComponent({ id: /^staff_select_/ })
+  async staffSelect(interaction: StringSelectMenuInteraction) {
+    if (!(interaction.member instanceof GuildMember) || !hasStaffRole(interaction.member)) {
+      await interaction.reply({ content: 'Only staff can use staff actions.', flags: MessageFlags.Ephemeral });
+      return;
+    }
 
-    await interaction.showModal(modal);
+    const [action] = interaction.values;
+    if (!['assign', 'close', 'merge'].includes(action)) {
+      await interaction.reply({ content: 'Invalid action.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const thread = interaction.channel;
+    if (!thread?.isThread()) {
+      await interaction.reply({ content: 'This can only be used from a thread.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const guild = interaction.guild;
+    if (!guild) {
+      await interaction.reply({ content: 'Could not resolve guild.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (action === 'merge') {
+      const modal = new ModalBuilder()
+        .setCustomId(`merge_modal_${interaction.id}`)
+        .setTitle('Merge Report');
+
+      const targetInput = new TextInputBuilder({
+        custom_id: 'target_thread',
+        style: TextInputStyle.Short,
+        placeholder: 'Paste the target thread URL or ID',
+        required: true,
+        max_length: 200,
+      });
+      modal.addLabelComponents(new LabelBuilder().setLabel('Target Thread').setTextInputComponent(targetInput));
+
+      await interaction.showModal(modal);
+      return;
+    }
+
+    await interaction.deferUpdate();
+    await interaction.deleteReply().catch(() => {});
+
+    if (action === 'assign') {
+      await thread.members.add(interaction.user.id).catch(err => log.warn({ err }, 'Failed to add member to thread'));
+
+      const assignStarter = await thread.fetchStarterMessage();
+      if (assignStarter) {
+        const assignEmbed = assignStarter.embeds[0];
+        if (assignEmbed) {
+          const assignUpdated = EmbedBuilder.from(assignEmbed);
+          const assignIdx = assignEmbed.fields?.findIndex(f => f.name === '👤 Assigned to') ?? -1;
+          const assignField = { name: '👤 Assigned to', value: `<@${interaction.user.id}>` };
+          if (assignIdx >= 0) {
+            assignUpdated.spliceFields(assignIdx, 1, assignField);
+          } else {
+            assignUpdated.addFields(assignField);
+          }
+          await assignStarter.edit({ embeds: [assignUpdated] }).catch(() => {});
+        }
+      }
+
+      const assignConfig = loadConfig();
+      const assignForum = await getForum(guild, assignConfig.forumChannelId);
+      if (assignForum) {
+        const assignTagIds = resolveTagIds(assignForum, ['ASSIGNED']);
+        if (assignTagIds.length > 0) {
+          const assignExisting = thread.appliedTags as string[];
+          const assignDeduped = assignExisting.filter(id => !assignTagIds.includes(id));
+          await thread.setAppliedTags([...assignDeduped, ...assignTagIds]).catch(() => {});
+        }
+      }
+
+      await interaction.followUp({ content: 'You have been assigned to this report.', flags: MessageFlags.Ephemeral });
+    } else {
+      const closeStarter = await thread.fetchStarterMessage();
+      if (closeStarter) {
+        const closeEmbed = closeStarter.embeds[0];
+        if (closeEmbed) {
+          const closeUpdated = EmbedBuilder.from(closeEmbed);
+          closeUpdated.addFields({ name: '\u200B', value: `🔐 Closed by <@${interaction.user.id}>` });
+          await closeStarter.edit({ embeds: [closeUpdated] }).catch(err => log.warn({ err }, 'Failed to edit starter'));
+        }
+      }
+
+      await interaction.followUp({ content: 'Report closed.', flags: MessageFlags.Ephemeral });
+      await closeThread(thread, guild);
+    }
   }
 
   @ButtonComponent({ id: /^split_/ })
@@ -235,7 +267,7 @@ export class BotReportActions {
       )
       .setTimestamp();
 
-    const splitName = `\u2702\uFE0F Split - ${thread.name}`;
+    const splitName = `✂️ Split - ${thread.name}`;
     const threadName = splitName.length > 100 ? splitName.slice(0, 97) + '\u2026' : splitName;
 
     const newThread = await forum.threads.create({
@@ -256,7 +288,7 @@ export class BotReportActions {
     const origPostIdx = opEmbed.fields?.findIndex(
       f => f.name === 'Original Post' || ('value' in f && (f.value as string)?.startsWith('[Original Post \u2192]')),
     ) ?? -1;
-    const splitField = { name: '\u2702\uFE0F Split', value: `[${newThread.name}](${newThread.url})`, inline: true };
+    const splitField = { name: '✂️ Split', value: `[${newThread.name}](${newThread.url})`, inline: true };
     if (origPostIdx >= 0) {
       updatedEmbed.spliceFields(origPostIdx, 0, splitField);
     } else {
@@ -265,7 +297,7 @@ export class BotReportActions {
     await starter.edit({ embeds: [updatedEmbed] }).catch(err => log.warn({ err }, 'Failed to edit OP embed'));
 
     const updatedAdditionalEmbed = EmbedBuilder.from(additionalEmbed!);
-    updatedAdditionalEmbed.addFields({ name: '\u2702\uFE0F Split to', value: `[${newThread.name}](${newThread.url})`, inline: true });
+    updatedAdditionalEmbed.addFields({ name: '✂️ Split to', value: `[${newThread.name}](${newThread.url})`, inline: true });
     await interaction.message.edit({ embeds: [updatedAdditionalEmbed], components: [] }).catch(err => log.warn({ err }, 'Failed to edit additional embed'));
   }
 
@@ -389,7 +421,7 @@ export class BotReportActions {
         new ActionRowBuilder<ButtonBuilder>().addComponents(
           new ButtonBuilder()
             .setCustomId(`split_${additionalReportId}`)
-            .setLabel('\u2702\uFE0F Split to Thread')
+            .setLabel('✂️ Split to Thread')
             .setStyle(ButtonStyle.Secondary),
         ),
       ],
@@ -444,5 +476,64 @@ export class BotReportActions {
     await interaction.reply({ content: `Report merged into ${targetChannel}.`, flags: MessageFlags.Ephemeral });
 
     if (guild) await closeThread(source, guild);
+  }
+
+  @ButtonComponent({ id: /^assign_/ })
+  @ButtonComponent({ id: /^close_/ })
+  @ButtonComponent({ id: /^merge_/ })
+  async legacyButton(interaction: ButtonInteraction) {
+    await this.handleLegacyButton(interaction);
+  }
+
+  private async handleLegacyButton(interaction: ButtonInteraction) {
+    if (!(interaction.member instanceof GuildMember) || !hasStaffRole(interaction.member)) {
+      await interaction.reply({ content: 'Only staff can use staff actions.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const thread = interaction.channel;
+    if (!thread?.isThread()) {
+      await interaction.reply({ content: 'This can only be used from a thread.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const ticketId = await updateThreadButtons(thread);
+    if (!ticketId) {
+      await interaction.reply({ content: 'Could not update thread buttons. Use `/update-report-thread` instead.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    await interaction.reply({
+      content: `Thread updated to the new button format. (Ticket **${ticketId}**) Use **Staff Actions** to assign, merge, or close.`,
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+}
+
+const guildId = loadConfig().guildId;
+
+@Discord()
+@Guild(guildId)
+export class ReportCommands {
+  @Slash({ description: 'Update the action buttons on this report thread to the latest format', name: 'update-report-thread', defaultMemberPermissions: PermissionFlagsBits.ManageThreads })
+  async updateReportThread(interaction: CommandInteraction) {
+    if (!(interaction.member instanceof GuildMember) || !hasStaffRole(interaction.member)) {
+      await interaction.reply({ content: 'Only staff can update report threads.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const channel = interaction.channel;
+    if (!channel?.isThread()) {
+      await interaction.reply({ content: 'This command can only be used inside a report thread.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const ticketId = await updateThreadButtons(channel);
+    if (!ticketId) {
+      await interaction.reply({ content: 'Could not update thread buttons. No report embed found.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    await interaction.reply({ content: `Report thread buttons updated to the latest format. (Ticket **${ticketId}**)`, flags: MessageFlags.Ephemeral });
   }
 }

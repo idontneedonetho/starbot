@@ -28,22 +28,12 @@ export function buildActionRow(ticketId: string): ActionRowBuilder<ButtonBuilder
       .setCustomId(`additional_report_${ticketId}`)
       .setLabel('Additional Report')
       .setStyle(ButtonStyle.Secondary)
-      .setEmoji('\uD83D\uDCDD'),
+      .setEmoji('📝'),
     new ButtonBuilder()
-      .setCustomId(`assign_${ticketId}`)
-      .setLabel('Assign')
+      .setCustomId(`staff_actions_${ticketId}`)
+      .setLabel('Staff Actions')
       .setStyle(ButtonStyle.Primary)
-      .setEmoji('\uD83D\uDC64'),
-    new ButtonBuilder()
-      .setCustomId(`merge_${ticketId}`)
-      .setLabel('Merge')
-      .setStyle(ButtonStyle.Primary)
-      .setEmoji('\uD83D\uDD00'),
-    new ButtonBuilder()
-      .setCustomId(`close_${ticketId}`)
-      .setLabel('Close')
-      .setStyle(ButtonStyle.Danger)
-      .setEmoji('\uD83D\uDD12'),
+      .setEmoji('🛠️'),
   );
 }
 
@@ -135,7 +125,7 @@ async function addWikiSuggestions(embed: EmbedBuilder, query: string): Promise<v
     if (wikiIndex) {
       const wikiResults = await searchWiki(wikiIndex, query);
       if (wikiResults.length > 0) {
-        embed.addFields({ name: '\uD83D\uDCD6 Potentially Related Wiki Articles', value: formatWikiResults(wikiResults) });
+        embed.addFields({ name: '📖 Potentially Related Wiki Articles', value: formatWikiResults(wikiResults) });
       }
     }
   } catch (err) {
@@ -218,7 +208,7 @@ export async function submitReport(
       .setCustomId(encodeConfirmCustomId(ticketId, interaction.user.id, params.primaryNonPublicRoute.dongleId, params.primaryNonPublicRoute.routeName, params.primaryNonPublicRoute.iteration))
       .setLabel('Confirm Route')
       .setStyle(ButtonStyle.Primary)
-      .setEmoji('\uD83D\uDCCD');
+      .setEmoji('📍');
     await thread.send({
       content: `<@${interaction.user.id}> Your route is valid but not yet public. Once you've made it public, click the button below to link it to this report.\n\nNeed help? Follow [these instructions](<https://wiki.firestar.link/faq/#how-do-i-upload-logs-for-troubleshooting>).`,
       components: [new ActionRowBuilder<ButtonBuilder>().addComponents(btn)],
