@@ -75,9 +75,12 @@ export class BotEvents {
             '## ✨ Before You Submit...\n\n' +
             `**Note:** <#${config.forumChannelId}> serves as the official to-do list and triage queue for maintainers. To keep things manageable, actionable, and to reduce notification fatigue, please follow these guidelines before hitting submit.\n\n` +
               '### 🐛 Bug Reports\n\n' +
-              ' -  **Fully Investigate First:** Ensure you have thoroughly tested and verified the bug before posting.\n' +
+              '- **Fully Investigate First:** Ensure you have thoroughly tested and verified the bug before posting.\n' +
               '- **Actionable Items Only:** Do not submit reports that end with "more investigation is required on my end." If you are still troubleshooting, hold off on submitting until you have the final, concrete details.\n' +
               '- **Consolidate Your Thoughts:** Avoid treating reports like a live scratchpad. Gather all your findings into a single, comprehensive submission to avoid spamming the channel with self-corrections and stream-of-consciousness updates.\n\n' +
+              '### 🎯 One Issue Per Ticket\n\n' +
+              '- **Keep It Scoped:** Each report should cover a single issue, or a tightly related set of issues that share the same root cause or logical thread.\n' +
+              '- **Why?** Combined reports make it harder to track, prioritize, and close individual problems. If you have multiple unrelated bugs or ideas, please submit them separately.\n\n' +
               '### 💡 Feature Requests & PRs\n\n' +
               '**Requests vs. Development:** Feature requests are designed to suggest ideas for the maintainers to review and potentially build.\n\n' +
               `**Developing it yourself?** We absolutely love contributors and think it is awesome when you want to tackle a feature. If you plan to build it yourself, there is no need to open a feature request here. Instead, jump over to <#${config.developmentChannelId}> and start a thread. We are always happy to provide feedback, help troubleshoot problems, and cheer you on there!\n\n` +
