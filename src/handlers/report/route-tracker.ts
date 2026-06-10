@@ -167,6 +167,30 @@ async function postRouteMetadata(channel: ThreadChannel, dongleId: string, route
   await channel.send({ embeds: [embed] }).catch(err => log.warn({ err }, 'Failed to post route metadata'));
 }
 
+function migrateFieldsToDescription(embed: { fields?: Array<{ name: string; value: string; inline?: boolean }> }, builder: EmbedBuilder): string {
+  if (builder.data.description) return builder.data.description;
+
+  const parts: string[] = [];
+  const keptFields: Array<{ name: string; value: string; inline?: boolean }> = [];
+
+  for (const field of embed.fields ?? []) {
+    if (field.name === 'Route') {
+      parts.push(`**Route**\n${field.value}`);
+    } else if (field.name === 'Additional Routes') {
+      parts.push(`**Additional Routes**\n${field.value}`);
+    } else {
+      keptFields.push(field);
+    }
+  }
+
+  if (parts.length === 0) return '';
+
+  const desc = parts.join('\n');
+  builder.setDescription(desc);
+  builder.setFields(...keptFields);
+  return desc;
+}
+
 async function refreshRouteLine(line: string): Promise<string> {
   const shortMatch = line.match(/`([^`]+)`/);
   if (!shortMatch) return line;
@@ -213,10 +237,10 @@ export async function handleRefreshRoutes(interaction: import('discord.js').Butt
   }
 
   const updated = EmbedBuilder.from(embed);
-  for (const field of updated.data.fields ?? []) {
-    if (field.name !== 'Route' && field.name !== 'Additional Routes') continue;
-    const lines = field.value.split('\n');
-    field.value = (await Promise.all(lines.map(refreshRouteLine))).join('\n');
+  const desc = migrateFieldsToDescription(embed, updated);
+  if (desc) {
+    const lines = desc.split('\n');
+    updated.setDescription((await Promise.all(lines.map(refreshRouteLine))).join('\n'));
   }
 
   await interaction.message.edit({ embeds: [updated] }).catch(err =>
@@ -255,13 +279,9 @@ export async function createRouteTrackerThread(
         const embed = starter.embeds[0];
         if (embed) {
           const updated = EmbedBuilder.from(embed);
-          if (!embed.fields?.some((f: { value?: string }) => f.value?.includes(primaryLink))) {
-            const existingField = updated.data.fields?.find(f => f.name === 'Additional Routes');
-            if (existingField) {
-              existingField.value += `\n${primaryLink}`;
-            } else {
-              updated.addFields({ name: 'Additional Routes', value: primaryLink });
-            }
+          const desc = migrateFieldsToDescription(embed, updated);
+          if (!desc.includes(primaryLink)) {
+            updated.setDescription((desc ? desc + '\n' : '') + '**Additional Routes**\n' + primaryLink);
             await starter.edit({ embeds: [updated] });
           }
         }
@@ -279,7 +299,7 @@ export async function createRouteTrackerThread(
     .setFooter({ text: STATUS_LEGEND })
     .setTimestamp();
   if (primaryLink) {
-    routeEmbed.addFields({ name: 'Route', value: primaryLink });
+    routeEmbed.setDescription(`**Route**\n${primaryLink}`);
   }
 
   const routesThread = await routesForum.threads.create({
@@ -318,11 +338,10 @@ export async function addAdditionalRoutesToTracker(
     const embed = starter.embeds[0];
     if (!embed) return;
     const updated = EmbedBuilder.from(embed);
-    const additionalField = updated.data.fields?.find(f => f.name === 'Additional Routes');
-    const existingValue = additionalField?.value ?? '';
+    const existingDesc = migrateFieldsToDescription(embed, updated);
     const newRoutes = additionalRoutes.filter(r => {
       const short = routeShortForm(r);
-      return !existingValue.includes(short);
+      return !existingDesc.includes(short);
     });
     const newLinks = newRoutes.map(r => {
       const base = routeLinkMarkdown(r);
@@ -330,18 +349,7 @@ export async function addAdditionalRoutesToTracker(
     });
     if (newLinks.length === 0) return;
     const links = newLinks.join('\n');
-    if (additionalField) {
-      additionalField.value += `\n${links}`;
-    } else {
-      const origPostIdx = updated.data.fields?.findIndex(
-        f => f.value?.startsWith(ORIGINAL_POST_PREFIX),
-      ) ?? -1;
-      if (origPostIdx >= 0) {
-        updated.spliceFields(origPostIdx, 0, { name: 'Additional Routes', value: links });
-      } else {
-        updated.addFields({ name: 'Additional Routes', value: links });
-      }
-    }
+    updated.setDescription(existingDesc + '\n**Additional Routes**\n' + links);
     await starter.edit({ embeds: [updated] });
     const postedMeta = new Set<string>();
     for (const r of newRoutes) {
