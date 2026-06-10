@@ -104,7 +104,13 @@ export function buildConfirmRows(
   userId: string,
 ): ActionRowBuilder<ButtonBuilder>[] {
   const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+  // Different mentions (URL vs bare, different segments) can resolve to the same
+  // underlying route + iteration; dedupe so custom_ids stay unique.
+  const seen = new Set<string>();
   for (const r of routes) {
+    const key = `${r.dongleId}/${r.routeName}/${r.iteration ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     if (rows.length === 0 || rows[rows.length - 1].components.length >= 3) {
       rows.push(new ActionRowBuilder<ButtonBuilder>());
     }
