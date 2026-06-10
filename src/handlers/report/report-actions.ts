@@ -23,8 +23,40 @@ import { COLORS } from '../../util.js';
 import { normalizeRouteInput, parseNormalizedRoute, validateRoute, stripRouteIds } from '../../comma.js';
 import { getForum, addAdditionalRoutesToTracker, createRouteTrackerThread, TRACKER_FIELD_PREFIX } from './route-tracker.js';
 import { resolveTagIds, buildActionRow } from './report-service.js';
+import { createStore } from '../../store.js';
 
 const log = createLogger('report-actions');
+
+const assigneeTagStore = createStore<string>('assignee-tags');
+
+async function getOrCreateAssigneeTag(forum: import('discord.js').ForumChannel, userId: string, username: string): Promise<string | null> {
+  const cached = await assigneeTagStore.get(userId);
+  if (cached) {
+    if (forum.availableTags.some(t => t.id === cached)) return cached;
+    await assigneeTagStore.delete(userId);
+  }
+
+  const tagName = `Assignee ${username}`;
+  const existing = forum.availableTags.find(t => t.name === tagName);
+  if (existing) {
+    await assigneeTagStore.set(userId, existing.id);
+    return existing.id;
+  }
+
+  try {
+    const updated = await forum.setAvailableTags([
+      ...forum.availableTags.map(t => ({ name: t.name, id: t.id, moderated: t.moderated, emoji: t.emoji ?? undefined })),
+      { name: tagName },
+    ]);
+    const created = updated.availableTags.find(t => t.name === tagName);
+    if (!created) return null;
+    await assigneeTagStore.set(userId, created.id);
+    return created.id;
+  } catch (err) {
+    log.warn({ err, tagName }, 'Failed to create assignee tag');
+    return null;
+  }
+}
 
 function hasStaffRole(member: GuildMember): boolean {
   return member.roles.cache.has(loadConfig().staffRole);
@@ -177,11 +209,18 @@ export class BotReportActions {
       const assignConfig = loadConfig();
       const assignForum = await getForum(guild, assignConfig.forumChannelId);
       if (assignForum) {
-        const assignTagIds = resolveTagIds(assignForum, ['ASSIGNED']);
-        if (assignTagIds.length > 0) {
+        const tagIds: string[] = [];
+
+        const assignedTagIds = resolveTagIds(assignForum, ['ASSIGNED']);
+        tagIds.push(...assignedTagIds);
+
+        const assigneeTagId = await getOrCreateAssigneeTag(assignForum, interaction.user.id, interaction.user.username);
+        if (assigneeTagId) tagIds.push(assigneeTagId);
+
+        if (tagIds.length > 0) {
           const assignExisting = thread.appliedTags as string[];
-          const assignDeduped = assignExisting.filter(id => !assignTagIds.includes(id));
-          await thread.setAppliedTags([...assignDeduped, ...assignTagIds]).catch(() => {});
+          const assignDeduped = assignExisting.filter(id => !tagIds.includes(id));
+          await thread.setAppliedTags([...assignDeduped, ...tagIds]).catch(() => {});
         }
       }
 
