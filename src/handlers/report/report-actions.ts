@@ -22,7 +22,7 @@ import { loadConfig } from '../../config.js';
 import { createLogger } from '../../logger.js';
 import { createStore } from '../../store.js';
 import { COLORS, formatGitCommit, discordTimestamp, timeAgo } from '../../util.js';
-import { normalizeRouteInput, parseNormalizedRoute, validateRoute, stripRouteIds, extractRouteIds, replaceRouteIds, fetchRouteMetadata } from '../../comma.js';
+import { normalizeRouteInput, parseNormalizedRoute, validateRoute, extractRouteIds, replaceRouteIds, fetchRouteMetadata } from '../../comma.js';
 import { fetchCommitChoices, compareCommits } from '../../github.js';
 import { getForum, addAdditionalRoutesToTracker, createRouteTrackerThread, routeNumberLabel, TRACKER_FIELD_PREFIX } from './route-tracker.js';
 import { resolveTagIds, buildActionRow, swapForumTags } from './report-service.js';
@@ -422,27 +422,28 @@ export class BotReportActions {
       const validations = await Promise.all(routes.map(r => validateRoute(r.dongleId, r.routeName)));
       const numbered = routes.map((r, i) => ({ ...r, ...validations[i], routeNumber: i + 1 }));
       const cleanFeedback = replaceRouteIds(feedback, numbered, routeNumberLabel);
+      const validRoutes = numbered.filter(r => r.valid);
+      const tracker = validRoutes.length > 0 ? await ensureTrackerThread(thread, guild) : null;
+
+      const feedbackEmbed = new EmbedBuilder()
+        .setColor(COLORS.blurple)
+        .setTitle('💬 Feedback')
+        .setDescription(cleanFeedback || 'No additional info')
+        .setTimestamp();
+      if (tracker) {
+        feedbackEmbed.addFields({ name: '\u200B', value: `${TRACKER_FIELD_PREFIX}(${tracker.url})` });
+      }
 
       feedbackMsg = await thread.send({
         content: `<@${interaction.user.id}>`,
-        embeds: [
-          new EmbedBuilder()
-            .setColor(COLORS.blurple)
-            .setTitle('💬 Feedback')
-            .setDescription(cleanFeedback || 'No additional info')
-            .setTimestamp(),
-        ],
+        embeds: [feedbackEmbed],
       }).catch(err => { log.warn({ err }, 'Failed to post ready feedback'); return null; });
 
-      const validRoutes = numbered.filter(r => r.valid);
-      if (validRoutes.length > 0) {
-        const tracker = await ensureTrackerThread(thread, guild);
-        if (tracker) {
-          await addAdditionalRoutesToTracker(
-            guild, tracker.threadId, validRoutes,
-            feedbackMsg?.url, feedbackMsg ? 'User Feedback' : undefined,
-          );
-        }
+      if (tracker) {
+        await addAdditionalRoutesToTracker(
+          guild, tracker.threadId, validRoutes,
+          feedbackMsg?.url, feedbackMsg ? 'User Feedback' : undefined,
+        );
       }
     }
 
@@ -767,12 +768,21 @@ export class BotReportActions {
       return;
     }
 
+    // Routes mentioned in the details get the same treatment as report bodies:
+    // validated, numbered [Route N] in the public text, and added to the tracker.
+    const detailRoutes = details
+      ? extractRouteIds(details).filter(r => (r.originalText ?? '').toLowerCase() !== trimmedInput.toLowerCase())
+      : [];
+    const detailValidations = await Promise.all(detailRoutes.map(r => validateRoute(r.dongleId, r.routeName)));
+    const numberedDetailRoutes = detailRoutes.map((r, i) => ({ ...r, ...detailValidations[i], routeNumber: i + 1 }));
+    const cleanDetails = details ? replaceRouteIds(details, [parsed, ...numberedDetailRoutes], routeNumberLabel) : '';
+
     const msg = await thread.send({
       content: `<@${interaction.user.id}>`,
       embeds: [
         new EmbedBuilder()
           .setColor(COLORS.blurple)
-          .setDescription((details && stripRouteIds(details)) || 'No additional info')
+          .setDescription(cleanDetails || 'No additional info')
           .addFields({ name: '\u200B', value: `${TRACKER_FIELD_PREFIX}(${tracker.url})` })
           .setTimestamp(),
       ],
@@ -791,7 +801,7 @@ export class BotReportActions {
     });
 
     await addAdditionalRoutesToTracker(
-      guild, tracker.threadId, [parsed],
+      guild, tracker.threadId, [parsed, ...numberedDetailRoutes.filter(r => r.valid)],
       msg.url, `Additional Report #${additionalReportId}`,
     );
 
