@@ -21,7 +21,7 @@ import {
 import { loadConfig } from '../../config.js';
 import { createLogger } from '../../logger.js';
 import { createStore } from '../../store.js';
-import { COLORS, formatGitCommit, discordTimestamp } from '../../util.js';
+import { COLORS, formatGitCommit, discordTimestamp, timeAgo } from '../../util.js';
 import { normalizeRouteInput, parseNormalizedRoute, validateRoute, stripRouteIds, extractRouteIds, replaceRouteIds, fetchRouteMetadata } from '../../comma.js';
 import { fetchCommitChoices, compareCommits } from '../../github.js';
 import { getForum, addAdditionalRoutesToTracker, createRouteTrackerThread, routeNumberLabel, TRACKER_FIELD_PREFIX } from './route-tracker.js';
@@ -284,11 +284,13 @@ export class BotReportActions {
         .setPlaceholder('Select the minimum required commit…')
         .addOptions(choices.map(c => {
           const label = `${c.branch} ${c.short} — ${c.subject}`;
+          // plain text only — Discord doesn't render <t:…> markup in option descriptions
+          const when = c.date ? c.date.replace('T', ' ').replace(/Z$/, ' UTC') : null;
+          const ago = c.date ? timeAgo(c.date) : null;
           return {
             label: label.length > 100 ? label.slice(0, 99) + '…' : label,
             value: c.sha,
-            // plain text only — Discord doesn't render <t:…> markup in option descriptions
-            description: c.date ? c.date.replace('T', ' ').replace(/Z$/, ' UTC') : undefined,
+            description: when ? (ago ? `${when} — ${ago}` : when) : undefined,
           };
         }));
       await interaction.editReply({
