@@ -161,6 +161,30 @@ async function postRouteMetadata(channel: ThreadChannel, dongleId: string, route
   await channel.send({ embeds: [embed] }).catch(err => log.warn({ err }, 'Failed to post route metadata'));
 }
 
+function migrateFieldsToDescription(embed: { fields?: Array<{ name: string; value: string; inline?: boolean }> }, builder: EmbedBuilder): string {
+  if (builder.data.description) return builder.data.description;
+
+  const parts: string[] = [];
+  const keptFields: Array<{ name: string; value: string; inline?: boolean }> = [];
+
+  for (const field of embed.fields ?? []) {
+    if (field.name === 'Route') {
+      parts.push(`**Route**\n${field.value}`);
+    } else if (field.name === 'Additional Routes') {
+      parts.push(`**Additional Routes**\n${field.value}`);
+    } else {
+      keptFields.push(field);
+    }
+  }
+
+  if (parts.length === 0) return '';
+
+  const desc = parts.join('\n');
+  builder.setDescription(desc);
+  builder.setFields(...keptFields);
+  return desc;
+}
+
 async function refreshRouteLine(line: string): Promise<string> {
   const shortMatch = line.match(/`([^`]+)`/);
   if (!shortMatch) return line;
@@ -207,8 +231,9 @@ export async function handleRefreshRoutes(interaction: import('discord.js').Butt
   }
 
   const updated = EmbedBuilder.from(embed);
-  if (updated.data.description) {
-    const lines = updated.data.description.split('\n');
+  const desc = migrateFieldsToDescription(embed, updated);
+  if (desc) {
+    const lines = desc.split('\n');
     updated.setDescription((await Promise.all(lines.map(refreshRouteLine))).join('\n'));
   }
 
@@ -248,8 +273,9 @@ export async function createRouteTrackerThread(
         const embed = starter.embeds[0];
         if (embed) {
           const updated = EmbedBuilder.from(embed);
-          if (!embed.description?.includes(primaryLink)) {
-            updated.setDescription((embed.description ? embed.description + '\n' : '') + '**Additional Routes**\n' + primaryLink);
+          const desc = migrateFieldsToDescription(embed, updated);
+          if (!desc.includes(primaryLink)) {
+            updated.setDescription((desc ? desc + '\n' : '') + '**Additional Routes**\n' + primaryLink);
             await starter.edit({ embeds: [updated] });
           }
         }
@@ -306,7 +332,7 @@ export async function addAdditionalRoutesToTracker(
     const embed = starter.embeds[0];
     if (!embed) return;
     const updated = EmbedBuilder.from(embed);
-    const existingDesc = embed.description ?? '';
+    const existingDesc = migrateFieldsToDescription(embed, updated);
     const newRoutes = additionalRoutes.filter(r => {
       const short = routeShortForm(r);
       return !existingDesc.includes(short);
