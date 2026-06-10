@@ -14,6 +14,7 @@ export interface BotConfig {
   staffRole: string;
   wikiRepo: string;
   wikiCacheDir: string;
+  mainRepo: string;
 }
 
 export function loadConfig(): BotConfig {
@@ -50,6 +51,8 @@ export function loadConfig(): BotConfig {
   const wikiRepo = process.env.WIKI_REPO || 'StarPilot-Docs/docs';
   const wikiCacheDir = process.env.WIKI_CACHE_DIR || 'data/wiki';
 
+  const mainRepo = process.env.MAIN_REPO || 'firestar5683/openpilot';
+
   return {
     token,
     guildId,
@@ -63,5 +66,6 @@ export function loadConfig(): BotConfig {
     staffRole,
     wikiRepo,
     wikiCacheDir,
+    mainRepo,
   };
 }

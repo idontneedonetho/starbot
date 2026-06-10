@@ -321,7 +321,7 @@ async function processBugReport(
     additionalRoutes: numberedAdditional,
     label: 'Bug Report',
     emoji: '\uD83D\uDC1B',
-    tagNames: ['OPEN', 'BUG'],
+    tagNames: ['OPEN', 'BUG', 'WAITING FOR DEV'],
     primaryNonPublicRoute: primaryNonPublic,
     footerNote: ' with ticket ID / wiki / route link',
   });
@@ -457,6 +457,6 @@ async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, type: '
     additionalRoutes: numberedRoutes,
     label,
     emoji,
-    tagNames: type === 'feedback' ? ['OPEN', 'FEEDBACK'] : ['OPEN', 'FEATURE REQUEST'],
+    tagNames: type === 'feedback' ? ['OPEN', 'FEEDBACK', 'WAITING FOR DEV'] : ['OPEN', 'FEATURE REQUEST', 'WAITING FOR DEV'],
   });
 }

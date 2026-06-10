@@ -4,6 +4,7 @@ import {
   type ButtonInteraction,
   type ModalSubmitInteraction,
   type ThreadChannel,
+  type ForumChannel,
   GuildMember,
   ModalBuilder,
   TextInputBuilder,
@@ -19,10 +20,12 @@ import {
 } from 'discord.js';
 import { loadConfig } from '../../config.js';
 import { createLogger } from '../../logger.js';
-import { COLORS } from '../../util.js';
-import { normalizeRouteInput, parseNormalizedRoute, validateRoute, stripRouteIds } from '../../comma.js';
+import { createStore } from '../../store.js';
+import { COLORS, formatGitCommit, discordTimestamp } from '../../util.js';
+import { normalizeRouteInput, parseNormalizedRoute, validateRoute, stripRouteIds, fetchRouteMetadata } from '../../comma.js';
+import { fetchCommitChoices, compareCommits } from '../../github.js';
 import { getForum, addAdditionalRoutesToTracker, createRouteTrackerThread, TRACKER_FIELD_PREFIX } from './route-tracker.js';
-import { resolveTagIds, buildActionRow } from './report-service.js';
+import { resolveTagIds, buildActionRow, swapForumTags } from './report-service.js';
 
 const log = createLogger('report-actions');
 
@@ -34,12 +37,7 @@ async function closeThread(thread: ThreadChannel, guild: import('discord.js').Gu
   const config = loadConfig();
   const forum = await getForum(guild, config.forumChannelId);
   if (!forum) return;
-  const closedTagIds = resolveTagIds(forum, ['CLOSED']);
-  const keep = (thread.appliedTags as string[]).filter(id => {
-    const tag = forum.availableTags.find(t => t.id === id);
-    return tag && tag.name !== 'OPEN';
-  });
-  await thread.setAppliedTags([...keep, ...closedTagIds]).catch(() => {});
+  await swapForumTags(thread, forum, { remove: ['OPEN', 'WAITING FOR DEV', 'WAITING FOR USER'], add: ['CLOSED'] });
   await thread.setLocked(true).catch(() => {});
   await thread.setArchived(true).catch(() => {});
 }
@@ -60,33 +58,365 @@ async function updateThreadButtons(thread: ThreadChannel): Promise<string | null
   return ticketId;
 }
 
+// Pending "newer commit" requests between the staff modal submit and the commit pick.
+const waitCommitStore = createStore<{
+  message: string; audience: string; submitterId: string; ticketId: string; threadId: string;
+}>('wait-commit-pending', { ttl: 15 * 60 * 1000 });
+
+// Required commit per Ready message; lives as long as the report stays WAITING FOR USER.
+const readyReqStore = createStore<{ requiredSha: string; requiredShort: string; branch: string; requiredDate?: string }>(
+  'wait-ready-req', { ttl: 30 * 24 * 60 * 60 * 1000 });
+
+function buildAdditionalReportModal(customId: string): ModalBuilder {
+  const modal = new ModalBuilder()
+    .setCustomId(customId)
+    .setTitle('Additional Report');
+
+  const routeInput = new TextInputBuilder({
+    custom_id: 'route_id',
+    style: TextInputStyle.Short,
+    placeholder: 'dongle_id/route_name or connect.comma.ai URL',
+    required: true,
+    max_length: 256,
+  });
+  modal.addLabelComponents(new LabelBuilder().setLabel('Route ID').setTextInputComponent(routeInput));
+
+  const detailsInput = new TextInputBuilder({
+    custom_id: 'details',
+    style: TextInputStyle.Paragraph,
+    placeholder: 'What additional info should we know?',
+    required: false,
+    max_length: 1024,
+  });
+  modal.addLabelComponents(new LabelBuilder().setLabel('Details (optional)').setTextInputComponent(detailsInput));
+
+  return modal;
+}
+
+interface WaitUserParams {
+  mode: string;
+  audience: string;
+  message: string;
+  submitterId: string;
+  ticketId: string;
+  requiredSha?: string;
+  requiredShort?: string;
+  branch?: string;
+  requiredDate?: string;
+}
+
+async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, params: WaitUserParams): Promise<void> {
+  await swapForumTags(thread, forum, { remove: ['WAITING FOR DEV'], add: ['WAITING FOR USER'] });
+
+  const action = params.mode === 'anytime'
+    ? "Click **Ready** below when you've tested and have feedback to share (no @pings please)."
+    : "A **new route** is needed to reopen this report. Click **Ready** below to submit one once you've tested (no @pings please).";
+
+  let required = '';
+  if (params.mode === 'newer' && params.requiredSha) {
+    const committed = params.requiredDate ? discordTimestamp(params.requiredDate) : null;
+    required = `\n\nThe route must be on commit ${formatGitCommit(params.requiredSha, `github.com/${loadConfig().mainRepo}`)} (${params.branch}${committed ? `, committed ${committed}` : ''}) or newer.`;
+  }
+
+  const embed = new EmbedBuilder()
+    .setColor(COLORS.amber)
+    .setTitle('🧪 Waiting for User')
+    .setDescription(`${params.message ? params.message + '\n\n' : ''}${action}${required}`)
+    .setTimestamp();
+
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`ready_${params.mode}_${params.audience}_${params.ticketId}_${params.submitterId}`)
+      .setLabel('Ready')
+      .setStyle(ButtonStyle.Success)
+      .setEmoji('✅'),
+  );
+
+  const sent = await thread.send({ embeds: [embed], components: [row] });
+  if (params.mode === 'newer' && params.requiredSha) {
+    await readyReqStore.set(sent.id, {
+      requiredSha: params.requiredSha,
+      requiredShort: params.requiredShort ?? params.requiredSha.slice(0, 7),
+      branch: params.branch ?? '',
+      requiredDate: params.requiredDate,
+    });
+  }
+}
+
+// Flip the "Waiting for User" message to a green completed state: disable the
+// Ready button and note what satisfied the request (feedback / submitted route).
+async function completeReadyMessage(thread: ThreadChannel, msgId: string, note: string): Promise<void> {
+  const msg = await thread.messages.fetch(msgId).catch(() => null);
+  if (!msg) return;
+  const embeds = msg.embeds[0]
+    ? [EmbedBuilder.from(msg.embeds[0])
+        .setColor(COLORS.green)
+        .setTitle('✅ User Responded')
+        .addFields({ name: '\u200B', value: note })]
+    : [];
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId('ready_done')
+      .setLabel('Ready')
+      .setStyle(ButtonStyle.Success)
+      .setEmoji('✅')
+      .setDisabled(true),
+  );
+  await msg.edit({ embeds, components: [row] }).catch(err => log.warn({ err }, 'Failed to complete Ready message'));
+}
+
+function buildWaitUserModal(ticketId: string): ModalBuilder {
+  const modal = new ModalBuilder()
+    .setCustomId(`waituser_modal_${ticketId}`)
+    .setTitle('Request User Testing');
+
+  const messageInput = new TextInputBuilder({
+    custom_id: 'message',
+    style: TextInputStyle.Paragraph,
+    placeholder: 'What should they test / which logs do you need?',
+    required: false,
+    max_length: 1024,
+  });
+  modal.addLabelComponents(new LabelBuilder().setLabel('Message to the user (optional)').setTextInputComponent(messageInput));
+
+  const modeSelect = new StringSelectMenuBuilder()
+    .setCustomId('reopen_mode')
+    .setMinValues(1)
+    .addOptions(
+      { label: 'Anytime', value: 'anytime', description: 'The user can respond right away', default: true },
+      { label: 'With a new route', value: 'route', description: 'Responding requires submitting a new route' },
+      { label: 'From a newer commit', value: 'newer', description: 'New route must be on a chosen commit or newer' },
+    );
+  modal.addLabelComponents(new LabelBuilder().setLabel('When may the user reopen?').setStringSelectMenuComponent(modeSelect));
+
+  const audienceSelect = new StringSelectMenuBuilder()
+    .setCustomId('respond_audience')
+    .setMinValues(1)
+    .addOptions(
+      { label: 'Any Thread Participant', value: 'any', description: 'Anyone in the thread can respond', default: true },
+      { label: 'Submitter', value: 'sub', description: 'Only the original submitter can respond' },
+    );
+  modal.addLabelComponents(new LabelBuilder().setLabel('Who may respond?').setStringSelectMenuComponent(audienceSelect));
+
+  return modal;
+}
+
 @Discord()
 export class BotReportActions {
   @ButtonComponent({ id: /^additional_report_/ })
   async additionalReport(interaction: ButtonInteraction) {
-    const modal = new ModalBuilder()
-      .setCustomId(`additional_report_modal_${interaction.id}`)
-      .setTitle('Additional Report');
+    await interaction.showModal(buildAdditionalReportModal(`additional_report_modal_${interaction.id}`));
+  }
 
-    const routeInput = new TextInputBuilder({
-      custom_id: 'route_id',
-      style: TextInputStyle.Short,
-      placeholder: 'dongle_id/route_name or connect.comma.ai URL',
-      required: true,
-      max_length: 256,
+  @ModalComponent({ id: /^waituser_modal_/ })
+  async handleWaitUserSubmit(interaction: ModalSubmitInteraction) {
+    if (!(interaction.member instanceof GuildMember) || !hasStaffRole(interaction.member)) {
+      await interaction.reply({ content: 'Only staff can request user testing.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const thread = interaction.channel;
+    if (!thread?.isThread()) {
+      await interaction.reply({ content: 'This can only be used from a thread.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const guild = interaction.guild;
+    if (!guild) {
+      await interaction.reply({ content: 'Could not resolve guild.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    // Launched from the ephemeral Staff Actions select — acknowledge against that
+    // message so the dropdown gets replaced instead of left dangling
+    if (interaction.isFromMessage()) {
+      await interaction.deferUpdate();
+    } else {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    }
+
+    const ticketId = interaction.customId.replace('waituser_modal_', '');
+    const message = interaction.fields.getTextInputValue('message');
+    const modeValues = interaction.fields.getStringSelectValues('reopen_mode');
+    const mode = modeValues.length > 0 ? modeValues[0] : 'anytime';
+    const audienceValues = interaction.fields.getStringSelectValues('respond_audience');
+    const audience = audienceValues.length > 0 ? audienceValues[0] : 'any';
+
+    const starter = await thread.fetchStarterMessage().catch(() => null);
+    const byField = starter?.embeds[0]?.fields?.find(f => f.name === 'By');
+    const submitterId = byField?.value.match(/<@(\d+)>/)?.[1] ?? '';
+
+    const forum = await getForum(guild, loadConfig().forumChannelId);
+    if (!forum) {
+      await interaction.editReply({ content: 'Forum channel not found. Contact an admin.', components: [] });
+      return;
+    }
+
+    if (mode === 'newer') {
+      const choices = await fetchCommitChoices();
+      if (choices.length === 0) {
+        await interaction.editReply({ content: "Couldn't reach GitHub to list commits. Try again in a moment.", components: [] });
+        return;
+      }
+      await waitCommitStore.set(interaction.id, { message, audience, submitterId, ticketId, threadId: thread.id });
+      const select = new StringSelectMenuBuilder()
+        .setCustomId(`wcommit_${interaction.id}`)
+        .setPlaceholder('Select the minimum required commit…')
+        .addOptions(choices.map(c => {
+          const label = `${c.branch} ${c.short} — ${c.subject}`;
+          return {
+            label: label.length > 100 ? label.slice(0, 99) + '…' : label,
+            value: c.sha,
+            // plain text only — Discord doesn't render <t:…> markup in option descriptions
+            description: c.date ? c.date.replace('T', ' ').replace(/Z$/, ' UTC') : undefined,
+          };
+        }));
+      await interaction.editReply({
+        content: 'Pick the commit the new route must be on (or newer):',
+        components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select)],
+      });
+      return;
+    }
+
+    await finalizeWaitUser(thread, forum, { mode, audience, message, submitterId, ticketId });
+    await interaction.editReply({ content: 'Report marked **WAITING FOR USER**.', components: [] });
+  }
+
+  @SelectMenuComponent({ id: /^wcommit_/ })
+  async handleWaitCommitSelect(interaction: StringSelectMenuInteraction) {
+    const token = interaction.customId.split('_')[1];
+    const pending = await waitCommitStore.get(token);
+    if (!pending) {
+      await interaction.reply({ content: 'This request has expired. Use **Request User Testing** again.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (!(interaction.member instanceof GuildMember) || !hasStaffRole(interaction.member)) {
+      await interaction.reply({ content: 'Only staff can request user testing.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const guild = interaction.guild;
+    if (!guild) {
+      await interaction.reply({ content: 'Could not resolve guild.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    let thread: ThreadChannel | null = interaction.channel?.isThread() ? interaction.channel : null;
+    if (!thread) {
+      const fetched = await guild.channels.fetch(pending.threadId).catch(() => null);
+      thread = fetched?.isThread() ? fetched : null;
+    }
+    if (!thread) {
+      await interaction.reply({ content: 'Could not resolve the report thread.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const forum = await getForum(guild, loadConfig().forumChannelId);
+    if (!forum) {
+      await interaction.reply({ content: 'Forum channel not found. Contact an admin.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const requiredSha = interaction.values[0];
+    const choices = await fetchCommitChoices();
+    const choice = choices.find(c => c.sha === requiredSha);
+    const requiredShort = choice?.short ?? requiredSha.slice(0, 7);
+    const branch = choice?.branch ?? 'unknown';
+    const requiredDate = choice?.date;
+
+    await finalizeWaitUser(thread, forum, {
+      mode: 'newer',
+      audience: pending.audience,
+      message: pending.message,
+      submitterId: pending.submitterId,
+      ticketId: pending.ticketId,
+      requiredSha,
+      requiredShort,
+      branch,
+      requiredDate,
     });
-    modal.addLabelComponents(new LabelBuilder().setLabel('Route ID').setTextInputComponent(routeInput));
+    await waitCommitStore.delete(token);
 
-    const detailsInput = new TextInputBuilder({
-      custom_id: 'details',
-      style: TextInputStyle.Paragraph,
-      placeholder: 'What additional info should we know?',
-      required: false,
-      max_length: 1024,
+    const committed = requiredDate ? discordTimestamp(requiredDate) : null;
+    await interaction.update({
+      content: `Report marked **WAITING FOR USER** — required commit \`${requiredShort}\` (${branch}${committed ? `, committed ${committed}` : ''}) or newer.`,
+      components: [],
     });
-    modal.addLabelComponents(new LabelBuilder().setLabel('Details (optional)').setTextInputComponent(detailsInput));
+  }
 
-    await interaction.showModal(modal);
+  @ButtonComponent({ id: /^ready_/ })
+  async handleReadyButton(interaction: ButtonInteraction) {
+    const [, mode, audience, ticketId, submitterId] = interaction.customId.split('_');
+
+    const isStaff = interaction.member instanceof GuildMember && hasStaffRole(interaction.member);
+    const allowed = isStaff || (audience === 'sub' ? interaction.user.id === submitterId : true);
+    if (!allowed) {
+      await interaction.reply({ content: 'Only the original submitter (or staff) can respond to this request.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (mode === 'anytime') {
+      const modal = new ModalBuilder()
+        .setCustomId(`readyfb_modal_${ticketId}_${interaction.message.id}`)
+        .setTitle('Ready — Feedback');
+      const feedbackInput = new TextInputBuilder({
+        custom_id: 'feedback',
+        style: TextInputStyle.Paragraph,
+        placeholder: 'How did testing go? Anything to add?',
+        required: false,
+        max_length: 1024,
+      });
+      modal.addLabelComponents(new LabelBuilder().setLabel('Feedback (optional)').setTextInputComponent(feedbackInput));
+      await interaction.showModal(modal);
+      return;
+    }
+
+    await interaction.showModal(buildAdditionalReportModal(`additional_report_modal_ready_${ticketId}_${interaction.message.id}`));
+  }
+
+  @ModalComponent({ id: /^readyfb_modal_/ })
+  async handleReadyFeedbackSubmit(interaction: ModalSubmitInteraction) {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    const msgId = interaction.customId.split('_')[3];
+
+    const thread = interaction.channel;
+    if (!thread?.isThread()) {
+      await interaction.editReply({ content: 'This can only be used from a thread.' });
+      return;
+    }
+
+    const guild = interaction.guild;
+    if (!guild) {
+      await interaction.editReply({ content: 'Could not resolve guild.' });
+      return;
+    }
+
+    const feedback = interaction.fields.getTextInputValue('feedback');
+    let feedbackMsg: import('discord.js').Message | null = null;
+    if (feedback) {
+      feedbackMsg = await thread.send({
+        content: `<@${interaction.user.id}>`,
+        embeds: [
+          new EmbedBuilder()
+            .setColor(COLORS.blurple)
+            .setTitle('💬 Feedback')
+            .setDescription(stripRouteIds(feedback) || 'No additional info')
+            .setTimestamp(),
+        ],
+      }).catch(err => { log.warn({ err }, 'Failed to post ready feedback'); return null; });
+    }
+
+    const forum = await getForum(guild, loadConfig().forumChannelId);
+    if (forum) {
+      await swapForumTags(thread, forum, { remove: ['WAITING FOR USER'], add: ['WAITING FOR DEV'] });
+    }
+    await completeReadyMessage(thread, msgId, feedbackMsg
+      ? `Feedback submitted by <@${interaction.user.id}> — [view it](${feedbackMsg.url})`
+      : `Marked ready by <@${interaction.user.id}>`);
+
+    await interaction.editReply({ content: 'Thanks! The report is back to **WAITING FOR DEV**.' });
   }
 
   @ButtonComponent({ id: /^staff_actions_/ })
@@ -102,6 +432,7 @@ export class BotReportActions {
       .setPlaceholder('Choose an action...')
       .addOptions(
         { label: 'Assign', value: 'assign', emoji: '👤', description: 'Assign yourself to this report' },
+        { label: 'Request User Testing', value: 'waituser', emoji: '🧪', description: 'Ask the user to test and report back' },
         { label: 'Merge', value: 'merge', emoji: '🔀', description: 'Merge this report into another thread' },
         { label: 'Close', value: 'close', emoji: '🔐', description: 'Close this report' },
       );
@@ -117,7 +448,7 @@ export class BotReportActions {
     }
 
     const [action] = interaction.values;
-    if (!['assign', 'close', 'merge'].includes(action)) {
+    if (!['assign', 'close', 'merge', 'waituser'].includes(action)) {
       await interaction.reply({ content: 'Invalid action.', flags: MessageFlags.Ephemeral });
       return;
     }
@@ -131,6 +462,12 @@ export class BotReportActions {
     const guild = interaction.guild;
     if (!guild) {
       await interaction.reply({ content: 'Could not resolve guild.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (action === 'waituser') {
+      const ticketId = interaction.customId.replace('staff_select_', '');
+      await interaction.showModal(buildWaitUserModal(ticketId));
       return;
     }
 
@@ -305,6 +642,10 @@ export class BotReportActions {
   async additionalReportModal(interaction: ModalSubmitInteraction) {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
+    // additional_report_modal_ready_<ticketId>_<msgId> reopens a WAITING FOR USER report
+    const ready = interaction.customId.startsWith('additional_report_modal_ready_');
+    const readyMsgId = ready ? interaction.customId.split('_')[5] : null;
+
     const routeId = interaction.fields.getTextInputValue('route_id');
     const details = interaction.fields.getTextInputValue('details');
 
@@ -345,6 +686,30 @@ export class BotReportActions {
 
     parsed.public = isPublic;
     parsed.rlogsAvailable = rlogsAvailable;
+
+    // Newer-commit reopen gate: reject before anything is posted or tracked
+    if (ready && readyMsgId) {
+      const req = await readyReqStore.get(readyMsgId);
+      if (req) {
+        const meta = await fetchRouteMetadata(dongleId, routeName);
+        if (!meta) {
+          await interaction.editReply({ content: "Couldn't read this route's commit (make sure logs are uploaded). Nothing was submitted — the report is still **WAITING FOR USER**; try again once logs are up." });
+          return;
+        }
+        const routeShort = meta.git_commit.slice(0, 7);
+        const routeWhen = discordTimestamp(meta.git_commit_date);
+        const cmp = await compareCommits(req.requiredSha, meta.git_commit);
+        if (cmp === 'older') {
+          const reqWhen = req.requiredDate ? discordTimestamp(req.requiredDate) : null;
+          await interaction.editReply({ content: `Route **rejected** — it's on an older build than required: route commit \`${routeShort}\`${routeWhen ? ` (committed ${routeWhen})` : ''} vs required \`${req.requiredShort}\`${reqWhen ? ` (committed ${reqWhen})` : ''}. Nothing was submitted — the report is still **WAITING FOR USER**; submit a route from a newer commit.` });
+          return;
+        }
+        if (cmp === 'unknown') {
+          await interaction.editReply({ content: `Couldn't verify this route's commit (\`${routeShort}\`${routeWhen ? `, committed ${routeWhen}` : ''}) against \`${loadConfig().mainRepo}\` — it may be a local/forked build. Nothing was submitted — the report is still **WAITING FOR USER**.` });
+          return;
+        }
+      }
+    }
 
     const thread = interaction.channel;
     if (!thread?.isThread()) {
@@ -432,7 +797,18 @@ export class BotReportActions {
       msg.url, `Additional Report #${additionalReportId}`,
     );
 
-    await interaction.editReply({ content: `Route added to the tracker thread.${!isPublic ? ' The route is not yet public \u2014 make it public and use the Confirm button on the original report.' : ''}` });
+    let lifecycleNote = '';
+    if (ready && readyMsgId) {
+      const forum = await getForum(guild, loadConfig().forumChannelId);
+      if (forum) {
+        await swapForumTags(thread, forum, { remove: ['WAITING FOR USER'], add: ['WAITING FOR DEV'] });
+      }
+      await completeReadyMessage(thread, readyMsgId, `A new route was submitted by <@${interaction.user.id}> — [Additional Report #${additionalReportId}](${msg.url})`);
+      await readyReqStore.delete(readyMsgId);
+      lifecycleNote = ' The report is now marked **WAITING FOR DEV**.';
+    }
+
+    await interaction.editReply({ content: `Route added to the tracker thread.${!isPublic ? ' The route is not yet public \u2014 make it public and use the Confirm button on the original report.' : ''}${lifecycleNote}` });
   }
 
   @ModalComponent({ id: /^merge_modal_/ })

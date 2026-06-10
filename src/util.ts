@@ -11,6 +11,14 @@ export function dot(a: number[], b: number[]): number {
   return result;
 }
 
+// Discord renders <t:unix:style> markup in message content (not in plain-text
+// surfaces like select option descriptions). Returns null for unparsable dates.
+export function discordTimestamp(iso: string, style: 't' | 'T' | 'd' | 'D' | 'f' | 'F' | 'R' = 'f'): string | null {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return null;
+  return `<t:${Math.floor(ms / 1000)}:${style}>`;
+}
+
 export function githubRemoteParts(remote: string): { owner: string; repo: string } | null {
   const match = remote.match(/^github\.com\/([^/]+)\/([^/]+)/);
   if (!match) return null;

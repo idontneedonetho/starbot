@@ -1,4 +1,4 @@
-import type { ForumChannel, ModalSubmitInteraction, ButtonInteraction } from 'discord.js';
+import type { ForumChannel, ModalSubmitInteraction, ButtonInteraction, ThreadChannel } from 'discord.js';
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -35,6 +35,20 @@ export function buildActionRow(ticketId: string): ActionRowBuilder<ButtonBuilder
       .setStyle(ButtonStyle.Primary)
       .setEmoji('🛠️'),
   );
+}
+
+export async function swapForumTags(
+  thread: ThreadChannel,
+  forum: ForumChannel,
+  opts: { add?: string[]; remove?: string[] },
+): Promise<void> {
+  const removeNames = new Set(opts.remove ?? []);
+  const keep = (thread.appliedTags as string[]).filter(id => {
+    const tag = forum.availableTags.find(t => t.id === id);
+    return !tag || !removeNames.has(tag.name);
+  });
+  const addIds = opts.add ? resolveTagIds(forum, opts.add) : [];
+  await thread.setAppliedTags([...new Set([...keep, ...addIds])]).catch(() => {});
 }
 
 function isContentWord(w: string): boolean {
