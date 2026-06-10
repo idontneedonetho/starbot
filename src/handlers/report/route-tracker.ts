@@ -207,10 +207,9 @@ export async function handleRefreshRoutes(interaction: import('discord.js').Butt
   }
 
   const updated = EmbedBuilder.from(embed);
-  for (const field of updated.data.fields ?? []) {
-    if (field.name !== 'Route' && field.name !== 'Additional Routes') continue;
-    const lines = field.value.split('\n');
-    field.value = (await Promise.all(lines.map(refreshRouteLine))).join('\n');
+  if (updated.data.description) {
+    const lines = updated.data.description.split('\n');
+    updated.setDescription((await Promise.all(lines.map(refreshRouteLine))).join('\n'));
   }
 
   await interaction.message.edit({ embeds: [updated] }).catch(err =>
@@ -249,13 +248,8 @@ export async function createRouteTrackerThread(
         const embed = starter.embeds[0];
         if (embed) {
           const updated = EmbedBuilder.from(embed);
-          if (!embed.fields?.some((f: { value?: string }) => f.value?.includes(primaryLink))) {
-            const existingField = updated.data.fields?.find(f => f.name === 'Additional Routes');
-            if (existingField) {
-              existingField.value += `\n${primaryLink}`;
-            } else {
-              updated.addFields({ name: 'Additional Routes', value: primaryLink });
-            }
+          if (!embed.description?.includes(primaryLink)) {
+            updated.setDescription((embed.description ? embed.description + '\n' : '') + '**Additional Routes**\n' + primaryLink);
             await starter.edit({ embeds: [updated] });
           }
         }
@@ -273,7 +267,7 @@ export async function createRouteTrackerThread(
     .setFooter({ text: STATUS_LEGEND })
     .setTimestamp();
   if (primaryLink) {
-    routeEmbed.addFields({ name: 'Route', value: primaryLink });
+    routeEmbed.setDescription(`**Route**\n${primaryLink}`);
   }
 
   const routesThread = await routesForum.threads.create({
@@ -312,11 +306,10 @@ export async function addAdditionalRoutesToTracker(
     const embed = starter.embeds[0];
     if (!embed) return;
     const updated = EmbedBuilder.from(embed);
-    const additionalField = embed.fields?.find(f => f.name === 'Additional Routes');
-    const existingValue = additionalField?.value ?? '';
+    const existingDesc = embed.description ?? '';
     const newRoutes = additionalRoutes.filter(r => {
       const short = routeShortForm(r);
-      return !existingValue.includes(short);
+      return !existingDesc.includes(short);
     });
     const newLinks = newRoutes.map(r => {
       const base = routeLinkMarkdown(r);
@@ -324,19 +317,8 @@ export async function addAdditionalRoutesToTracker(
     });
     if (newLinks.length === 0) return;
     const links = newLinks.join('\n');
-    if (additionalField) {
-      additionalField.value += `\n${links}`;
-    } else {
-      const origPostIdx = updated.data.fields?.findIndex(
-        f => f.value?.startsWith(ORIGINAL_POST_PREFIX),
-      ) ?? -1;
-      if (origPostIdx >= 0) {
-        updated.spliceFields(origPostIdx, 0, { name: 'Additional Routes', value: links });
-      } else {
-        updated.addFields({ name: 'Additional Routes', value: links });
-      }
-      await starter.edit({ embeds: [updated] });
-    }
+    updated.setDescription(existingDesc + '\n**Additional Routes**\n' + links);
+    await starter.edit({ embeds: [updated] });
     const postedMeta = new Set<string>();
     for (const r of newRoutes) {
       if (r.public) {
