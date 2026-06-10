@@ -774,7 +774,7 @@ export class BotReportActions {
       embeds: [
         new EmbedBuilder()
           .setColor(COLORS.blurple)
-          .setDescription(details ? stripRouteIds(details) : 'No additional info')
+          .setDescription((details && stripRouteIds(details)) || 'No additional info')
           .addFields({ name: '\u200B', value: `${TRACKER_FIELD_PREFIX}(${trackerUrl})` })
           .setTimestamp(),
       ],
