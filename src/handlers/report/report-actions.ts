@@ -22,9 +22,9 @@ import { loadConfig } from '../../config.js';
 import { createLogger } from '../../logger.js';
 import { createStore } from '../../store.js';
 import { COLORS, formatGitCommit, discordTimestamp } from '../../util.js';
-import { normalizeRouteInput, parseNormalizedRoute, validateRoute, stripRouteIds, fetchRouteMetadata } from '../../comma.js';
+import { normalizeRouteInput, parseNormalizedRoute, validateRoute, stripRouteIds, extractRouteIds, replaceRouteIds, fetchRouteMetadata } from '../../comma.js';
 import { fetchCommitChoices, compareCommits } from '../../github.js';
-import { getForum, addAdditionalRoutesToTracker, createRouteTrackerThread, TRACKER_FIELD_PREFIX } from './route-tracker.js';
+import { getForum, addAdditionalRoutesToTracker, createRouteTrackerThread, routeNumberLabel, TRACKER_FIELD_PREFIX } from './route-tracker.js';
 import { resolveTagIds, buildActionRow, swapForumTags } from './report-service.js';
 
 const log = createLogger('report-actions');
@@ -163,6 +163,26 @@ async function completeReadyMessage(thread: ThreadChannel, msgId: string, note: 
       .setDisabled(true),
   );
   await msg.edit({ embeds, components: [row] }).catch(err => log.warn({ err }, 'Failed to complete Ready message'));
+}
+
+// Find the report's route tracker thread via the OP embed field, creating it
+// (and recording the link on the OP) when missing.
+async function ensureTrackerThread(thread: ThreadChannel, guild: import('discord.js').Guild): Promise<{ url: string; threadId: string } | null> {
+  const starter = await thread.fetchStarterMessage().catch(() => null);
+  const embed = starter?.embeds[0];
+  const trackerUrl = embed?.fields
+    ?.find(f => f.value?.startsWith(TRACKER_FIELD_PREFIX))
+    ?.value?.match(/\]\((.+?)\)/)?.[1];
+  const trackerThreadId = trackerUrl?.split('/').pop();
+  if (trackerUrl && trackerThreadId) return { url: trackerUrl, threadId: trackerThreadId };
+
+  const tracker = await createRouteTrackerThread(guild, loadConfig(), undefined, thread.url, thread.name);
+  if (tracker && starter && embed) {
+    const updated = EmbedBuilder.from(embed);
+    updated.addFields({ name: '\u200B', value: `${TRACKER_FIELD_PREFIX}(${tracker.url})` });
+    await starter.edit({ embeds: [updated] }).catch(err => log.warn({ err }, 'Failed to add tracker field to starter'));
+  }
+  return tracker;
 }
 
 function buildWaitUserModal(ticketId: string): ModalBuilder {
@@ -396,16 +416,32 @@ export class BotReportActions {
     const feedback = interaction.fields.getTextInputValue('feedback');
     let feedbackMsg: import('discord.js').Message | null = null;
     if (feedback) {
+      const routes = extractRouteIds(feedback);
+      const validations = await Promise.all(routes.map(r => validateRoute(r.dongleId, r.routeName)));
+      const numbered = routes.map((r, i) => ({ ...r, ...validations[i], routeNumber: i + 1 }));
+      const cleanFeedback = replaceRouteIds(feedback, numbered, routeNumberLabel);
+
       feedbackMsg = await thread.send({
         content: `<@${interaction.user.id}>`,
         embeds: [
           new EmbedBuilder()
             .setColor(COLORS.blurple)
             .setTitle('💬 Feedback')
-            .setDescription(stripRouteIds(feedback) || 'No additional info')
+            .setDescription(cleanFeedback || 'No additional info')
             .setTimestamp(),
         ],
       }).catch(err => { log.warn({ err }, 'Failed to post ready feedback'); return null; });
+
+      const validRoutes = numbered.filter(r => r.valid);
+      if (validRoutes.length > 0) {
+        const tracker = await ensureTrackerThread(thread, guild);
+        if (tracker) {
+          await addAdditionalRoutesToTracker(
+            guild, tracker.threadId, validRoutes,
+            feedbackMsg?.url, feedbackMsg ? 'User Feedback' : undefined,
+          );
+        }
+      }
     }
 
     const forum = await getForum(guild, loadConfig().forumChannelId);
@@ -723,48 +759,8 @@ export class BotReportActions {
       return;
     }
 
-    const starter = await thread.fetchStarterMessage();
-    if (!starter) {
-      await interaction.editReply({ content: 'Could not find the report starter message.' });
-      return;
-    }
-
-    const embed = starter.embeds[0];
-    if (!embed) {
-      await interaction.editReply({ content: 'Could not find the report embed.' });
-      return;
-    }
-
-    let trackerUrl: string | undefined;
-    let trackerThreadId: string | undefined;
-
-    const trackerField = embed.fields?.find(f =>
-      f.value?.startsWith(TRACKER_FIELD_PREFIX),
-    );
-    if (trackerField) {
-      trackerUrl = trackerField.value?.match(/\]\((.+?)\)/)?.[1];
-      if (trackerUrl) {
-        trackerThreadId = trackerUrl.split('/').pop() ?? undefined;
-      }
-    }
-
-    if (!trackerUrl || !trackerThreadId) {
-      const config = loadConfig();
-      const tracker = await createRouteTrackerThread(
-        guild, config,
-        undefined,
-        thread.url, thread.name,
-      );
-      if (tracker) {
-        trackerUrl = tracker.url;
-        trackerThreadId = tracker.threadId;
-        const updated = EmbedBuilder.from(embed);
-        updated.addFields({ name: '\u200B', value: `${TRACKER_FIELD_PREFIX}(${tracker.url})` });
-        await starter.edit({ embeds: [updated] }).catch(err => log.warn({ err }, 'Failed to add tracker field to starter'));
-      }
-    }
-
-    if (!trackerUrl || !trackerThreadId) {
+    const tracker = await ensureTrackerThread(thread, guild);
+    if (!tracker) {
       await interaction.editReply({ content: 'Failed to create a route tracker thread.' });
       return;
     }
@@ -775,7 +771,7 @@ export class BotReportActions {
         new EmbedBuilder()
           .setColor(COLORS.blurple)
           .setDescription((details && stripRouteIds(details)) || 'No additional info')
-          .addFields({ name: '\u200B', value: `${TRACKER_FIELD_PREFIX}(${trackerUrl})` })
+          .addFields({ name: '\u200B', value: `${TRACKER_FIELD_PREFIX}(${tracker.url})` })
           .setTimestamp(),
       ],
     });
@@ -793,7 +789,7 @@ export class BotReportActions {
     });
 
     await addAdditionalRoutesToTracker(
-      guild, trackerThreadId, [parsed],
+      guild, tracker.threadId, [parsed],
       msg.url, `Additional Report #${additionalReportId}`,
     );
 
