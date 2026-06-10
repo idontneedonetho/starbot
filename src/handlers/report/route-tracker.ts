@@ -312,7 +312,7 @@ export async function addAdditionalRoutesToTracker(
     const embed = starter.embeds[0];
     if (!embed) return;
     const updated = EmbedBuilder.from(embed);
-    const additionalField = embed.fields?.find(f => f.name === 'Additional Routes');
+    const additionalField = updated.data.fields?.find(f => f.name === 'Additional Routes');
     const existingValue = additionalField?.value ?? '';
     const newRoutes = additionalRoutes.filter(r => {
       const short = routeShortForm(r);
@@ -335,8 +335,8 @@ export async function addAdditionalRoutesToTracker(
       } else {
         updated.addFields({ name: 'Additional Routes', value: links });
       }
-      await starter.edit({ embeds: [updated] });
     }
+    await starter.edit({ embeds: [updated] });
     const postedMeta = new Set<string>();
     for (const r of newRoutes) {
       if (r.public) {
