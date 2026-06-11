@@ -35,7 +35,7 @@ const STATUS_EMOJI = {
   refresh: '\uD83D\uDD04',
 } as const;
 
-const STATUS_LEGEND =
+export const STATUS_LEGEND =
   `${STATUS_EMOJI.public} = public | ${STATUS_EMOJI.private} = private | ` +
   `${STATUS_EMOJI.logs} = logs | ${STATUS_EMOJI.noLogs} = no/partial logs`;
 
@@ -148,7 +148,7 @@ export function parseConfirmCustomId(customId: string): { ticketId: string; user
 const REFRESH_COOLDOWN_MS = 60_000;
 export const refreshCooldowns = new LRUCache<string, number>({ max: 500, ttl: REFRESH_COOLDOWN_MS });
 
-async function postRouteMetadata(channel: ThreadChannel, dongleId: string, routeName: string): Promise<void> {
+export async function postRouteMetadata(channel: ThreadChannel, dongleId: string, routeName: string): Promise<void> {
   const meta = await fetchRouteMetadata(dongleId, routeName);
   if (!meta) return;
   const embed = new EmbedBuilder()
