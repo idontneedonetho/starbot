@@ -476,6 +476,7 @@ export class ClipCommands {
           { label: UI_ALT_VARIANT_LABELS['device'], value: 'device', description: 'Standard device view' },
           { label: UI_ALT_VARIANT_LABELS['stacked_forward_over_wide'], value: 'stacked_forward_over_wide', description: 'Forward on top, wide below' },
           { label: UI_ALT_VARIANT_LABELS['stacked_wide_over_forward'], value: 'stacked_wide_over_forward', description: 'Wide on top, forward below' },
+          { label: UI_ALT_VARIANT_LABELS['stacked_device_over_driver'], value: 'stacked_device_over_driver', description: 'Device view on top, driver camera below' },
         );
       const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select);
       const embed = new EmbedBuilder()
