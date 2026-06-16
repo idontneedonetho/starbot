@@ -1,9 +1,10 @@
-import { Discord, ButtonComponent, ModalComponent, SelectMenuComponent, Slash, Guild } from 'discordx';
-import type { CommandInteraction, StringSelectMenuInteraction } from 'discord.js';
+import { Discord, ButtonComponent, ModalComponent, SelectMenuComponent, Slash, SlashGroup, Guild } from 'discordx';
+import type { CommandInteraction, StringSelectMenuInteraction, ActionRow, MessageActionRowComponent } from 'discord.js';
 import {
   type ButtonInteraction,
   type ModalSubmitInteraction,
   type ThreadChannel,
+  ComponentType,
   GuildMember,
   ModalBuilder,
   TextInputBuilder,
@@ -60,6 +61,19 @@ async function getOrCreateAssigneeTag(forum: import('discord.js').ForumChannel, 
 
 function hasStaffRole(member: GuildMember): boolean {
   return member.roles.cache.has(loadConfig().staffRole);
+}
+
+function buildStaffActionsReply(ticketId: string) {
+  const select = new StringSelectMenuBuilder()
+    .setCustomId(`staff_select_${ticketId}`)
+    .setPlaceholder('Choose an action...')
+    .addOptions(
+      { label: 'Assign', value: 'assign', emoji: '👤', description: 'Assign yourself to this report' },
+      { label: 'Merge', value: 'merge', emoji: '🔀', description: 'Merge this report into another thread' },
+      { label: 'Close', value: 'close', emoji: '🔐', description: 'Close this report' },
+    );
+  const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select);
+  return { content: 'Select a staff action:', components: [row], flags: MessageFlags.Ephemeral } as const;
 }
 
 async function closeThread(thread: ThreadChannel, guild: import('discord.js').Guild): Promise<void> {
@@ -129,16 +143,7 @@ export class BotReportActions {
     }
 
     const ticketId = interaction.customId.replace('staff_actions_', '');
-    const select = new StringSelectMenuBuilder()
-      .setCustomId(`staff_select_${ticketId}`)
-      .setPlaceholder('Choose an action...')
-      .addOptions(
-        { label: 'Assign', value: 'assign', emoji: '👤', description: 'Assign yourself to this report' },
-        { label: 'Merge', value: 'merge', emoji: '🔀', description: 'Merge this report into another thread' },
-        { label: 'Close', value: 'close', emoji: '🔐', description: 'Close this report' },
-      );
-    const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select);
-    await interaction.reply({ content: 'Select a staff action:', components: [row], flags: MessageFlags.Ephemeral });
+    await interaction.reply(buildStaffActionsReply(ticketId));
   }
 
   @SelectMenuComponent({ id: /^staff_select_/ })
@@ -553,9 +558,15 @@ const guildId = loadConfig().guildId;
 
 @Discord()
 @Guild(guildId)
+@SlashGroup({
+  description: 'Report thread management',
+  name: 'report-actions',
+  defaultMemberPermissions: PermissionFlagsBits.ManageThreads,
+})
+@SlashGroup('report-actions')
 export class ReportCommands {
-  @Slash({ description: 'Update the action buttons on this report thread to the latest format', name: 'update-report-thread', defaultMemberPermissions: PermissionFlagsBits.ManageThreads })
-  async updateReportThread(interaction: CommandInteraction) {
+  @Slash({ description: 'Update the action buttons on this report thread to the latest format', name: 'update-thread' })
+  async updateThread(interaction: CommandInteraction) {
     if (!(interaction.member instanceof GuildMember) || !hasStaffRole(interaction.member)) {
       await interaction.reply({ content: 'Only staff can update report threads.', flags: MessageFlags.Ephemeral });
       return;
@@ -574,5 +585,38 @@ export class ReportCommands {
     }
 
     await interaction.reply({ content: `Report thread buttons updated to the latest format. (Ticket **${ticketId}**)`, flags: MessageFlags.Ephemeral });
+  }
+
+  @Slash({ description: 'Open the staff actions menu for this report thread', name: 'staff-actions' })
+  async staffActionsCommand(interaction: CommandInteraction) {
+    if (!(interaction.member instanceof GuildMember) || !hasStaffRole(interaction.member)) {
+      await interaction.reply({ content: 'Only staff can use staff actions.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const thread = interaction.channel;
+    if (!thread?.isThread()) {
+      await interaction.reply({ content: 'This command can only be used inside a report thread.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const starter = await thread.fetchStarterMessage();
+    if (!starter) {
+      await interaction.reply({ content: 'Could not find the report starter message.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const staffButton = starter.components
+      .filter(row => row.type === ComponentType.ActionRow)
+      .flatMap(row => (row as ActionRow<MessageActionRowComponent>).components)
+      .find(c => c.type === ComponentType.Button && c.customId?.startsWith('staff_actions_'));
+
+    if (!staffButton || staffButton.type !== ComponentType.Button) {
+      await interaction.reply({ content: 'No Staff Actions button found in this thread\'s starter message.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const ticketId = staffButton.customId!.replace('staff_actions_', '');
+    await interaction.reply(buildStaffActionsReply(ticketId));
   }
 }
