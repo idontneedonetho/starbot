@@ -176,6 +176,11 @@ async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, para
       .setLabel('Ready')
       .setStyle(ButtonStyle.Success)
       .setEmoji('✅'),
+    new ButtonBuilder()
+      .setCustomId(`fixed_${params.audience}_${params.ticketId}_${params.submitterId}`)
+      .setLabel('My Issue is Fixed')
+      .setStyle(ButtonStyle.Success)
+      .setEmoji('🎉'),
   );
 
   const sent = await thread.send({ embeds: [embed], components: [row] });
@@ -502,6 +507,88 @@ export class BotReportActions {
       : `Marked ready by <@${interaction.user.id}>`);
 
     await interaction.editReply({ content: 'Thanks! The report is back to **WAITING FOR DEV**.' });
+  }
+
+  @ButtonComponent({ id: /^fixed_/ })
+  async handleFixedButton(interaction: ButtonInteraction) {
+    const [, audience, , submitterId] = interaction.customId.split('_');
+
+    const isStaff = interaction.member instanceof GuildMember && hasStaffRole(interaction.member);
+    const allowed = isStaff || (audience === 'sub' ? interaction.user.id === submitterId : true);
+    if (!allowed) {
+      await interaction.reply({ content: 'Only the original submitter (or staff) can respond to this request.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const modal = new ModalBuilder()
+      .setCustomId(`fixed_modal_${interaction.customId.split('_')[2]}_${interaction.message.id}`)
+      .setTitle('Confirm — Issue Resolved?');
+    const noteInput = new TextInputBuilder({
+      custom_id: 'note',
+      style: TextInputStyle.Paragraph,
+      placeholder: 'Optional: what fixed it?',
+      required: false,
+      max_length: 1024,
+    });
+    modal.addLabelComponents(new LabelBuilder().setLabel('What fixed it? (optional)').setTextInputComponent(noteInput));
+    await interaction.showModal(modal);
+  }
+
+  @ModalComponent({ id: /^fixed_modal_/ })
+  async handleFixedSubmit(interaction: ModalSubmitInteraction) {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    const msgId = interaction.customId.split('_')[3];
+
+    const thread = interaction.channel;
+    if (!thread?.isThread()) {
+      await interaction.editReply({ content: 'This can only be used from a thread.' });
+      return;
+    }
+
+    const guild = interaction.guild;
+    if (!guild) {
+      await interaction.editReply({ content: 'Could not resolve guild.' });
+      return;
+    }
+
+    const note = interaction.fields.getTextInputValue('note');
+
+    const resolvedEmbed = new EmbedBuilder()
+      .setColor(COLORS.green)
+      .setTitle('✅ Resolved by User')
+      .setFooter({ text: `Closed by ${interaction.user.tag}` })
+      .setTimestamp();
+    if (note) resolvedEmbed.setDescription(note);
+    await thread.send({ content: `<@${interaction.user.id}> marked this issue as fixed.`, embeds: [resolvedEmbed] }).catch(err => log.warn({ err }, 'Failed to post resolved embed'));
+
+    const waitMsg = await thread.messages.fetch(msgId).catch(() => null);
+    if (waitMsg) {
+      const embeds = waitMsg.embeds[0]
+        ? [EmbedBuilder.from(waitMsg.embeds[0])
+            .setColor(COLORS.green)
+            .setTitle('✅ Resolved by User')
+            .addFields({ name: '\u200B', value: `Marked fixed by <@${interaction.user.id}>` })]
+        : [];
+      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setCustomId('ready_done').setLabel('Ready').setStyle(ButtonStyle.Success).setEmoji('✅').setDisabled(true),
+        new ButtonBuilder().setCustomId('fixed_done').setLabel('My Issue is Fixed').setStyle(ButtonStyle.Success).setEmoji('🎉').setDisabled(true),
+      );
+      await waitMsg.edit({ embeds, components: [row] }).catch(err => log.warn({ err }, 'Failed to complete Fixed message'));
+    }
+
+    const starter = await thread.fetchStarterMessage().catch(() => null);
+    if (starter) {
+      const starterEmbed = starter.embeds[0];
+      if (starterEmbed) {
+        const updated = EmbedBuilder.from(starterEmbed);
+        updated.addFields({ name: '\u200B', value: `🔐 Closed by <@${interaction.user.id}> (issue marked fixed)` });
+        await starter.edit({ embeds: [updated] }).catch(err => log.warn({ err }, 'Failed to edit starter'));
+      }
+    }
+
+    await closeThread(thread, guild);
+    await interaction.editReply({ content: 'Thanks! This report has been **closed** as resolved.' });
   }
 
   @ButtonComponent({ id: /^staff_actions_/ })
