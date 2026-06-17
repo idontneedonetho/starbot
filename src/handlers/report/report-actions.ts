@@ -511,12 +511,10 @@ export class BotReportActions {
 
   @ButtonComponent({ id: /^fixed_/ })
   async handleFixedButton(interaction: ButtonInteraction) {
-    const [, audience, , submitterId] = interaction.customId.split('_');
+    const submitterId = interaction.customId.split('_')[3];
 
-    const isStaff = interaction.member instanceof GuildMember && hasStaffRole(interaction.member);
-    const allowed = isStaff || (audience === 'sub' ? interaction.user.id === submitterId : true);
-    if (!allowed) {
-      await interaction.reply({ content: 'Only the original submitter (or staff) can respond to this request.', flags: MessageFlags.Ephemeral });
+    if (interaction.user.id !== submitterId) {
+      await interaction.reply({ content: 'Only the original reporter can mark this issue as fixed.', flags: MessageFlags.Ephemeral });
       return;
     }
 
