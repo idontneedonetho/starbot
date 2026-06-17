@@ -93,6 +93,7 @@ export const UI_ALT_VARIANT_LABELS: Record<string, string> = {
   'device': 'Device',
   'stacked_forward_over_wide': 'Stacked Forward / Wide',
   'stacked_wide_over_forward': 'Stacked Wide / Forward',
+  'stacked_device_over_driver': 'Stacked Device / Driver',
 };
 
 export const UI_ALT_VARIANTS = Object.keys(UI_ALT_VARIANT_LABELS);
