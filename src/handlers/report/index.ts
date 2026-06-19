@@ -320,7 +320,6 @@ async function processBugReport(
     dedicatedRoute: dedicatedValidated,
     additionalRoutes: numberedAdditional,
     label: 'Bug Report',
-    emoji: '\uD83D\uDC1B',
     tagNames: ['OPEN', 'BUG', 'WAITING FOR DEV'],
     primaryNonPublicRoute: primaryNonPublic,
     footerNote: ' with ticket ID / wiki / route link',
@@ -426,7 +425,6 @@ async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, type: '
 
   const content = interaction.fields.getTextInputValue('content');
 
-  const emoji = type === 'feedback' ? '\uD83D\uDCAC' : '\u2728';
   const label = type === 'feedback' ? 'Feedback' : 'Feature Request';
 
   log.info({
@@ -456,7 +454,6 @@ async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, type: '
     wikiQuery: cleanContent,
     additionalRoutes: numberedRoutes,
     label,
-    emoji,
     tagNames: type === 'feedback' ? ['OPEN', 'FEEDBACK', 'WAITING FOR DEV'] : ['OPEN', 'FEATURE REQUEST', 'WAITING FOR DEV'],
   });
 }

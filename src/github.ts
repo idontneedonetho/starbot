@@ -69,7 +69,7 @@ export async function fetchCommitChoices(): Promise<CommitChoice[]> {
     .slice(0, 25); // Discord select menus cap at 25 options
 }
 
-const compareCache = new LRUCache<string, 'ok' | 'older'>({ max: 500 });
+const compareCache = new LRUCache<string, 'ok' | 'older' | 'unknown'>({ max: 500 });
 
 export async function compareCommits(base: string, head: string): Promise<'ok' | 'older' | 'unknown'> {
   const { mainRepo } = loadConfig();
@@ -86,8 +86,18 @@ export async function compareCommits(base: string, head: string): Promise<'ok' |
       return 'unknown';
     }
     const data = await res.json() as { status?: string };
-    const result = data.status === 'ahead' || data.status === 'identical' ? 'ok' as const : 'older' as const;
-    // 'unknown' (errors) is deliberately never cached so transient failures retry
+    // GitHub returns ahead | behind | identical | diverged. 'diverged' means the
+    // route is on a different lineage (e.g. required SHA on StarPilot, route on
+    // Dom) — neither is an ancestor — so it's not "older"; map it to 'unknown' so
+    // the user gets the manual-verification message instead of a misleading
+    // "submit a newer commit" rejection that no commit on their branch can satisfy.
+    const result = data.status === 'ahead' || data.status === 'identical'
+      ? 'ok' as const
+      : data.status === 'behind'
+        ? 'older' as const
+        : 'unknown' as const;
+    // Error 'unknown' (below) is never cached so transient failures retry, but a
+    // resolved verdict between two fixed SHAs never changes, so cache it.
     compareCache.set(key, result);
     return result;
   } catch (err) {

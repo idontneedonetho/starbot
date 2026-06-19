@@ -19,6 +19,10 @@ const client = new Client({
     IntentsBitField.Flags.MessageContent,
   ],
   silent: true,
+  // Reject (throw) only on rate-limited thread/channel *edits* (PATCH /channels/:id)
+  // so title-sync can defer + retry them instead of blocking the strict channel-edit
+  // bucket. Message sends, thread creation, etc. queue and wait as normal.
+  rest: { rejectOnRateLimit: (data) => data.method === 'PATCH' && data.route === '/channels/:id' },
 });
 
 client.login(config.token);

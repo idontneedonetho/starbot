@@ -12,6 +12,7 @@ import { searchWiki, formatWikiResults } from '../../wiki/searcher.js';
 import { embedBatch } from '../../wiki/embedder.js';
 import { dot } from '../../util.js';
 import { getForum, createRouteTrackerThread, addAdditionalRoutesToTracker, encodeConfirmCustomId, buildConfirmRows, TRACKER_FIELD_PREFIX } from './route-tracker.js';
+import { STATUS_EMOJI, isRateLimit } from './title-sync.js';
 import type { ExtractedRoute, RouteValidation } from '../../comma.js';
 
 const log = createLogger('report-service');
@@ -48,7 +49,14 @@ export async function swapForumTags(
     return !tag || !removeNames.has(tag.name);
   });
   const addIds = opts.add ? resolveTagIds(forum, opts.add) : [];
-  await thread.setAppliedTags([...new Set([...keep, ...addIds])]).catch(() => {});
+  await thread.setAppliedTags([...new Set([...keep, ...addIds])]).catch((err: unknown) => {
+    // setAppliedTags hits PATCH /channels/:id — the route index.ts configures
+    // rejectOnRateLimit on. A rate-limit rejection must propagate so close paths
+    // can defer + retry via title-sync's worker (see closeThread). Other failures
+    // (perms, etc.) are logged and swallowed so best-effort callers continue.
+    if (isRateLimit(err)) throw err;
+    log.warn({ err }, 'Failed to swap forum tags');
+  });
 }
 
 function isContentWord(w: string): boolean {
@@ -156,7 +164,6 @@ export async function submitReport(
     dedicatedRoute?: ExtractedRoute & RouteValidation;
     additionalRoutes: Array<ExtractedRoute & RouteValidation>;
     label: string;
-    emoji: string;
     tagNames: string[];
     primaryNonPublicRoute?: ExtractedRoute;
     footerNote?: string;
@@ -182,7 +189,7 @@ export async function submitReport(
   let thread;
   try {
     thread = await forum.threads.create({
-      name: formatThreadTitle(params.emoji, params.label, generatedTitle, '...'),
+      name: formatThreadTitle(STATUS_EMOJI['new'], params.label, generatedTitle, '...'),
       message: { content: `<@${interaction.user.id}>`, embeds: [params.embed] },
       appliedTags: tagIds,
     });
@@ -195,7 +202,7 @@ export async function submitReport(
   const ticketId = String(parseInt(thread.id.slice(-7), 10));
 
   try {
-    await thread.edit({ name: formatThreadTitle(params.emoji, params.label, generatedTitle, ticketId) });
+    await thread.edit({ name: formatThreadTitle(STATUS_EMOJI['new'], params.label, generatedTitle, ticketId) });
   } catch (err) {
     log.error({ err }, 'Failed to rename thread');
   }

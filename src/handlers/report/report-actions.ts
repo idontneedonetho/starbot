@@ -24,9 +24,10 @@ import { createLogger } from '../../logger.js';
 import { createStore } from '../../store.js';
 import { COLORS, formatGitCommit, discordTimestamp, timeAgo } from '../../util.js';
 import { normalizeRouteInput, parseNormalizedRoute, validateRoute, extractRouteIds, replaceRouteIds, fetchRouteMetadata } from '../../comma.js';
-import { fetchCommitChoices, compareCommits } from '../../github.js';
+import { fetchCommitChoices, compareCommits, type CommitChoice } from '../../github.js';
 import { getForum, addAdditionalRoutesToTracker, createRouteTrackerThread, routeNumberLabel, TRACKER_FIELD_PREFIX } from './route-tracker.js';
 import { resolveTagIds, buildActionRow, swapForumTags } from './report-service.js';
+import { setThreadStatusEmoji, setThreadStatusAndClose, setReportCloseHandler } from './title-sync.js';
 
 const log = createLogger('report-actions');
 
@@ -84,9 +85,17 @@ async function closeThread(thread: ThreadChannel, guild: import('discord.js').Gu
   const forum = await getForum(guild, config.forumChannelId);
   if (!forum) return;
   await swapForumTags(thread, forum, { remove: ['OPEN', 'WAITING FOR DEV', 'WAITING FOR USER'], add: ['CLOSED'] });
-  await thread.setLocked(true).catch(() => {});
-  await thread.setArchived(true).catch(() => {});
+  // No .catch here: a rate-limit rejection must propagate so title-sync's worker
+  // can retry the close. setArchived runs last (archiving first would block the
+  // lock edit). Skip edits already applied so each retry advances to the step
+  // that actually failed instead of re-spending the rate-limit budget.
+  if (!thread.locked) await thread.setLocked(true);
+  if (!thread.archived) await thread.setArchived(true);
 }
+
+// title-sync's deferred worker and restart recovery finalize closes; give it a
+// way to do so without an import cycle.
+setReportCloseHandler(thread => closeThread(thread, thread.guild));
 
 async function updateThreadButtons(thread: ThreadChannel): Promise<string | null> {
   const starter = await thread.fetchStarterMessage();
@@ -104,9 +113,13 @@ async function updateThreadButtons(thread: ThreadChannel): Promise<string | null
   return ticketId;
 }
 
-// Pending "newer commit" requests between the staff modal submit and the commit pick.
+// Pending "newer commit" requests between the staff modal submit and the commit
+// pick. The just-fetched commit list is snapshotted here so the select handler
+// resolves the chosen SHA's metadata from it rather than refetching — the commit
+// cache (5 min) can expire before this state (15 min), and a refetch may no
+// longer include the picked SHA (only 10 per branch are returned).
 const waitCommitStore = createStore<{
-  message: string; audience: string; submitterId: string; ticketId: string; threadId: string;
+  message: string; audience: string; submitterId: string; ticketId: string; threadId: string; choices: CommitChoice[];
 }>('wait-commit-pending', { ttl: 15 * 60 * 1000 });
 
 // Required commit per Ready message; lives as long as the report stays WAITING FOR USER.
@@ -139,6 +152,30 @@ function buildAdditionalReportModal(customId: string): ModalBuilder {
   return modal;
 }
 
+// Resolve the original reporter's ID for the submitter-gated Ready/Fixed buttons.
+// Report threads carry a `By` field; split threads don't, so fall back to following
+// their "Original Report" link to the source thread's starter. Returns '' if no
+// submitter can be determined (callers must then avoid gating buttons on it).
+async function resolveSubmitterId(thread: ThreadChannel, guild: import('discord.js').Guild): Promise<string> {
+  const starter = await thread.fetchStarterMessage().catch(() => null);
+  const fields = starter?.embeds[0]?.fields;
+  const direct = fields?.find(f => f.name === 'By')?.value.match(/<@(\d+)>/)?.[1];
+  if (direct) return direct;
+
+  // Split-thread fallback: [Original Report →](https://discord.com/channels/<g>/<channel>/<msg>)
+  const origUrl = fields?.find(f => /Original Report/.test(f.value ?? ''))?.value?.match(/\]\((.+?)\)/)?.[1];
+  const origChannelId = origUrl?.split('/').slice(-2, -1)[0];
+  if (origChannelId) {
+    const origChannel = await guild.channels.fetch(origChannelId).catch(() => null);
+    if (origChannel?.isThread()) {
+      const origStarter = await origChannel.fetchStarterMessage().catch(() => null);
+      const resolved = origStarter?.embeds[0]?.fields?.find(f => f.name === 'By')?.value.match(/<@(\d+)>/)?.[1];
+      if (resolved) return resolved;
+    }
+  }
+  return '';
+}
+
 interface WaitUserParams {
   mode: string;
   audience: string;
@@ -152,7 +189,11 @@ interface WaitUserParams {
 }
 
 async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, params: WaitUserParams): Promise<void> {
-  await swapForumTags(thread, forum, { remove: ['WAITING FOR DEV'], add: ['WAITING FOR USER'] });
+  // Best-effort tag swap: unlike closeThread there's no deferred retry here, so
+  // swallow even a rate-limit rejection rather than abort the WAITING FOR USER post.
+  await swapForumTags(thread, forum, { remove: ['WAITING FOR DEV'], add: ['WAITING FOR USER'] })
+    .catch(err => log.warn({ err }, 'Failed to swap forum tags for WAITING FOR USER'));
+  await setThreadStatusEmoji(thread, 'waiting-for-user');
 
   const action = params.mode === 'anytime'
     ? "Click **Ready** below when you've tested and have feedback to share (no @pings please)."
@@ -170,18 +211,30 @@ async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, para
     .setDescription(`${params.message ? params.message + '\n\n' : ''}${action}${required}`)
     .setTimestamp();
 
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+  // Both buttons gate on submitterId; with no submitter (e.g. a split thread whose
+  // origin couldn't be resolved) a 'sub' Ready and the Fixed button would reject
+  // everyone. Drop to an ungated Ready and omit Fixed so the report stays actionable.
+  if (!params.submitterId) {
+    log.warn({ threadId: thread.id, ticketId: params.ticketId }, 'No submitter resolved; posting ungated Ready without Fixed button');
+  }
+  const readyAudience = params.submitterId ? params.audience : 'any';
+  const buttons = [
     new ButtonBuilder()
-      .setCustomId(`ready_${params.mode}_${params.audience}_${params.ticketId}_${params.submitterId}`)
+      .setCustomId(`ready_${params.mode}_${readyAudience}_${params.ticketId}_${params.submitterId}`)
       .setLabel('Ready')
       .setStyle(ButtonStyle.Success)
       .setEmoji('✅'),
-    new ButtonBuilder()
-      .setCustomId(`fixed_${params.audience}_${params.ticketId}_${params.submitterId}`)
-      .setLabel('My Issue is Fixed')
-      .setStyle(ButtonStyle.Success)
-      .setEmoji('🎉'),
-  );
+  ];
+  if (params.submitterId) {
+    buttons.push(
+      new ButtonBuilder()
+        .setCustomId(`fixed_${params.audience}_${params.ticketId}_${params.submitterId}`)
+        .setLabel('My Issue is Fixed')
+        .setStyle(ButtonStyle.Success)
+        .setEmoji('🎉'),
+    );
+  }
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
 
   const sent = await thread.send({ embeds: [embed], components: [row] });
   if (params.mode === 'newer' && params.requiredSha) {
@@ -205,12 +258,20 @@ async function completeReadyMessage(thread: ThreadChannel, msgId: string, note: 
         .setTitle('✅ User Responded')
         .addFields({ name: '\u200B', value: note })]
     : [];
+  // Disable both controls (matching handleFixedSubmit) so the sibling "My Issue
+  // is Fixed" button added by finalizeWaitUser isn't silently dropped on edit.
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId('ready_done')
       .setLabel('Ready')
       .setStyle(ButtonStyle.Success)
       .setEmoji('✅')
+      .setDisabled(true),
+    new ButtonBuilder()
+      .setCustomId('fixed_done')
+      .setLabel('My Issue is Fixed')
+      .setStyle(ButtonStyle.Success)
+      .setEmoji('🎉')
       .setDisabled(true),
   );
   await msg.edit({ embeds, components: [row] }).catch(err => log.warn({ err }, 'Failed to complete Ready message'));
@@ -313,9 +374,7 @@ export class BotReportActions {
     const audienceValues = interaction.fields.getStringSelectValues('respond_audience');
     const audience = audienceValues.length > 0 ? audienceValues[0] : 'any';
 
-    const starter = await thread.fetchStarterMessage().catch(() => null);
-    const byField = starter?.embeds[0]?.fields?.find(f => f.name === 'By');
-    const submitterId = byField?.value.match(/<@(\d+)>/)?.[1] ?? '';
+    const submitterId = await resolveSubmitterId(thread, guild);
 
     const forum = await getForum(guild, loadConfig().forumChannelId);
     if (!forum) {
@@ -329,7 +388,7 @@ export class BotReportActions {
         await interaction.editReply({ content: "Couldn't reach GitHub to list commits. Try again in a moment.", components: [] });
         return;
       }
-      await waitCommitStore.set(interaction.id, { message, audience, submitterId, ticketId, threadId: thread.id });
+      await waitCommitStore.set(interaction.id, { message, audience, submitterId, ticketId, threadId: thread.id, choices });
       const select = new StringSelectMenuBuilder()
         .setCustomId(`wcommit_${interaction.id}`)
         .setPlaceholder('Select the minimum required commit…')
@@ -392,8 +451,11 @@ export class BotReportActions {
     }
 
     const requiredSha = interaction.values[0];
-    const choices = await fetchCommitChoices();
-    const choice = choices.find(c => c.sha === requiredSha);
+    // Resolve metadata from the snapshot taken at modal-submit (the list the staff
+    // actually saw), not a refetch that may have rotated the SHA out of view.
+    // Optional-chain: a pending entry persisted by a pre-update build (or before a
+    // restart) may predate the `choices` snapshot; fall back to the SHA-derived short.
+    const choice = pending.choices?.find(c => c.sha === requiredSha);
     const requiredShort = choice?.short ?? requiredSha.slice(0, 7);
     const branch = choice?.branch ?? 'unknown';
     const requiredDate = choice?.date;
@@ -500,8 +562,10 @@ export class BotReportActions {
 
     const forum = await getForum(guild, loadConfig().forumChannelId);
     if (forum) {
-      await swapForumTags(thread, forum, { remove: ['WAITING FOR USER'], add: ['WAITING FOR DEV'] });
+      await swapForumTags(thread, forum, { remove: ['WAITING FOR USER'], add: ['WAITING FOR DEV'] })
+        .catch(err => log.warn({ err }, 'Failed to swap forum tags for WAITING FOR DEV'));
     }
+    await setThreadStatusEmoji(thread, 'waiting-for-dev');
     await completeReadyMessage(thread, msgId, feedbackMsg
       ? `Feedback submitted by <@${interaction.user.id}> — [view it](${feedbackMsg.url})`
       : `Marked ready by <@${interaction.user.id}>`);
@@ -585,8 +649,10 @@ export class BotReportActions {
       }
     }
 
-    await closeThread(thread, guild);
-    await interaction.editReply({ content: 'Thanks! This report has been **closed** as resolved.' });
+    const resolvedDeferred = await setThreadStatusAndClose(thread, 'resolved');
+    await interaction.editReply({ content: resolvedDeferred
+      ? 'Thanks! This report is being **closed** as resolved — the title and close may take a moment if Discord is rate-limiting us.'
+      : 'Thanks! This report has been **closed** as resolved.' });
   }
 
   @ButtonComponent({ id: /^staff_actions_/ })
@@ -689,6 +755,7 @@ export class BotReportActions {
         }
       }
 
+      await setThreadStatusEmoji(thread, 'waiting-for-dev');
       await interaction.followUp({ content: 'You have been assigned to this report.', flags: MessageFlags.Ephemeral });
     } else {
       const closeStarter = await thread.fetchStarterMessage();
@@ -701,8 +768,10 @@ export class BotReportActions {
         }
       }
 
-      await interaction.followUp({ content: 'Report closed.', flags: MessageFlags.Ephemeral });
-      await closeThread(thread, guild);
+      const closedDeferred = await setThreadStatusAndClose(thread, 'closed');
+      await interaction.followUp({ content: closedDeferred
+        ? 'Report closing — the title and close may take a moment if Discord is rate-limiting us.'
+        : 'Report closed.', flags: MessageFlags.Ephemeral });
     }
   }
 
@@ -937,8 +1006,10 @@ export class BotReportActions {
     if (ready && readyMsgId) {
       const forum = await getForum(guild, loadConfig().forumChannelId);
       if (forum) {
-        await swapForumTags(thread, forum, { remove: ['WAITING FOR USER'], add: ['WAITING FOR DEV'] });
+        await swapForumTags(thread, forum, { remove: ['WAITING FOR USER'], add: ['WAITING FOR DEV'] })
+          .catch(err => log.warn({ err }, 'Failed to swap forum tags for WAITING FOR DEV'));
       }
+      await setThreadStatusEmoji(thread, 'waiting-for-dev');
       await completeReadyMessage(thread, readyMsgId, `A new route was submitted by <@${interaction.user.id}> — [Additional Report #${additionalReportId}](${msg.url})`);
       await readyReqStore.delete(readyMsgId);
       lifecycleNote = ' The report is now marked **WAITING FOR DEV**.';
@@ -987,7 +1058,15 @@ export class BotReportActions {
 
     await interaction.reply({ content: `Report merged into ${targetChannel}.`, flags: MessageFlags.Ephemeral });
 
-    if (guild) await closeThread(source, guild);
+    if (guild) {
+      const mergeDeferred = await setThreadStatusAndClose(source, 'closed');
+      if (mergeDeferred) {
+        await interaction.followUp({
+          content: 'Closing the source thread — it may take a moment if Discord is rate-limiting us.',
+          flags: MessageFlags.Ephemeral,
+        }).catch(() => {});
+      }
+    }
   }
 
   @ButtonComponent({ id: /^assign_/ })
