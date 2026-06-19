@@ -176,6 +176,20 @@ async function resolveSubmitterId(thread: ThreadChannel, guild: import('discord.
   return '';
 }
 
+// When a report returns to WAITING FOR DEV via a user's "Ready" response, ping the
+// assigned dev (read from the OP's "👤 Assigned to" field) so they know to take
+// another look. Mentions are restricted to the assignee so the responding user
+// isn't re-pinged; no-ops when nobody is assigned (or the assignee responded).
+async function notifyAssigneeReady(thread: ThreadChannel, respondingUserId: string, link?: string): Promise<void> {
+  const starter = await thread.fetchStarterMessage().catch(() => null);
+  const assigneeId = starter?.embeds[0]?.fields?.find(f => f.name === '👤 Assigned to')?.value.match(/<@(\d+)>/)?.[1];
+  if (!assigneeId || assigneeId === respondingUserId) return;
+  await thread.send({
+    content: `🔔 <@${assigneeId}> — <@${respondingUserId}> marked this **ready for another look**.${link ? ` [View their response](${link})` : ''}`,
+    allowedMentions: { users: [assigneeId] },
+  }).catch(err => log.warn({ err }, 'Failed to ping assignee on ready'));
+}
+
 interface WaitUserParams {
   mode: string;
   audience: string;
@@ -569,6 +583,7 @@ export class BotReportActions {
     await completeReadyMessage(thread, msgId, feedbackMsg
       ? `Feedback submitted by <@${interaction.user.id}> — [view it](${feedbackMsg.url})`
       : `Marked ready by <@${interaction.user.id}>`);
+    await notifyAssigneeReady(thread, interaction.user.id, feedbackMsg?.url);
 
     await interaction.editReply({ content: 'Thanks! The report is back to **WAITING FOR DEV**.' });
   }
@@ -1012,6 +1027,7 @@ export class BotReportActions {
       await setThreadStatusEmoji(thread, 'waiting-for-dev');
       await completeReadyMessage(thread, readyMsgId, `A new route was submitted by <@${interaction.user.id}> — [Additional Report #${additionalReportId}](${msg.url})`);
       await readyReqStore.delete(readyMsgId);
+      await notifyAssigneeReady(thread, interaction.user.id, msg.url);
       lifecycleNote = ' The report is now marked **WAITING FOR DEV**.';
     }
 
