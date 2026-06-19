@@ -50,10 +50,7 @@ export async function swapForumTags(
   });
   const addIds = opts.add ? resolveTagIds(forum, opts.add) : [];
   await thread.setAppliedTags([...new Set([...keep, ...addIds])]).catch((err: unknown) => {
-    // setAppliedTags hits PATCH /channels/:id — the route index.ts configures
-    // rejectOnRateLimit on. A rate-limit rejection must propagate so close paths
-    // can defer + retry via title-sync's worker (see closeThread). Other failures
-    // (perms, etc.) are logged and swallowed so best-effort callers continue.
+    // Rate-limits must propagate so close paths can defer + retry (see closeThread).
     if (isRateLimit(err)) throw err;
     log.warn({ err }, 'Failed to swap forum tags');
   });
@@ -127,8 +124,6 @@ export async function generateThreadTitle(input: string): Promise<string | null>
   return top10.map(({ word }) => word[0].toUpperCase() + word.slice(1)).join(' ');
 }
 
-// ticketId may be null at creation: the report is posted without the (id) suffix
-// so it costs no rename, and title-sync folds the id in on the first status change.
 export function formatThreadTitle(emoji: string, label: string, title: string | null, ticketId: string | null): string {
   const MAX = 100;
   const suffix = ticketId ? ` (${ticketId})` : '';
@@ -192,10 +187,8 @@ export async function submitReport(
   let thread;
   try {
     thread = await forum.threads.create({
-      // No ticket id in the title yet: the id is derived from the thread's own id,
-      // which we only learn after creation. Renaming now would immediately spend
-      // one of the 2-per-10-min title edits — and the very next status change often
-      // needs it — so the id is left out and title-sync adds it on first transition.
+      // Ticket id omitted here: adding it would need a post-create rename, spending
+      // one of the 2-per-10-min title edits. title-sync folds it in on first status change.
       name: formatThreadTitle(STATUS_EMOJI['new'], params.label, generatedTitle, null),
       message: { content: `<@${interaction.user.id}>`, embeds: [params.embed] },
       appliedTags: tagIds,

@@ -86,18 +86,14 @@ export async function compareCommits(base: string, head: string): Promise<'ok' |
       return 'unknown';
     }
     const data = await res.json() as { status?: string };
-    // GitHub returns ahead | behind | identical | diverged. 'diverged' means the
-    // route is on a different lineage (e.g. required SHA on StarPilot, route on
-    // Dom) — neither is an ancestor — so it's not "older"; map it to 'unknown' so
-    // the user gets the manual-verification message instead of a misleading
-    // "submit a newer commit" rejection that no commit on their branch can satisfy.
+    // 'diverged' (route on a different lineage, e.g. StarPilot vs Dom) is not 'older' —
+    // treat it as unverifiable rather than reject it as an out-of-date build.
     const result = data.status === 'ahead' || data.status === 'identical'
       ? 'ok' as const
       : data.status === 'behind'
         ? 'older' as const
         : 'unknown' as const;
-    // Error 'unknown' (below) is never cached so transient failures retry, but a
-    // resolved verdict between two fixed SHAs never changes, so cache it.
+    // Safe to cache: a verdict between two fixed SHAs never changes (error 'unknown's below aren't cached).
     compareCache.set(key, result);
     return result;
   } catch (err) {

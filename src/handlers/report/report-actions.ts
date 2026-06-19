@@ -113,11 +113,8 @@ async function updateThreadButtons(thread: ThreadChannel): Promise<string | null
   return ticketId;
 }
 
-// Pending "newer commit" requests between the staff modal submit and the commit
-// pick. The just-fetched commit list is snapshotted here so the select handler
-// resolves the chosen SHA's metadata from it rather than refetching — the commit
-// cache (5 min) can expire before this state (15 min), and a refetch may no
-// longer include the picked SHA (only 10 per branch are returned).
+// Pending "newer commit" request between staff modal submit and commit pick. choices
+// is snapshotted so the select handler doesn't refetch a list that may have rotated.
 const waitCommitStore = createStore<{
   message: string; audience: string; submitterId: string; ticketId: string; threadId: string; choices: CommitChoice[];
 }>('wait-commit-pending', { ttl: 15 * 60 * 1000 });
@@ -152,17 +149,14 @@ function buildAdditionalReportModal(customId: string): ModalBuilder {
   return modal;
 }
 
-// Resolve the original reporter's ID for the submitter-gated Ready/Fixed buttons.
-// Report threads carry a `By` field; split threads don't, so fall back to following
-// their "Original Report" link to the source thread's starter. Returns '' if no
-// submitter can be determined (callers must then avoid gating buttons on it).
+// Split threads have no `By` field, so fall back to the linked Original Report's starter.
 async function resolveSubmitterId(thread: ThreadChannel, guild: import('discord.js').Guild): Promise<string> {
   const starter = await thread.fetchStarterMessage().catch(() => null);
   const fields = starter?.embeds[0]?.fields;
   const direct = fields?.find(f => f.name === 'By')?.value.match(/<@(\d+)>/)?.[1];
   if (direct) return direct;
 
-  // Split-thread fallback: [Original Report →](https://discord.com/channels/<g>/<channel>/<msg>)
+  // Original Report URL: .../channels/<guild>/<channel>/<msg>
   const origUrl = fields?.find(f => /Original Report/.test(f.value ?? ''))?.value?.match(/\]\((.+?)\)/)?.[1];
   const origChannelId = origUrl?.split('/').slice(-2, -1)[0];
   if (origChannelId) {
@@ -176,10 +170,6 @@ async function resolveSubmitterId(thread: ThreadChannel, guild: import('discord.
   return '';
 }
 
-// When a report returns to WAITING FOR DEV via a user's "Ready" response, ping the
-// assigned dev (read from the OP's "👤 Assigned to" field) so they know to take
-// another look. Mentions are restricted to the assignee so the responding user
-// isn't re-pinged; no-ops when nobody is assigned (or the assignee responded).
 async function notifyAssigneeReady(thread: ThreadChannel, respondingUserId: string, link?: string): Promise<void> {
   const starter = await thread.fetchStarterMessage().catch(() => null);
   const assigneeId = starter?.embeds[0]?.fields?.find(f => f.name === '👤 Assigned to')?.value.match(/<@(\d+)>/)?.[1];
@@ -203,8 +193,7 @@ interface WaitUserParams {
 }
 
 async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, params: WaitUserParams): Promise<void> {
-  // Best-effort tag swap: unlike closeThread there's no deferred retry here, so
-  // swallow even a rate-limit rejection rather than abort the WAITING FOR USER post.
+  // Best-effort (no deferred retry like closeThread): swallow even rate-limits.
   await swapForumTags(thread, forum, { remove: ['WAITING FOR DEV'], add: ['WAITING FOR USER'] })
     .catch(err => log.warn({ err }, 'Failed to swap forum tags for WAITING FOR USER'));
   await setThreadStatusEmoji(thread, 'waiting-for-user');
@@ -225,9 +214,8 @@ async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, para
     .setDescription(`${params.message ? params.message + '\n\n' : ''}${action}${required}`)
     .setTimestamp();
 
-  // Both buttons gate on submitterId; with no submitter (e.g. a split thread whose
-  // origin couldn't be resolved) a 'sub' Ready and the Fixed button would reject
-  // everyone. Drop to an ungated Ready and omit Fixed so the report stays actionable.
+  // With no resolvable submitter, a 'sub' Ready and the Fixed button reject everyone —
+  // fall back to an ungated Ready and drop Fixed.
   if (!params.submitterId) {
     log.warn({ threadId: thread.id, ticketId: params.ticketId }, 'No submitter resolved; posting ungated Ready without Fixed button');
   }
@@ -272,8 +260,7 @@ async function completeReadyMessage(thread: ThreadChannel, msgId: string, note: 
         .setTitle('✅ User Responded')
         .addFields({ name: '\u200B', value: note })]
     : [];
-  // Disable both controls (matching handleFixedSubmit) so the sibling "My Issue
-  // is Fixed" button added by finalizeWaitUser isn't silently dropped on edit.
+  // Keep the disabled Fixed button too, else editing the row drops the sibling button.
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId('ready_done')
@@ -465,10 +452,7 @@ export class BotReportActions {
     }
 
     const requiredSha = interaction.values[0];
-    // Resolve metadata from the snapshot taken at modal-submit (the list the staff
-    // actually saw), not a refetch that may have rotated the SHA out of view.
-    // Optional-chain: a pending entry persisted by a pre-update build (or before a
-    // restart) may predate the `choices` snapshot; fall back to the SHA-derived short.
+    // ?. — entries persisted before the choices snapshot existed won't have it.
     const choice = pending.choices?.find(c => c.sha === requiredSha);
     const requiredShort = choice?.short ?? requiredSha.slice(0, 7);
     const branch = choice?.branch ?? 'unknown';

@@ -54,8 +54,6 @@ function stripLeadingEmoji(name: string): string {
 
 const MAX_TITLE_LEN = 100;
 
-// Derive the ticket id the same way report-service does: the trailing 7 digits of
-// the thread's own snowflake.
 function ticketIdFor(thread: ThreadChannel): string {
   return String(parseInt(thread.id.slice(-7), 10));
 }
@@ -64,9 +62,7 @@ function computeStatusTitle(currentName: string, status: ReportStatus, ticketId:
   let base = stripLeadingEmoji(currentName);
   if (base.startsWith(' ')) base = base.slice(1);
   let title = `${STATUS_EMOJI[status]} ${base}`;
-  // Reports are created without the (id) suffix to avoid spending a rename on the
-  // strict 2-per-10-min title-edit bucket; fold it in here on the first status
-  // change (which already rewrites the title). Skip if a suffix is already present.
+  // Creation omits the (id) suffix to save a rename; add it on the first status change.
   if (!/\(\d+\)\s*$/.test(title)) {
     const suffix = ` (${ticketId})`;
     if (title.length + suffix.length > MAX_TITLE_LEN) {
