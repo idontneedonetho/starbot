@@ -127,18 +127,21 @@ export async function generateThreadTitle(input: string): Promise<string | null>
   return top10.map(({ word }) => word[0].toUpperCase() + word.slice(1)).join(' ');
 }
 
-export function formatThreadTitle(emoji: string, label: string, title: string | null, ticketId: string): string {
+// ticketId may be null at creation: the report is posted without the (id) suffix
+// so it costs no rename, and title-sync folds the id in on the first status change.
+export function formatThreadTitle(emoji: string, label: string, title: string | null, ticketId: string | null): string {
   const MAX = 100;
+  const suffix = ticketId ? ` (${ticketId})` : '';
   if (title) {
-    const raw = `${emoji} ${label} - ${title} (${ticketId})`;
+    const raw = `${emoji} ${label} - ${title}${suffix}`;
     if (raw.length <= MAX) return raw;
-    const overhead = `${emoji} ${label} -  (${ticketId})`.length;
+    const overhead = `${emoji} ${label} - ${suffix}`.length;
     const maxTitleLen = MAX - overhead;
-    if (maxTitleLen <= 1) return `${emoji} ${label} - ${ticketId}`;
+    if (maxTitleLen <= 1) return ticketId ? `${emoji} ${label} - ${ticketId}` : `${emoji} ${label}`;
     const truncated = title.slice(0, maxTitleLen - 1) + '\u2026';
-    return `${emoji} ${label} - ${truncated} (${ticketId})`;
+    return `${emoji} ${label} - ${truncated}${suffix}`;
   }
-  return `${emoji} ${label} - ${ticketId}`;
+  return ticketId ? `${emoji} ${label} - ${ticketId}` : `${emoji} ${label}`;
 }
 
 async function addWikiSuggestions(embed: EmbedBuilder, query: string): Promise<void> {
@@ -189,7 +192,11 @@ export async function submitReport(
   let thread;
   try {
     thread = await forum.threads.create({
-      name: formatThreadTitle(STATUS_EMOJI['new'], params.label, generatedTitle, '...'),
+      // No ticket id in the title yet: the id is derived from the thread's own id,
+      // which we only learn after creation. Renaming now would immediately spend
+      // one of the 2-per-10-min title edits — and the very next status change often
+      // needs it — so the id is left out and title-sync adds it on first transition.
+      name: formatThreadTitle(STATUS_EMOJI['new'], params.label, generatedTitle, null),
       message: { content: `<@${interaction.user.id}>`, embeds: [params.embed] },
       appliedTags: tagIds,
     });
@@ -200,12 +207,6 @@ export async function submitReport(
   }
 
   const ticketId = String(parseInt(thread.id.slice(-7), 10));
-
-  try {
-    await thread.edit({ name: formatThreadTitle(STATUS_EMOJI['new'], params.label, generatedTitle, ticketId) });
-  } catch (err) {
-    log.error({ err }, 'Failed to rename thread');
-  }
 
   params.embed.setTitle(`${params.label} ${ticketId}`);
 

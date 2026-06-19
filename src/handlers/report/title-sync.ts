@@ -52,10 +52,29 @@ function stripLeadingEmoji(name: string): string {
   return name;
 }
 
-function computeStatusTitle(currentName: string, status: ReportStatus): string {
+const MAX_TITLE_LEN = 100;
+
+// Derive the ticket id the same way report-service does: the trailing 7 digits of
+// the thread's own snowflake.
+function ticketIdFor(thread: ThreadChannel): string {
+  return String(parseInt(thread.id.slice(-7), 10));
+}
+
+function computeStatusTitle(currentName: string, status: ReportStatus, ticketId: string): string {
   let base = stripLeadingEmoji(currentName);
   if (base.startsWith(' ')) base = base.slice(1);
-  return `${STATUS_EMOJI[status]} ${base}`;
+  let title = `${STATUS_EMOJI[status]} ${base}`;
+  // Reports are created without the (id) suffix to avoid spending a rename on the
+  // strict 2-per-10-min title-edit bucket; fold it in here on the first status
+  // change (which already rewrites the title). Skip if a suffix is already present.
+  if (!/\(\d+\)\s*$/.test(title)) {
+    const suffix = ` (${ticketId})`;
+    if (title.length + suffix.length > MAX_TITLE_LEN) {
+      title = title.slice(0, MAX_TITLE_LEN - suffix.length - 1).trimEnd() + '…';
+    }
+    title += suffix;
+  }
+  return title;
 }
 
 // A rate-limit rejection (discord.js RateLimitError) carries `timeToReset` and
@@ -121,7 +140,7 @@ async function runClose(thread: ThreadChannel): Promise<void> {
  * moment. Non-rate-limit failures are logged and abandoned.
  */
 async function applyTitle(thread: ThreadChannel, status: ReportStatus, close: boolean): Promise<boolean> {
-  const desired = computeStatusTitle(thread.name, status);
+  const desired = computeStatusTitle(thread.name, status, ticketIdFor(thread));
 
   if (thread.name !== desired) {
     try {
