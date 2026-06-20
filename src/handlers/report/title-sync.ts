@@ -21,10 +21,10 @@ const FALLBACK_RETRY_MS = 10 * 60 * 1000;
 const MAX_RATE_LIMIT_RETRIES = 10;
 const TITLE_INDEX_KEY = 'pending';
 
-// A thread waiting to have its title (and optionally its close) applied. `close`
-// is persisted so a restart mid-deferral still finalizes the close in order.
+// Stores the desired status, not a frozen title, so the worker recomputes against the
+// thread's current name at fire time. `close` persists so a restart still closes in order.
 interface PendingEntry {
-  title: string;
+  status: ReportStatus;
   close?: boolean;
 }
 
@@ -148,7 +148,7 @@ async function applyTitle(thread: ThreadChannel, status: ReportStatus, close: bo
       await thread.setName(desired);
     } catch (err) {
       if (isRateLimit(err)) {
-        await persistEntry(thread.id, { title: desired, close });
+        await persistEntry(thread.id, { status, close });
         kickWorker(thread);
         return true;
       }
@@ -161,7 +161,7 @@ async function applyTitle(thread: ThreadChannel, status: ReportStatus, close: bo
       await runClose(thread);
     } catch (err) {
       if (isRateLimit(err)) {
-        await persistEntry(thread.id, { title: desired, close: true });
+        await persistEntry(thread.id, { status, close: true });
         kickWorker(thread);
         return true;
       }
@@ -198,8 +198,9 @@ async function syncWorker(thread: ThreadChannel): Promise<void> {
         break;
       }
 
+      const desired = computeStatusTitle(thread.name, entry.status, ticketIdFor(thread));
       try {
-        if (thread.name !== entry.title) await thread.setName(entry.title);
+        if (thread.name !== desired) await thread.setName(desired);
         if (entry.close) await runClose(thread);
       } catch (err) {
         if (isRateLimit(err)) {
