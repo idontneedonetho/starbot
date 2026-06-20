@@ -557,15 +557,28 @@ export class BotReportActions {
 
   @ButtonComponent({ id: /^fixed_/ })
   async handleFixedButton(interaction: ButtonInteraction) {
-    const submitterId = interaction.customId.split('_')[3];
+    const [, , ticketId, submitterId] = interaction.customId.split('_');
 
     if (interaction.user.id !== submitterId) {
+      const isStaff = interaction.member instanceof GuildMember && hasStaffRole(interaction.member);
+      if (isStaff) {
+        // Staff can't resolve on a reporter's behalf, but if they meant to close it,
+        // point them at the same Staff Actions menu (which has Close).
+        await interaction.reply({
+          content: 'Only the original reporter can mark their issue as fixed. If closing this was intentional, use **Staff Actions → Close** below.',
+          components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder().setCustomId(`staff_actions_${ticketId}`).setLabel('Staff Actions').setStyle(ButtonStyle.Primary).setEmoji('🛠️'),
+          )],
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
       await interaction.reply({ content: 'Only the original reporter can mark this issue as fixed.', flags: MessageFlags.Ephemeral });
       return;
     }
 
     const modal = new ModalBuilder()
-      .setCustomId(`fixed_modal_${interaction.customId.split('_')[2]}_${interaction.message.id}`)
+      .setCustomId(`fixed_modal_${ticketId}_${interaction.message.id}`)
       .setTitle('Confirm — Issue Resolved?');
     const noteInput = new TextInputBuilder({
       custom_id: 'note',
