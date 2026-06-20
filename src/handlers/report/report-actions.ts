@@ -614,11 +614,7 @@ export class BotReportActions {
             .setTitle('✅ Resolved by User')
             .addFields({ name: '\u200B', value: `Marked fixed by <@${interaction.user.id}>` })]
         : [];
-      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder().setCustomId('ready_done').setLabel('Ready').setStyle(ButtonStyle.Success).setEmoji('✅').setDisabled(true),
-        new ButtonBuilder().setCustomId('fixed_done').setLabel('My Issue is Fixed').setStyle(ButtonStyle.Success).setEmoji('🎉').setDisabled(true),
-      );
-      await waitMsg.edit({ embeds, components: [row] }).catch(err => log.warn({ err }, 'Failed to complete Fixed message'));
+      await waitMsg.edit({ embeds, components: [] }).catch(err => log.warn({ err }, 'Failed to complete Fixed message'));
     }
 
     const starter = await thread.fetchStarterMessage().catch(() => null);
