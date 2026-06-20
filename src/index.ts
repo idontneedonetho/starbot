@@ -1,5 +1,5 @@
 import { Client } from 'discordx';
-import { IntentsBitField } from 'discord.js';
+import { DiscordAPIError, IntentsBitField } from 'discord.js';
 import { loadConfig } from './config.js';
 import { root as log } from './logger.js';
 import './handlers/events.js';
@@ -34,6 +34,13 @@ function shutdown() {
 }
 
 process.on('unhandledRejection', (err) => {
+  // A DiscordAPIError is almost always a single bad request (expired interaction,
+  // invalid form body, missing perms) — log it and keep running rather than letting
+  // one interaction take the whole bot down. Anything else is treated as fatal.
+  if (err instanceof DiscordAPIError) {
+    log.error({ err }, 'Unhandled DiscordAPIError (non-fatal)');
+    return;
+  }
   log.fatal({ err }, 'Unhandled rejection');
   shutdown();
 });
