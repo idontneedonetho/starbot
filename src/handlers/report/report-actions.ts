@@ -570,11 +570,11 @@ export class BotReportActions {
     const noteInput = new TextInputBuilder({
       custom_id: 'note',
       style: TextInputStyle.Paragraph,
-      placeholder: 'Optional: what fixed it?',
+      placeholder: 'Anything to add for the dev? (optional)',
       required: false,
       max_length: 1024,
     });
-    modal.addLabelComponents(new LabelBuilder().setLabel('What fixed it? (optional)').setTextInputComponent(noteInput));
+    modal.addLabelComponents(new LabelBuilder().setLabel('Additional feedback (optional)').setTextInputComponent(noteInput));
     await interaction.showModal(modal);
   }
 
