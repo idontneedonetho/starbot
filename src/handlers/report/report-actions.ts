@@ -22,9 +22,9 @@ import {
 import { loadConfig } from '../../config.js';
 import { createLogger } from '../../logger.js';
 import { createStore } from '../../store.js';
-import { COLORS, formatGitCommit, discordTimestamp, timeAgo } from '../../util.js';
+import { COLORS, formatGitCommit, discordTimestamp, timeAgo, isStaleBuild } from '../../util.js';
 import { normalizeRouteInput, parseNormalizedRoute, validateRoute, extractRouteIds, replaceRouteIds, fetchRouteMetadata } from '../../comma.js';
-import { fetchCommitChoices, compareCommits, type CommitChoice } from '../../github.js';
+import { fetchCommitChoices, type CommitChoice } from '../../github.js';
 import { getForum, addAdditionalRoutesToTracker, createRouteTrackerThread, routeNumberLabel, TRACKER_FIELD_PREFIX } from './route-tracker.js';
 import { resolveTagIds, buildActionRow, swapForumTags } from './report-service.js';
 import { setThreadStatusEmoji, setThreadStatusAndClose, setReportCloseHandler } from './title-sync.js';
@@ -120,7 +120,7 @@ const waitCommitStore = createStore<{
 }>('wait-commit-pending', { ttl: 15 * 60 * 1000 });
 
 // Required commit per Ready message; lives as long as the report stays WAITING FOR USER.
-const readyReqStore = createStore<{ requiredSha: string; requiredShort: string; branch: string; requiredDate?: string }>(
+const readyReqStore = createStore<{ requiredShort: string; requiredDate?: string }>(
   'wait-ready-req', { ttl: 30 * 24 * 60 * 60 * 1000 });
 
 function buildAdditionalReportModal(customId: string): ModalBuilder {
@@ -241,9 +241,7 @@ async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, para
   const sent = await thread.send({ embeds: [embed], components: [row] });
   if (params.mode === 'newer' && params.requiredSha) {
     await readyReqStore.set(sent.id, {
-      requiredSha: params.requiredSha,
       requiredShort: params.requiredShort ?? params.requiredSha.slice(0, 7),
-      branch: params.branch ?? '',
       requiredDate: params.requiredDate,
     });
   }
@@ -922,7 +920,7 @@ export class BotReportActions {
     parsed.public = isPublic;
     parsed.rlogsAvailable = rlogsAvailable;
 
-    // Newer-commit reopen gate: reject before anything is posted or tracked
+    // Newer-build reopen gate: reject before anything is posted or tracked
     if (ready && readyMsgId) {
       const req = await readyReqStore.get(readyMsgId);
       if (req) {
@@ -931,21 +929,11 @@ export class BotReportActions {
           await interaction.editReply({ content: "Couldn't read this route's commit (make sure logs are uploaded). Nothing was submitted — the report is still **WAITING FOR USER**; try again once logs are up." });
           return;
         }
-        const routeShort = meta.git_commit.slice(0, 7);
-        const routeWhen = discordTimestamp(meta.git_commit_date);
-        const cmp = await compareCommits(req.requiredSha, meta.git_commit);
-        if (cmp === 'older') {
+        if (isStaleBuild(meta.git_commit_date, req.requiredDate)) {
+          const routeShort = meta.git_commit.slice(0, 7);
+          const routeWhen = discordTimestamp(meta.git_commit_date);
           const reqWhen = req.requiredDate ? discordTimestamp(req.requiredDate) : null;
-          await interaction.editReply({ content: `Route **rejected** — it's on an older build than required: route commit \`${routeShort}\`${routeWhen ? ` (committed ${routeWhen})` : ''} vs required \`${req.requiredShort}\`${reqWhen ? ` (committed ${reqWhen})` : ''}. Nothing was submitted — the report is still **WAITING FOR USER**; submit a route from a newer commit.` });
-          return;
-        }
-        if (cmp === 'diverged') {
-          const reqWhen = req.requiredDate ? discordTimestamp(req.requiredDate) : null;
-          await interaction.editReply({ content: `Route **rejected** — its commit \`${routeShort}\`${routeWhen ? ` (committed ${routeWhen})` : ''} has **diverged** from the required commit \`${req.requiredShort}\`${reqWhen ? ` (committed ${reqWhen})` : ''} on the **${req.branch}** branch — neither is an ancestor of the other (the branch may have been rebased). Record a fresh route on an up-to-date **${req.branch}** build. Nothing was submitted — the report is still **WAITING FOR USER**.` });
-          return;
-        }
-        if (cmp === 'unknown') {
-          await interaction.editReply({ content: `Couldn't verify this route's commit (\`${routeShort}\`${routeWhen ? `, committed ${routeWhen}` : ''}) against \`${loadConfig().mainRepo}\` — it may be a local/forked build. Nothing was submitted — the report is still **WAITING FOR USER**.` });
+          await interaction.editReply({ content: `Route **rejected** — it's from an older build than required: route commit \`${routeShort}\`${routeWhen ? ` (committed ${routeWhen})` : ''} predates required \`${req.requiredShort}\`${reqWhen ? ` (committed ${reqWhen})` : ''}. Nothing was submitted — the report is still **WAITING FOR USER**; test on a newer build and submit a fresh route.` });
           return;
         }
       }

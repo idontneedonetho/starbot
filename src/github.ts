@@ -22,10 +22,8 @@ interface GitHubCommit {
   };
 }
 
-// Unauthenticated GitHub API allows 60 req/hr per IP. Both endpoints are
-// LRU-cached to stay well under that: branch commit lists for 5 minutes
-// (≤ 24 req/hr across the two branches), and compare results indefinitely —
-// a comparison between two fixed SHAs never changes.
+// Unauthenticated GitHub API allows 60 req/hr per IP. Branch commit lists are
+// LRU-cached for 5 minutes (≤ 24 req/hr across the two branches) to stay under it.
 const GITHUB_HEADERS = { Accept: 'application/vnd.github+json' } as const;
 
 const COMMITS_CACHE_TTL_MS = 5 * 60_000;
@@ -69,42 +67,4 @@ export async function fetchCommitChoices(): Promise<CommitChoice[]> {
   const bySha = new Map<string, CommitChoice>();
   for (const c of sorted) if (!bySha.has(c.sha)) bySha.set(c.sha, c);
   return [...bySha.values()].slice(0, 25); // Discord select menus cap at 25 options
-}
-
-export type CompareResult = 'ok' | 'older' | 'diverged' | 'unknown';
-
-const compareCache = new LRUCache<string, CompareResult>({ max: 500 });
-
-export async function compareCommits(base: string, head: string): Promise<CompareResult> {
-  const { mainRepo } = loadConfig();
-  const key = `${mainRepo}:${base}...${head}`;
-  const cached = compareCache.get(key);
-  if (cached) return cached;
-  try {
-    const res = await fetch(
-      `https://api.github.com/repos/${mainRepo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`,
-      { headers: GITHUB_HEADERS },
-    );
-    if (!res.ok) {
-      log.warn({ base, head, status: res.status }, 'GitHub compare request failed');
-      return 'unknown';
-    }
-    const data = await res.json() as { status?: string };
-    // 'diverged' (neither commit is an ancestor — e.g. a rebased branch, or a route on
-    // a different branch than required) is its own verdict, distinct from 'older' and
-    // from the 'unknown' we return for 404/errors. Callers message it differently.
-    const result: CompareResult = data.status === 'ahead' || data.status === 'identical'
-      ? 'ok'
-      : data.status === 'behind'
-        ? 'older'
-        : data.status === 'diverged'
-          ? 'diverged'
-          : 'unknown';
-    // Safe to cache: a verdict between two fixed SHAs never changes (error 'unknown's below aren't cached).
-    compareCache.set(key, result);
-    return result;
-  } catch (err) {
-    log.warn({ err, base, head }, 'GitHub compare request errored');
-    return 'unknown';
-  }
 }
