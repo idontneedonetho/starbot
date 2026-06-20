@@ -247,8 +247,8 @@ async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, para
   }
 }
 
-// Flip the "Waiting for User" message to a green completed state: disable the
-// Ready button and note what satisfied the request (feedback / submitted route).
+// Flip the "Waiting for User" message to a green completed state, dropping its
+// buttons and noting what satisfied the request (feedback / submitted route).
 async function completeReadyMessage(thread: ThreadChannel, msgId: string, note: string): Promise<void> {
   const msg = await thread.messages.fetch(msgId).catch(() => null);
   if (!msg) return;
@@ -258,22 +258,7 @@ async function completeReadyMessage(thread: ThreadChannel, msgId: string, note: 
         .setTitle('✅ User Responded')
         .addFields({ name: '\u200B', value: note })]
     : [];
-  // Keep the disabled Fixed button too, else editing the row drops the sibling button.
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId('ready_done')
-      .setLabel('Ready')
-      .setStyle(ButtonStyle.Success)
-      .setEmoji('✅')
-      .setDisabled(true),
-    new ButtonBuilder()
-      .setCustomId('fixed_done')
-      .setLabel('My Issue is Fixed')
-      .setStyle(ButtonStyle.Success)
-      .setEmoji('🎉')
-      .setDisabled(true),
-  );
-  await msg.edit({ embeds, components: [row] }).catch(err => log.warn({ err }, 'Failed to complete Ready message'));
+  await msg.edit({ embeds, components: [] }).catch(err => log.warn({ err }, 'Failed to complete Ready message'));
 }
 
 // Find the report's route tracker thread via the OP embed field, creating it
