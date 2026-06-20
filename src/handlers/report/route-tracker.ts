@@ -12,6 +12,7 @@ import { LRUCache } from 'lru-cache';
 import { loadConfig } from '../../config.js';
 import { createLogger } from '../../logger.js';
 import { COLORS, formatGitBranch, formatGitCommit } from '../../util.js';
+import { stripLeadingEmoji } from './title-sync.js';
 import {
   parseRouteComponents,
   fetchRouteMetadata,
@@ -268,10 +269,10 @@ export async function createRouteTrackerThread(
 ): Promise<{ url: string; threadId: string } | null> {
   const routesForum = await getForum(guild, config.routesChannelId);
   if (!routesForum) return null;
-
+  const title = stripLeadingEmoji(publicThreadTitle).trimStart();
   const primaryLink = primaryRoute ? routeLinkMarkdown(primaryRoute) : null;
 
-  const existing = await findRouteThread(routesForum, publicThreadTitle);
+  const existing = await findRouteThread(routesForum, title);
   if (existing) {
     if (primaryLink) {
       const starter = await existing.fetchStarterMessage();
@@ -295,7 +296,7 @@ export async function createRouteTrackerThread(
 
   const routeEmbed = new EmbedBuilder()
     .setColor(COLORS.amber)
-    .setTitle(publicThreadTitle)
+    .setTitle(title)
     .setFooter({ text: STATUS_LEGEND })
     .setTimestamp();
   if (primaryLink) {
@@ -303,7 +304,7 @@ export async function createRouteTrackerThread(
   }
 
   const routesThread = await routesForum.threads.create({
-    name: publicThreadTitle,
+    name: title,
     message: { embeds: [routeEmbed] },
   });
 

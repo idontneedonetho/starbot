@@ -45,7 +45,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function stripLeadingEmoji(name: string): string {
+export function stripLeadingEmoji(name: string): string {
   for (const e of KNOWN_TITLE_EMOJIS) {
     if (name.startsWith(e)) return name.slice(e.length);
   }
