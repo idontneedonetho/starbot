@@ -939,6 +939,11 @@ export class BotReportActions {
           await interaction.editReply({ content: `Route **rejected** — it's on an older build than required: route commit \`${routeShort}\`${routeWhen ? ` (committed ${routeWhen})` : ''} vs required \`${req.requiredShort}\`${reqWhen ? ` (committed ${reqWhen})` : ''}. Nothing was submitted — the report is still **WAITING FOR USER**; submit a route from a newer commit.` });
           return;
         }
+        if (cmp === 'diverged') {
+          const reqWhen = req.requiredDate ? discordTimestamp(req.requiredDate) : null;
+          await interaction.editReply({ content: `Route **rejected** — its commit \`${routeShort}\`${routeWhen ? ` (committed ${routeWhen})` : ''} has **diverged** from the required commit \`${req.requiredShort}\`${reqWhen ? ` (committed ${reqWhen})` : ''} on the **${req.branch}** branch — neither is an ancestor of the other (the branch may have been rebased). Record a fresh route on an up-to-date **${req.branch}** build. Nothing was submitted — the report is still **WAITING FOR USER**.` });
+          return;
+        }
         if (cmp === 'unknown') {
           await interaction.editReply({ content: `Couldn't verify this route's commit (\`${routeShort}\`${routeWhen ? `, committed ${routeWhen}` : ''}) against \`${loadConfig().mainRepo}\` — it may be a local/forked build. Nothing was submitted — the report is still **WAITING FOR USER**.` });
           return;

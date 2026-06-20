@@ -69,9 +69,11 @@ export async function fetchCommitChoices(): Promise<CommitChoice[]> {
     .slice(0, 25); // Discord select menus cap at 25 options
 }
 
-const compareCache = new LRUCache<string, 'ok' | 'older' | 'unknown'>({ max: 500 });
+export type CompareResult = 'ok' | 'older' | 'diverged' | 'unknown';
 
-export async function compareCommits(base: string, head: string): Promise<'ok' | 'older' | 'unknown'> {
+const compareCache = new LRUCache<string, CompareResult>({ max: 500 });
+
+export async function compareCommits(base: string, head: string): Promise<CompareResult> {
   const { mainRepo } = loadConfig();
   const key = `${mainRepo}:${base}...${head}`;
   const cached = compareCache.get(key);
@@ -86,13 +88,16 @@ export async function compareCommits(base: string, head: string): Promise<'ok' |
       return 'unknown';
     }
     const data = await res.json() as { status?: string };
-    // 'diverged' (route on a different lineage, e.g. StarPilot vs Dom) is not 'older' —
-    // treat it as unverifiable rather than reject it as an out-of-date build.
-    const result = data.status === 'ahead' || data.status === 'identical'
-      ? 'ok' as const
+    // 'diverged' (neither commit is an ancestor — e.g. a rebased branch, or a route on
+    // a different branch than required) is its own verdict, distinct from 'older' and
+    // from the 'unknown' we return for 404/errors. Callers message it differently.
+    const result: CompareResult = data.status === 'ahead' || data.status === 'identical'
+      ? 'ok'
       : data.status === 'behind'
-        ? 'older' as const
-        : 'unknown' as const;
+        ? 'older'
+        : data.status === 'diverged'
+          ? 'diverged'
+          : 'unknown';
     // Safe to cache: a verdict between two fixed SHAs never changes (error 'unknown's below aren't cached).
     compareCache.set(key, result);
     return result;
