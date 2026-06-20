@@ -81,10 +81,15 @@ export function isRateLimit(err: unknown): boolean {
     && 'timeToReset' in err && typeof (err as { timeToReset?: unknown }).timeToReset === 'number';
 }
 
+// Thread-name edits hit a 2-per-10-min sublimit whose true wait is in `retryAfter`
+// / `sublimitTimeout`, NOT `timeToReset` (the ~15s general-bucket reset). Honoring
+// only timeToReset retries every ~20s and burns MAX_RATE_LIMIT_RETRIES before the
+// sublimit clears, abandoning the rename — so take the largest wait Discord gives.
 function retryDelay(err: unknown): number {
-  if (err != null && typeof err === 'object' && 'timeToReset' in err) {
-    const t = (err as { timeToReset?: number }).timeToReset;
-    if (typeof t === 'number' && t > 0) return t + 5_000;
+  if (err != null && typeof err === 'object') {
+    const e = err as { timeToReset?: number; retryAfter?: number; sublimitTimeout?: number };
+    const wait = Math.max(e.retryAfter ?? 0, e.sublimitTimeout ?? 0, e.timeToReset ?? 0);
+    if (wait > 0) return wait + 1_000;
   }
   return FALLBACK_RETRY_MS;
 }
