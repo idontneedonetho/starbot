@@ -764,7 +764,7 @@ export class BotReportActions {
 
       const noticeEmbed = new EmbedBuilder()
         .setColor(COLORS.blurple)
-        .setTitle('🔐 Closing')
+        .setTitle('🔐 Closed')
         .setDescription(`Closed by <@${interaction.user.id}>.`)
         .addFields(closingNoticeField(closeAt))
         .setTimestamp();
