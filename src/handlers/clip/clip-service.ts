@@ -389,7 +389,7 @@ export async function handleClipRequest(
   if (parsed.duration > config.maxDuration) {
     await sendEphemeral(interaction,
       'Duration Exceeds Limit',
-      `Requested **${Math.round(parsed.duration)}s** — maximum is **${config.maxDuration}s**.`,
+      `Requested **${Math.round(parsed.duration)}s** - maximum is **${config.maxDuration}s**.`,
     );
     return;
   }
@@ -419,7 +419,7 @@ export async function handleClipRequest(
         .setColor(COLORS.amber)
         .setTitle('Clip Too Large')
         .setDescription(
-          `Result is **${(data.byteLength / 1024 / 1024).toFixed(1)} MB** — Discord limit is ${maxFileMb} MB.\n` +
+          `Result is **${(data.byteLength / 1024 / 1024).toFixed(1)} MB** - Discord limit is ${maxFileMb} MB.\n` +
           `Try a lower \`file-size\` value (target was ${input.fileSize ?? 9} MB).`,
         );
       await interaction.editReply({ embeds: [embed] });

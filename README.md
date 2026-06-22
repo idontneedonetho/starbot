@@ -4,9 +4,9 @@ Discord bot for the StarPilot community: identity onboarding, structured bug/fee
 
 ## Features
 
-- **Identity Onboarding** — button sets server nickname + vehicle
-- **Structured Reports** — forum threads for bugs (with Route ID validation via comma.ai API), feedback, and feature requests
-- **Wiki Search** — mention the bot to search the community wiki with semantic embedding
+- **Identity Onboarding** - button sets server nickname + vehicle
+- **Structured Reports** - forum threads for bugs (with Route ID validation via comma.ai API), feedback, and feature requests
+- **Wiki Search** - mention the bot to search the community wiki with semantic embedding
 
 ## Setup
 

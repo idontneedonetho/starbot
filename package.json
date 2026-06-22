@@ -1,7 +1,7 @@
 {
   "name": "starbot",
   "version": "0.1.0",
-  "description": "StarPilot Discord bot — identity onboarding and report submission",
+  "description": "StarPilot Discord bot - identity onboarding and report submission",
   "private": true,
   "type": "module",
   "scripts": {

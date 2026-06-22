@@ -84,7 +84,7 @@ export function isRateLimit(err: unknown): boolean {
 // Thread-name edits hit a 2-per-10-min sublimit whose true wait is in `retryAfter`
 // / `sublimitTimeout`, NOT `timeToReset` (the ~15s general-bucket reset). Honoring
 // only timeToReset retries every ~20s and burns MAX_RATE_LIMIT_RETRIES before the
-// sublimit clears, abandoning the rename — so take the largest wait Discord gives.
+// sublimit clears, abandoning the rename - so take the largest wait Discord gives.
 export function retryDelay(err: unknown): number {
   if (err != null && typeof err === 'object') {
     const e = err as { timeToReset?: number; retryAfter?: number; sublimitTimeout?: number };
@@ -174,7 +174,7 @@ function kickWorker(thread: ThreadChannel): void {
   void syncWorker(thread).catch(err => log.warn({ err, threadId: thread.id }, 'title sync worker crashed'));
 }
 
-// On non-rate-limit errors, logs and gives up — once past the first attempt
+// On non-rate-limit errors, logs and gives up - once past the first attempt
 // there's nothing actionable to surface to the user.
 async function syncWorker(thread: ThreadChannel): Promise<void> {
   if (syncing.has(thread.id)) return;
@@ -186,7 +186,7 @@ async function syncWorker(thread: ThreadChannel): Promise<void> {
       if (!entry) break;
 
       // If a pending close already landed (thread archived) but we crashed before
-      // clearing it, treat it as done — re-editing would unarchive a closed report.
+      // clearing it, treat it as done - re-editing would unarchive a closed report.
       if (entry.close && thread.archived) {
         await clearEntry(thread.id);
         break;
@@ -225,7 +225,7 @@ export async function setThreadStatusEmoji(thread: ThreadChannel, status: Report
   await applyTitle(thread, status, false);
 }
 
-// Returns true if deferred (rate limited) — caller should tell the user it may take a moment.
+// Returns true if deferred (rate limited) - caller should tell the user it may take a moment.
 export function setThreadStatusAndClose(thread: ThreadChannel, status: ReportStatus): Promise<boolean> {
   return applyTitle(thread, status, true);
 }

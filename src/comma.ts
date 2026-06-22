@@ -173,7 +173,7 @@ export function replaceRouteIds(
   text: string,
   routes: ExtractedRoute[],
   // Renders the replacement for a numbered route; unnumbered routes (dedicated) are
-  // stripped to '' — already shown as the primary tracker entry. Left to the caller so
+  // stripped to '' - already shown as the primary tracker entry. Left to the caller so
   // this module stays agnostic of the destination's markup (e.g. Discord markdown).
   formatLabel: (routeNumber: number) => string,
 ): string {

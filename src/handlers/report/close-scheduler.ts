@@ -73,7 +73,7 @@ async function fire(threadId: string): Promise<void> {
     await mutate(index => { delete index[threadId]; });
     return;
   }
-  // Strip the countdown before closing — an archived thread can't be edited afterward.
+  // Strip the countdown before closing - an archived thread can't be edited afterward.
   await stripClosingNotice(ch, entry.noticeMessageId);
   const result = await tryStatusClose(ch, entry.status);
   if (!result.done) {

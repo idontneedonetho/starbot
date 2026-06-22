@@ -87,7 +87,7 @@ async function closeThread(thread: ThreadChannel, guild: import('discord.js').Gu
   if (!forum) return;
   await swapForumTags(thread, forum, { remove: ['OPEN', 'WAITING FOR DEV', 'WAITING FOR USER'], add: ['CLOSED'] });
   // No .catch: a rate-limit must propagate so title-sync can retry. Lock before
-  // archive — archiving first blocks the lock edit.
+  // archive - archiving first blocks the lock edit.
   if (!thread.locked) await thread.setLocked(true);
   if (!thread.archived) await thread.setArchived(true);
 }
@@ -172,7 +172,7 @@ async function notifyAssigneeReady(thread: ThreadChannel, respondingUserId: stri
   const assigneeId = starter?.embeds[0]?.fields?.find(f => f.name === '👤 Assigned to')?.value.match(/<@(\d+)>/)?.[1];
   if (!assigneeId || assigneeId === respondingUserId) return;
   await thread.send({
-    content: `🔔 <@${assigneeId}> — <@${respondingUserId}> marked this **ready for another look**.${link ? ` [View their response](${link})` : ''}`,
+    content: `🔔 <@${assigneeId}> - <@${respondingUserId}> marked this **ready for another look**.${link ? ` [View their response](${link})` : ''}`,
     allowedMentions: { users: [assigneeId] },
   }).catch(err => log.warn({ err }, 'Failed to ping assignee on ready'));
 }
@@ -211,7 +211,7 @@ async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, para
     .setDescription(`${params.message ? params.message + '\n\n' : ''}${action}${required}`)
     .setTimestamp();
 
-  // With no resolvable submitter, a 'sub' Ready and the Fixed button reject everyone —
+  // With no resolvable submitter, a 'sub' Ready and the Fixed button reject everyone -
   // fall back to an ungated Ready and drop Fixed.
   if (!params.submitterId) {
     log.warn({ threadId: thread.id, ticketId: params.ticketId }, 'No submitter resolved; posting ungated Ready without Fixed button');
@@ -338,11 +338,11 @@ export class BotReportActions {
 
     const pendingClose = await getScheduledClose(thread.id);
     if (pendingClose) {
-      await interaction.reply({ content: `This report is closing <t:${Math.floor(pendingClose.closeAt / 1000)}:R> — it can't be reopened until then.`, flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: `This report is closing <t:${Math.floor(pendingClose.closeAt / 1000)}:R> - it can't be reopened until then.`, flags: MessageFlags.Ephemeral });
       return;
     }
 
-    // Launched from the ephemeral Staff Actions select — acknowledge against that
+    // Launched from the ephemeral Staff Actions select - acknowledge against that
     // message so the dropdown gets replaced instead of left dangling
     if (interaction.isFromMessage()) {
       await interaction.deferUpdate();
@@ -376,14 +376,14 @@ export class BotReportActions {
         .setCustomId(`wcommit_${interaction.id}`)
         .setPlaceholder('Select the minimum required commit…')
         .addOptions(choices.map(c => {
-          const label = `${c.branch} ${c.short} — ${c.subject}`;
-          // plain text only — Discord doesn't render <t:…> markup in option descriptions
+          const label = `${c.branch} ${c.short} - ${c.subject}`;
+          // plain text only - Discord doesn't render <t:…> markup in option descriptions
           const when = c.date ? c.date.replace('T', ' ').replace(/Z$/, ' UTC') : null;
           const ago = c.date ? timeAgo(c.date) : null;
           return {
             label: label.length > 100 ? label.slice(0, 99) + '…' : label,
             value: c.sha,
-            description: when ? (ago ? `${when} — ${ago}` : when) : undefined,
+            description: when ? (ago ? `${when} - ${ago}` : when) : undefined,
           };
         }));
       await interaction.editReply({
@@ -454,7 +454,7 @@ export class BotReportActions {
 
     const committed = requiredDate ? discordTimestamp(requiredDate) : null;
     await interaction.update({
-      content: `Report marked **WAITING FOR USER** — required commit \`${requiredShort}\` (${branch}${committed ? `, committed ${committed}` : ''}) or newer.`,
+      content: `Report marked **WAITING FOR USER** - required commit \`${requiredShort}\` (${branch}${committed ? `, committed ${committed}` : ''}) or newer.`,
       components: [],
     });
   }
@@ -473,7 +473,7 @@ export class BotReportActions {
     if (mode === 'anytime') {
       const modal = new ModalBuilder()
         .setCustomId(`readyfb_modal_${ticketId}_${interaction.message.id}`)
-        .setTitle('Ready — Feedback');
+        .setTitle('Ready - Feedback');
       const feedbackInput = new TextInputBuilder({
         custom_id: 'feedback',
         style: TextInputStyle.Paragraph,
@@ -546,7 +546,7 @@ export class BotReportActions {
     }
     await setThreadStatusEmoji(thread, 'waiting-for-dev');
     await completeReadyMessage(thread, msgId, feedbackMsg
-      ? `Feedback submitted by <@${interaction.user.id}> — [view it](${feedbackMsg.url})`
+      ? `Feedback submitted by <@${interaction.user.id}> - [view it](${feedbackMsg.url})`
       : `Marked ready by <@${interaction.user.id}>`);
     await notifyAssigneeReady(thread, interaction.user.id, feedbackMsg?.url);
 
@@ -575,7 +575,7 @@ export class BotReportActions {
 
     const modal = new ModalBuilder()
       .setCustomId(`fixed_modal_${ticketId}_${interaction.message.id}`)
-      .setTitle('Confirm — Issue Resolved?');
+      .setTitle('Confirm - Issue Resolved?');
     const noteInput = new TextInputBuilder({
       custom_id: 'note',
       style: TextInputStyle.Paragraph,
@@ -639,7 +639,7 @@ export class BotReportActions {
     }
 
     await scheduleClose(thread, 'resolved', closeAt, noticeMsg?.id ?? '');
-    await interaction.editReply({ content: `Thanks! This report will close as resolved <t:${Math.floor(closeAt / 1000)}:R> — add any final notes before then.` });
+    await interaction.editReply({ content: `Thanks! This report will close as resolved <t:${Math.floor(closeAt / 1000)}:R> - add any final notes before then.` });
   }
 
   @ButtonComponent({ id: /^staff_actions_/ })
@@ -680,7 +680,7 @@ export class BotReportActions {
 
     const pendingClose = await getScheduledClose(thread.id);
     if (pendingClose) {
-      await interaction.reply({ content: `This report is closing <t:${Math.floor(pendingClose.closeAt / 1000)}:R> — staff actions are locked until then.`, flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: `This report is closing <t:${Math.floor(pendingClose.closeAt / 1000)}:R> - staff actions are locked until then.`, flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -928,14 +928,14 @@ export class BotReportActions {
       if (req) {
         const meta = await fetchRouteMetadata(dongleId, routeName);
         if (!meta) {
-          await interaction.editReply({ content: "Couldn't read this route's commit (make sure logs are uploaded). Nothing was submitted — the report is still **WAITING FOR USER**; try again once logs are up." });
+          await interaction.editReply({ content: "Couldn't read this route's commit (make sure logs are uploaded). Nothing was submitted - the report is still **WAITING FOR USER**; try again once logs are up." });
           return;
         }
         if (isStaleBuild(meta.git_commit_date, req.requiredDate)) {
           const routeShort = meta.git_commit.slice(0, 7);
           const routeWhen = discordTimestamp(meta.git_commit_date);
           const reqWhen = req.requiredDate ? discordTimestamp(req.requiredDate) : null;
-          await interaction.editReply({ content: `Route **rejected** — it's from an older build than required: route commit \`${routeShort}\`${routeWhen ? ` (committed ${routeWhen})` : ''} predates required \`${req.requiredShort}\`${reqWhen ? ` (committed ${reqWhen})` : ''}. Nothing was submitted — the report is still **WAITING FOR USER**; test on a newer build and submit a fresh route.` });
+          await interaction.editReply({ content: `Route **rejected** - it's from an older build than required: route commit \`${routeShort}\`${routeWhen ? ` (committed ${routeWhen})` : ''} predates required \`${req.requiredShort}\`${reqWhen ? ` (committed ${reqWhen})` : ''}. Nothing was submitted - the report is still **WAITING FOR USER**; test on a newer build and submit a fresh route.` });
           return;
         }
       }
@@ -1002,7 +1002,7 @@ export class BotReportActions {
           .catch(err => log.warn({ err }, 'Failed to swap forum tags for WAITING FOR DEV'));
       }
       await setThreadStatusEmoji(thread, 'waiting-for-dev');
-      await completeReadyMessage(thread, readyMsgId, `A new route was submitted by <@${interaction.user.id}> — [Additional Report #${additionalReportId}](${msg.url})`);
+      await completeReadyMessage(thread, readyMsgId, `A new route was submitted by <@${interaction.user.id}> - [Additional Report #${additionalReportId}](${msg.url})`);
       await readyReqStore.delete(readyMsgId);
       await notifyAssigneeReady(thread, interaction.user.id, msg.url);
       lifecycleNote = ' The report is now marked **WAITING FOR DEV**.';
@@ -1055,7 +1055,7 @@ export class BotReportActions {
       const mergeDeferred = await setThreadStatusAndClose(source, 'closed');
       if (mergeDeferred) {
         await interaction.followUp({
-          content: 'Closing the source thread — it may take a moment if Discord is rate-limiting us.',
+          content: 'Closing the source thread - it may take a moment if Discord is rate-limiting us.',
           flags: MessageFlags.Ephemeral,
         }).catch(() => {});
       }

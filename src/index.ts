@@ -35,7 +35,7 @@ function shutdown() {
 
 process.on('unhandledRejection', (err) => {
   // A DiscordAPIError is almost always a single bad request (expired interaction,
-  // invalid form body, missing perms) — log it and keep running rather than letting
+  // invalid form body, missing perms) - log it and keep running rather than letting
   // one interaction take the whole bot down. Anything else is treated as fatal.
   if (err instanceof DiscordAPIError) {
     log.error({ err }, 'Unhandled DiscordAPIError (non-fatal)');
