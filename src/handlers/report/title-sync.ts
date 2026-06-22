@@ -18,6 +18,7 @@ const LEGACY_TYPE_EMOJIS = ['🐛', '💬', '✨'];
 const KNOWN_TITLE_EMOJIS = [...Object.values(STATUS_EMOJI), ...LEGACY_TYPE_EMOJIS];
 
 const FALLBACK_RETRY_MS = 10 * 60 * 1000;
+const NON_RATE_LIMIT_RETRY_MS = 60 * 1000;
 const MAX_RATE_LIMIT_RETRIES = 10;
 const TITLE_INDEX_KEY = 'pending';
 
@@ -32,6 +33,20 @@ const titleStore = createStore<Record<string, PendingEntry>>('title-sync');
 
 const syncing = new Set<string>();
 let client: Client | null = null;
+
+// Shared by applyTitle, syncWorker, and close-scheduler's timer so they can't race
+// each other's thread renames against the 2-per-10-min sublimit. Hold it per REST
+// attempt only, never across a retry sleep, or a rate-limit wait would stall closes.
+const threadOps = new Map<string, Promise<unknown>>();
+
+export function withThreadLock<T>(threadId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = threadOps.get(threadId) ?? Promise.resolve();
+  const run = prev.then(() => fn(), () => fn());
+  const tail = run.then(() => undefined, () => undefined);
+  threadOps.set(threadId, tail);
+  void tail.then(() => { if (threadOps.get(threadId) === tail) threadOps.delete(threadId); });
+  return run;
+}
 
 // Report close is owned by report-actions; it's injected here so the deferred
 // worker (and restart recovery) can finalize a close without an import cycle.
@@ -136,36 +151,38 @@ async function runClose(thread: ThreadChannel): Promise<void> {
 // Rename before close so a rename never fires on an already-archived thread.
 // Returns true when deferred to the background worker (rate-limited).
 async function applyTitle(thread: ThreadChannel, status: ReportStatus, close: boolean): Promise<boolean> {
-  const desired = computeStatusTitle(thread.name, status, ticketIdFor(thread));
+  return withThreadLock(thread.id, async () => {
+    const desired = computeStatusTitle(thread.name, status, ticketIdFor(thread));
 
-  if (thread.name !== desired) {
-    try {
-      await thread.setName(desired);
-    } catch (err) {
-      if (isRateLimit(err)) {
-        await persistEntry(thread.id, { status, close });
-        kickWorker(thread);
-        return true;
+    if (thread.name !== desired) {
+      try {
+        await thread.setName(desired);
+      } catch (err) {
+        if (isRateLimit(err)) {
+          await persistEntry(thread.id, { status, close });
+          kickWorker(thread);
+          return true;
+        }
+        log.warn({ err, threadId: thread.id }, 'title rename failed (non-rate-limit); leaving title unchanged');
       }
-      log.warn({ err, threadId: thread.id }, 'title rename failed (non-rate-limit); leaving title unchanged');
     }
-  }
 
-  if (close) {
-    try {
-      await runClose(thread);
-    } catch (err) {
-      if (isRateLimit(err)) {
-        await persistEntry(thread.id, { status, close: true });
-        kickWorker(thread);
-        return true;
+    if (close) {
+      try {
+        await runClose(thread);
+      } catch (err) {
+        if (isRateLimit(err)) {
+          await persistEntry(thread.id, { status, close: true });
+          kickWorker(thread);
+          return true;
+        }
+        log.warn({ err, threadId: thread.id }, 'close failed (non-rate-limit); abandoning');
       }
-      log.warn({ err, threadId: thread.id }, 'close failed (non-rate-limit); abandoning');
     }
-  }
 
-  await clearEntry(thread.id);
-  return false;
+    await clearEntry(thread.id);
+    return false;
+  });
 }
 
 // Fire-and-forget the worker without ever rejecting: an unhandled rejection
@@ -192,10 +209,19 @@ async function syncWorker(thread: ThreadChannel): Promise<void> {
         break;
       }
 
-      const desired = computeStatusTitle(thread.name, entry.status, ticketIdFor(thread));
       try {
-        if (thread.name !== desired) await thread.setName(desired);
-        if (entry.close) await runClose(thread);
+        await withThreadLock(thread.id, async () => {
+          const desired = computeStatusTitle(thread.name, entry.status, ticketIdFor(thread));
+          if (thread.name !== desired) {
+            try {
+              await thread.setName(desired);
+            } catch (err) {
+              if (isRateLimit(err)) throw err;
+              log.warn({ err, threadId: thread.id }, 'deferred rename failed (non-rate-limit); closing without it');
+            }
+          }
+          if (entry.close) await runClose(thread);
+        });
       } catch (err) {
         if (isRateLimit(err)) {
           if (++rateLimitRetries > MAX_RATE_LIMIT_RETRIES) {
@@ -233,16 +259,23 @@ export function setThreadStatusAndClose(thread: ThreadChannel, status: ReportSta
 export async function tryStatusClose(
   thread: ThreadChannel,
   status: ReportStatus,
-): Promise<{ done: true } | { done: false; retryMs: number }> {
-  const desired = computeStatusTitle(thread.name, status, ticketIdFor(thread));
+): Promise<{ done: true } | { done: false; retryMs: number; rateLimited: boolean }> {
   try {
-    if (thread.name !== desired) await thread.setName(desired);
+    const desired = computeStatusTitle(thread.name, status, ticketIdFor(thread));
+    if (thread.name !== desired) {
+      try {
+        await thread.setName(desired);
+      } catch (err) {
+        if (isRateLimit(err)) throw err;
+        log.warn({ err, threadId: thread.id }, 'scheduled close rename failed (non-rate-limit); closing without it');
+      }
+    }
     await runClose(thread);
     return { done: true };
   } catch (err) {
-    if (isRateLimit(err)) return { done: false, retryMs: retryDelay(err) };
-    log.warn({ err, threadId: thread.id }, 'scheduled close failed (non-rate-limit); abandoning');
-    return { done: true };
+    if (isRateLimit(err)) return { done: false, retryMs: retryDelay(err), rateLimited: true };
+    log.warn({ err, threadId: thread.id }, 'scheduled close failed (non-rate-limit); will retry');
+    return { done: false, retryMs: NON_RATE_LIMIT_RETRY_MS, rateLimited: false };
   }
 }
 

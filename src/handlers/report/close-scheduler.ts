@@ -2,11 +2,13 @@ import type { Client, ThreadChannel } from 'discord.js';
 import { EmbedBuilder } from 'discord.js';
 import { createStore } from '../../store.js';
 import { createLogger } from '../../logger.js';
-import { tryStatusClose, type ReportStatus } from './title-sync.js';
+import { tryStatusClose, withThreadLock, type ReportStatus } from './title-sync.js';
 
 const log = createLogger('close-scheduler');
 
 export const CLOSE_DELAY_MS = 5 * 60 * 1000;
+
+const MAX_NON_RATE_LIMIT_RETRIES = 5;
 
 const CLOSING_PREFIX = '⏳ Closing ';
 
@@ -14,6 +16,7 @@ interface ScheduledClose {
   status: ReportStatus;
   closeAt: number;
   noticeMessageId: string;
+  attempts?: number;
 }
 
 const store = createStore<Record<string, ScheduledClose>>('close-schedule');
@@ -53,9 +56,15 @@ export async function scheduleClose(
   status: ReportStatus,
   closeAt: number,
   noticeMessageId: string,
-): Promise<void> {
-  await mutate(index => { index[thread.id] = { status, closeAt, noticeMessageId }; });
-  armTimer(thread.id, closeAt);
+): Promise<boolean> {
+  let scheduled = false;
+  await mutate(index => {
+    if (index[thread.id]) return;
+    index[thread.id] = { status, closeAt, noticeMessageId };
+    scheduled = true;
+  });
+  if (scheduled) armTimer(thread.id, closeAt);
+  return scheduled;
 }
 
 function armTimer(threadId: string, closeAt: number): void {
@@ -75,10 +84,21 @@ async function fire(threadId: string): Promise<void> {
   }
   // Strip the countdown before closing - an archived thread can't be edited afterward.
   await stripClosingNotice(ch, entry.noticeMessageId);
-  const result = await tryStatusClose(ch, entry.status);
+  const result = await withThreadLock(threadId, () => tryStatusClose(ch, entry.status));
   if (!result.done) {
+    const attempts = (entry.attempts ?? 0) + (result.rateLimited ? 0 : 1);
+    if (attempts > MAX_NON_RATE_LIMIT_RETRIES) {
+      log.warn({ threadId }, 'scheduled close exhausted non-rate-limit retries; abandoning');
+      await mutate(index => { delete index[threadId]; });
+      return;
+    }
     const closeAt = Date.now() + result.retryMs;
-    await mutate(index => { if (index[threadId]) index[threadId].closeAt = closeAt; });
+    await mutate(index => {
+      if (index[threadId]) {
+        index[threadId].closeAt = closeAt;
+        index[threadId].attempts = attempts;
+      }
+    });
     await stripClosingNotice(ch, entry.noticeMessageId, closeAt);
     armTimer(threadId, closeAt);
     return;

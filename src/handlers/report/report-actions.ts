@@ -120,6 +120,8 @@ const waitCommitStore = createStore<{
 const readyReqStore = createStore<{ requiredShort: string; requiredDate?: string }>(
   'wait-ready-req', { ttl: 30 * 24 * 60 * 60 * 1000 });
 
+const CLOSING_LOCK_MSG = "This report is closing soon - it can't be reopened until then.";
+
 function buildAdditionalReportModal(customId: string): ModalBuilder {
   const modal = new ModalBuilder()
     .setCustomId(customId)
@@ -338,7 +340,7 @@ export class BotReportActions {
 
     const pendingClose = await getScheduledClose(thread.id);
     if (pendingClose) {
-      await interaction.reply({ content: "This report is closing soon - it can't be reopened until then.", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: CLOSING_LOCK_MSG, flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -433,6 +435,8 @@ export class BotReportActions {
       return;
     }
 
+    await interaction.deferUpdate();
+
     const requiredSha = interaction.values[0];
     const choice = pending.choices?.find(c => c.sha === requiredSha);
     const requiredShort = choice?.short ?? requiredSha.slice(0, 7);
@@ -453,7 +457,7 @@ export class BotReportActions {
     await waitCommitStore.delete(token);
 
     const committed = requiredDate ? discordTimestamp(requiredDate) : null;
-    await interaction.update({
+    await interaction.editReply({
       content: `Report marked **WAITING FOR USER** - required commit \`${requiredShort}\` (${branch}${committed ? `, committed ${committed}` : ''}) or newer.`,
       components: [],
     });
@@ -462,6 +466,11 @@ export class BotReportActions {
   @ButtonComponent({ id: /^ready_/ })
   async handleReadyButton(interaction: ButtonInteraction) {
     const [, mode, audience, ticketId, submitterId] = interaction.customId.split('_');
+
+    if (interaction.channelId && await getScheduledClose(interaction.channelId)) {
+      await interaction.reply({ content: CLOSING_LOCK_MSG, flags: MessageFlags.Ephemeral });
+      return;
+    }
 
     const isStaff = interaction.member instanceof GuildMember && hasStaffRole(interaction.member);
     const allowed = isStaff || (audience === 'sub' ? interaction.user.id === submitterId : true);
@@ -504,6 +513,11 @@ export class BotReportActions {
     const guild = interaction.guild;
     if (!guild) {
       await interaction.editReply({ content: 'Could not resolve guild.' });
+      return;
+    }
+
+    if (await getScheduledClose(thread.id)) {
+      await interaction.editReply({ content: CLOSING_LOCK_MSG });
       return;
     }
 
@@ -557,6 +571,11 @@ export class BotReportActions {
   async handleFixedButton(interaction: ButtonInteraction) {
     const [, , ticketId, submitterId] = interaction.customId.split('_');
 
+    if (interaction.channelId && await getScheduledClose(interaction.channelId)) {
+      await interaction.reply({ content: CLOSING_LOCK_MSG, flags: MessageFlags.Ephemeral });
+      return;
+    }
+
     if (interaction.user.id !== submitterId) {
       const isStaff = interaction.member instanceof GuildMember && hasStaffRole(interaction.member);
       if (isStaff) {
@@ -605,6 +624,11 @@ export class BotReportActions {
       return;
     }
 
+    if (await getScheduledClose(thread.id)) {
+      await interaction.editReply({ content: CLOSING_LOCK_MSG });
+      return;
+    }
+
     const note = interaction.fields.getTextInputValue('note');
 
     const closeAt = nextCloseAt();
@@ -638,7 +662,12 @@ export class BotReportActions {
       }
     }
 
-    await scheduleClose(thread, 'resolved', closeAt, noticeMsg?.id ?? '');
+    const scheduled = await scheduleClose(thread, 'resolved', closeAt, noticeMsg?.id ?? '');
+    if (!scheduled) {
+      await noticeMsg?.delete().catch(() => {});
+      await interaction.editReply({ content: 'This report is already closing.' });
+      return;
+    }
     await interaction.editReply({ content: 'Thanks! This report will close as resolved shortly - add any final notes before then.' });
   }
 
@@ -770,7 +799,12 @@ export class BotReportActions {
         .setTimestamp();
       const noticeMsg = await thread.send({ embeds: [noticeEmbed] }).catch(err => { log.warn({ err }, 'Failed to post closing notice'); return null; });
 
-      await scheduleClose(thread, 'closed', closeAt, noticeMsg?.id ?? '');
+      const scheduled = await scheduleClose(thread, 'closed', closeAt, noticeMsg?.id ?? '');
+      if (!scheduled) {
+        await noticeMsg?.delete().catch(() => {});
+        await interaction.followUp({ content: 'This report is already closing.', flags: MessageFlags.Ephemeral });
+        return;
+      }
       await interaction.followUp({ content: 'Report will close shortly.', flags: MessageFlags.Ephemeral });
     }
   }
@@ -950,6 +984,11 @@ export class BotReportActions {
     const guild = interaction.guild;
     if (!guild) {
       await interaction.editReply({ content: 'Could not resolve guild.' });
+      return;
+    }
+
+    if (ready && await getScheduledClose(thread.id)) {
+      await interaction.editReply({ content: CLOSING_LOCK_MSG });
       return;
     }
 
