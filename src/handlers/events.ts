@@ -16,6 +16,7 @@ import { setIndex, setInitFailed, getInitStatus, getIndex } from '../wiki/wiki.j
 import { searchWiki, formatWikiResults } from '../wiki/searcher.js';
 import { WikiRateLimit } from './guards.js';
 import { initTitleSync } from './report/title-sync.js';
+import { initCloseScheduler } from './report/close-scheduler.js';
 import { COLORS } from '../util.js';
 
 const log = createLogger('events');
@@ -120,6 +121,7 @@ export class BotEvents {
     log.info('StarPilot bot is ready');
 
     initTitleSync(client);
+    initCloseScheduler(client);
 
     const commitHash = getCommitHash();
     if (commitHash) {

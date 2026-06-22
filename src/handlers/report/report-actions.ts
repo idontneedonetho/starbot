@@ -28,6 +28,7 @@ import { fetchCommitChoices, type CommitChoice } from '../../github.js';
 import { getForum, addAdditionalRoutesToTracker, createRouteTrackerThread, routeNumberLabel, TRACKER_FIELD_PREFIX } from './route-tracker.js';
 import { resolveTagIds, buildActionRow, swapForumTags } from './report-service.js';
 import { setThreadStatusEmoji, setThreadStatusAndClose, setReportCloseHandler } from './title-sync.js';
+import { scheduleClose, getScheduledClose, nextCloseAt, closingNoticeField } from './close-scheduler.js';
 
 const log = createLogger('report-actions');
 
@@ -335,6 +336,12 @@ export class BotReportActions {
       return;
     }
 
+    const pendingClose = await getScheduledClose(thread.id);
+    if (pendingClose) {
+      await interaction.reply({ content: `This report is closing <t:${Math.floor(pendingClose.closeAt / 1000)}:R> — it can't be reopened until then.`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+
     // Launched from the ephemeral Staff Actions select — acknowledge against that
     // message so the dropdown gets replaced instead of left dangling
     if (interaction.isFromMessage()) {
@@ -601,13 +608,15 @@ export class BotReportActions {
 
     const note = interaction.fields.getTextInputValue('note');
 
+    const closeAt = nextCloseAt();
     const resolvedEmbed = new EmbedBuilder()
       .setColor(COLORS.green)
       .setTitle('✅ Resolved by User')
       .setFooter({ text: `Closed by ${interaction.user.tag}` })
       .setTimestamp();
     if (note) resolvedEmbed.setDescription(note);
-    await thread.send({ content: `<@${interaction.user.id}> marked this issue as fixed.`, embeds: [resolvedEmbed] }).catch(err => log.warn({ err }, 'Failed to post resolved embed'));
+    resolvedEmbed.addFields(closingNoticeField(closeAt));
+    const noticeMsg = await thread.send({ content: `<@${interaction.user.id}> marked this issue as fixed.`, embeds: [resolvedEmbed] }).catch(err => { log.warn({ err }, 'Failed to post resolved embed'); return null; });
 
     const waitMsg = await thread.messages.fetch(msgId).catch(() => null);
     if (waitMsg) {
@@ -630,10 +639,8 @@ export class BotReportActions {
       }
     }
 
-    const resolvedDeferred = await setThreadStatusAndClose(thread, 'resolved');
-    await interaction.editReply({ content: resolvedDeferred
-      ? 'Thanks! This report is being **closed** as resolved — the title and close may take a moment if Discord is rate-limiting us.'
-      : 'Thanks! This report has been **closed** as resolved.' });
+    await scheduleClose(thread, 'resolved', closeAt, noticeMsg?.id ?? '');
+    await interaction.editReply({ content: `Thanks! This report will close as resolved <t:${Math.floor(closeAt / 1000)}:R> — add any final notes before then.` });
   }
 
   @ButtonComponent({ id: /^staff_actions_/ })
@@ -669,6 +676,12 @@ export class BotReportActions {
     const guild = interaction.guild;
     if (!guild) {
       await interaction.reply({ content: 'Could not resolve guild.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const pendingClose = await getScheduledClose(thread.id);
+    if (pendingClose) {
+      await interaction.reply({ content: `This report is closing <t:${Math.floor(pendingClose.closeAt / 1000)}:R> — staff actions are locked until then.`, flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -739,6 +752,7 @@ export class BotReportActions {
       await setThreadStatusEmoji(thread, 'waiting-for-dev');
       await interaction.followUp({ content: 'You have been assigned to this report.', flags: MessageFlags.Ephemeral });
     } else {
+      const closeAt = nextCloseAt();
       const closeStarter = await thread.fetchStarterMessage();
       if (closeStarter) {
         const closeEmbed = closeStarter.embeds[0];
@@ -749,10 +763,16 @@ export class BotReportActions {
         }
       }
 
-      const closedDeferred = await setThreadStatusAndClose(thread, 'closed');
-      await interaction.followUp({ content: closedDeferred
-        ? 'Report closing — the title and close may take a moment if Discord is rate-limiting us.'
-        : 'Report closed.', flags: MessageFlags.Ephemeral });
+      const noticeEmbed = new EmbedBuilder()
+        .setColor(COLORS.blurple)
+        .setTitle('🔐 Closing')
+        .setDescription(`Closed by <@${interaction.user.id}>.`)
+        .addFields(closingNoticeField(closeAt))
+        .setTimestamp();
+      const noticeMsg = await thread.send({ embeds: [noticeEmbed] }).catch(err => { log.warn({ err }, 'Failed to post closing notice'); return null; });
+
+      await scheduleClose(thread, 'closed', closeAt, noticeMsg?.id ?? '');
+      await interaction.followUp({ content: `Report will close <t:${Math.floor(closeAt / 1000)}:R>.`, flags: MessageFlags.Ephemeral });
     }
   }
 
