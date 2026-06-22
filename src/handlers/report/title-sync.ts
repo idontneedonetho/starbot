@@ -230,6 +230,22 @@ export function setThreadStatusAndClose(thread: ThreadChannel, status: ReportSta
   return applyTitle(thread, status, true);
 }
 
+export async function tryStatusClose(
+  thread: ThreadChannel,
+  status: ReportStatus,
+): Promise<{ done: true } | { done: false; retryMs: number }> {
+  const desired = computeStatusTitle(thread.name, status, ticketIdFor(thread));
+  try {
+    if (thread.name !== desired) await thread.setName(desired);
+    await runClose(thread);
+    return { done: true };
+  } catch (err) {
+    if (isRateLimit(err)) return { done: false, retryMs: retryDelay(err) };
+    log.warn({ err, threadId: thread.id }, 'scheduled close failed (non-rate-limit); abandoning');
+    return { done: true };
+  }
+}
+
 export function initTitleSync(c: Client): void {
   client = c;
   void recoverPending();

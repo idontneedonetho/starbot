@@ -2,7 +2,7 @@ import type { Client, ThreadChannel } from 'discord.js';
 import { EmbedBuilder } from 'discord.js';
 import { createStore } from '../../store.js';
 import { createLogger } from '../../logger.js';
-import { setThreadStatusAndClose, type ReportStatus } from './title-sync.js';
+import { tryStatusClose, type ReportStatus } from './title-sync.js';
 
 const log = createLogger('close-scheduler');
 
@@ -69,11 +69,29 @@ async function fire(threadId: string): Promise<void> {
   const entry = (await readIndex())[threadId];
   if (!entry || !client) return;
   const ch = await client.channels.fetch(threadId).catch(() => null);
-  if (ch?.isThread()) {
-    await setThreadStatusAndClose(ch, entry.status);
-    await stripClosingNotice(ch, entry.noticeMessageId);
+  if (!ch?.isThread()) {
+    await mutate(index => { delete index[threadId]; });
+    return;
   }
+  const result = await tryStatusClose(ch, entry.status);
+  if (!result.done) {
+    const closeAt = Date.now() + result.retryMs;
+    await mutate(index => { if (index[threadId]) index[threadId].closeAt = closeAt; });
+    await updateClosingNotice(ch, entry.noticeMessageId, closeAt);
+    armTimer(threadId, closeAt);
+    return;
+  }
+  await stripClosingNotice(ch, entry.noticeMessageId);
   await mutate(index => { delete index[threadId]; });
+}
+
+async function updateClosingNotice(thread: ThreadChannel, messageId: string, closeAt: number): Promise<void> {
+  if (!messageId) return;
+  const msg = await thread.messages.fetch(messageId).catch(() => null);
+  const embed = msg?.embeds[0];
+  if (!msg || !embed) return;
+  const fields = (embed.fields ?? []).map(f => f.value.startsWith(CLOSING_PREFIX) ? closingNoticeField(closeAt) : f);
+  await msg.edit({ embeds: [EmbedBuilder.from(embed).setFields(fields)] }).catch(err => log.warn({ err }, 'Failed to update closing notice'));
 }
 
 async function stripClosingNotice(thread: ThreadChannel, messageId: string): Promise<void> {
