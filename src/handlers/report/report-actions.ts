@@ -338,7 +338,7 @@ export class BotReportActions {
 
     const pendingClose = await getScheduledClose(thread.id);
     if (pendingClose) {
-      await interaction.reply({ content: `This report is closing <t:${Math.floor(pendingClose.closeAt / 1000)}:R> - it can't be reopened until then.`, flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "This report is closing soon - it can't be reopened until then.", flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -639,7 +639,7 @@ export class BotReportActions {
     }
 
     await scheduleClose(thread, 'resolved', closeAt, noticeMsg?.id ?? '');
-    await interaction.editReply({ content: `Thanks! This report will close as resolved <t:${Math.floor(closeAt / 1000)}:R> - add any final notes before then.` });
+    await interaction.editReply({ content: 'Thanks! This report will close as resolved shortly - add any final notes before then.' });
   }
 
   @ButtonComponent({ id: /^staff_actions_/ })
@@ -680,7 +680,7 @@ export class BotReportActions {
 
     const pendingClose = await getScheduledClose(thread.id);
     if (pendingClose) {
-      await interaction.reply({ content: `This report is closing <t:${Math.floor(pendingClose.closeAt / 1000)}:R> - staff actions are locked until then.`, flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: 'This report is closing soon - staff actions are locked until then.', flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -771,7 +771,7 @@ export class BotReportActions {
       const noticeMsg = await thread.send({ embeds: [noticeEmbed] }).catch(err => { log.warn({ err }, 'Failed to post closing notice'); return null; });
 
       await scheduleClose(thread, 'closed', closeAt, noticeMsg?.id ?? '');
-      await interaction.followUp({ content: `Report will close <t:${Math.floor(closeAt / 1000)}:R>.`, flags: MessageFlags.Ephemeral });
+      await interaction.followUp({ content: 'Report will close shortly.', flags: MessageFlags.Ephemeral });
     }
   }
 
