@@ -13,16 +13,12 @@ export function dot(a: number[], b: number[]): number {
   return result;
 }
 
-// Plain-text relative time ("2 days ago") for surfaces where Discord timestamp
-// markup doesn't render, like select option descriptions. Null for unparsable dates.
 export function timeAgo(iso: string): string | null {
   const ms = Date.parse(iso);
   if (Number.isNaN(ms)) return null;
   return `${humanizeDuration(Date.now() - ms, { largest: 1, round: true })} ago`;
 }
 
-// Discord renders <t:unix:style> markup in message content (not in plain-text
-// surfaces like select option descriptions). Returns null for unparsable dates.
 export function discordTimestamp(iso: string, style: 't' | 'T' | 'd' | 'D' | 'f' | 'F' | 'R' = 'f'): string | null {
   const ms = Date.parse(iso);
   if (Number.isNaN(ms)) return null;

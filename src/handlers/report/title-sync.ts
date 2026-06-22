@@ -133,13 +133,8 @@ async function runClose(thread: ThreadChannel): Promise<void> {
   await closeHandler(thread);
 }
 
-/**
- * Apply the status emoji to a thread title, then optionally close it. The rename
- * and the close run in that order so a rename can never fire on an already-closed
- * (archived) thread. Returns true when the work was deferred to the background
- * worker because of a rate limit, so callers can tell the user it may take a
- * moment. Non-rate-limit failures are logged and abandoned.
- */
+// Rename before close so a rename never fires on an already-archived thread.
+// Returns true when deferred to the background worker (rate-limited).
 async function applyTitle(thread: ThreadChannel, status: ReportStatus, close: boolean): Promise<boolean> {
   const desired = computeStatusTitle(thread.name, status, ticketIdFor(thread));
 
@@ -179,9 +174,8 @@ function kickWorker(thread: ThreadChannel): void {
   void syncWorker(thread).catch(err => log.warn({ err, threadId: thread.id }, 'title sync worker crashed'));
 }
 
-// Background worker that drains a thread's pending entry, retrying only on rate
-// limits. On any other error it logs and gives up — once we're past the first
-// attempt there's nothing actionable to surface.
+// On non-rate-limit errors, logs and gives up — once past the first attempt
+// there's nothing actionable to surface to the user.
 async function syncWorker(thread: ThreadChannel): Promise<void> {
   if (syncing.has(thread.id)) return;
   syncing.add(thread.id);
@@ -227,16 +221,11 @@ async function syncWorker(thread: ThreadChannel): Promise<void> {
   }
 }
 
-/** Set the status emoji on a thread title (cosmetic; no close). */
 export async function setThreadStatusEmoji(thread: ThreadChannel, status: ReportStatus): Promise<void> {
   await applyTitle(thread, status, false);
 }
 
-/**
- * Set the terminal status emoji and close the thread, in that order. Returns
- * true if the operation was deferred (rate limited) and will finish in the
- * background — the caller should tell the user it may take a moment.
- */
+// Returns true if deferred (rate limited) — caller should tell the user it may take a moment.
 export function setThreadStatusAndClose(thread: ThreadChannel, status: ReportStatus): Promise<boolean> {
   return applyTitle(thread, status, true);
 }

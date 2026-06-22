@@ -85,10 +85,8 @@ async function closeThread(thread: ThreadChannel, guild: import('discord.js').Gu
   const forum = await getForum(guild, config.forumChannelId);
   if (!forum) return;
   await swapForumTags(thread, forum, { remove: ['OPEN', 'WAITING FOR DEV', 'WAITING FOR USER'], add: ['CLOSED'] });
-  // No .catch here: a rate-limit rejection must propagate so title-sync's worker
-  // can retry the close. setArchived runs last (archiving first would block the
-  // lock edit). Skip edits already applied so each retry advances to the step
-  // that actually failed instead of re-spending the rate-limit budget.
+  // No .catch: a rate-limit must propagate so title-sync can retry. Lock before
+  // archive — archiving first blocks the lock edit.
   if (!thread.locked) await thread.setLocked(true);
   if (!thread.archived) await thread.setArchived(true);
 }
@@ -113,13 +111,11 @@ async function updateThreadButtons(thread: ThreadChannel): Promise<string | null
   return ticketId;
 }
 
-// Pending "newer commit" request between staff modal submit and commit pick. choices
-// is snapshotted so the select handler doesn't refetch a list that may have rotated.
+// choices is snapshotted so the select handler doesn't refetch a list that may have rotated.
 const waitCommitStore = createStore<{
   message: string; audience: string; submitterId: string; ticketId: string; threadId: string; choices: CommitChoice[];
 }>('wait-commit-pending', { ttl: 15 * 60 * 1000 });
 
-// Required commit per Ready message; lives as long as the report stays WAITING FOR USER.
 const readyReqStore = createStore<{ requiredShort: string; requiredDate?: string }>(
   'wait-ready-req', { ttl: 30 * 24 * 60 * 60 * 1000 });
 
@@ -247,8 +243,6 @@ async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, para
   }
 }
 
-// Flip the "Waiting for User" message to a green completed state, dropping its
-// buttons and noting what satisfied the request (feedback / submitted route).
 async function completeReadyMessage(thread: ThreadChannel, msgId: string, note: string): Promise<void> {
   const msg = await thread.messages.fetch(msgId).catch(() => null);
   if (!msg) return;
@@ -261,8 +255,6 @@ async function completeReadyMessage(thread: ThreadChannel, msgId: string, note: 
   await msg.edit({ embeds, components: [] }).catch(err => log.warn({ err }, 'Failed to complete Ready message'));
 }
 
-// Find the report's route tracker thread via the OP embed field, creating it
-// (and recording the link on the OP) when missing.
 async function ensureTrackerThread(thread: ThreadChannel, guild: import('discord.js').Guild): Promise<{ url: string; threadId: string } | null> {
   const starter = await thread.fetchStarterMessage().catch(() => null);
   const embed = starter?.embeds[0];
@@ -562,8 +554,6 @@ export class BotReportActions {
     if (interaction.user.id !== submitterId) {
       const isStaff = interaction.member instanceof GuildMember && hasStaffRole(interaction.member);
       if (isStaff) {
-        // Staff can't resolve on a reporter's behalf, but if they meant to close it,
-        // point them at the same Staff Actions menu (which has Close).
         await interaction.reply({
           content: 'Only the original reporter can mark their issue as fixed. If closing this was intentional, use **Staff Actions → Close** below.',
           components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -914,7 +904,6 @@ export class BotReportActions {
     parsed.public = isPublic;
     parsed.rlogsAvailable = rlogsAvailable;
 
-    // Newer-build reopen gate: reject before anything is posted or tracked
     if (ready && readyMsgId) {
       const req = await readyReqStore.get(readyMsgId);
       if (req) {
@@ -951,8 +940,6 @@ export class BotReportActions {
       return;
     }
 
-    // Routes mentioned in the details get the same treatment as report bodies:
-    // validated, numbered [Route N] in the public text, and added to the tracker.
     const detailRoutes = details
       ? extractRouteIds(details).filter(r => (r.originalText ?? '').toLowerCase() !== trimmedInput.toLowerCase())
       : [];

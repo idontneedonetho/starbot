@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-// Keep the unit hermetic: no real GitHub calls, no .env required.
 vi.mock('./config.js', () => ({ loadConfig: () => ({ mainRepo: 'owner/repo' }) }));
 vi.mock('./logger.js', () => ({
   createLogger: () => ({ warn: () => {}, error: () => {}, info: () => {}, debug: () => {} }),

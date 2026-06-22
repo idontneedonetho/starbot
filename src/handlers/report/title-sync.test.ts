@@ -14,9 +14,6 @@ import { computeStatusTitle, isRateLimit, retryDelay } from './title-sync.js';
 const FALLBACK_RETRY_MS = 10 * 60 * 1000;
 
 describe('retryDelay', () => {
-  // BUG 1 regression: thread-name renames hit a 2/10-min sublimit whose true wait is
-  // in retryAfter/sublimitTimeout, not the short timeToReset. Using timeToReset alone
-  // made the worker give up before the window cleared.
   it('prefers retryAfter/sublimitTimeout over the shorter timeToReset', () => {
     expect(retryDelay({ timeToReset: 15_100, retryAfter: 323_050, sublimitTimeout: 323_050 }))
       .toBe(323_050 + 1_000);
@@ -42,8 +39,6 @@ describe('isRateLimit', () => {
 });
 
 describe('computeStatusTitle', () => {
-  // Title-defer: reports are created without the (id) suffix; it's folded in on the
-  // first status change, swapping the leading status emoji in the same edit.
   it('swaps the status emoji and adds the ticket id when absent', () => {
     expect(computeStatusTitle('🟠 Bug - Map Glitch', 'waiting-for-dev', '123'))
       .toBe('🔴 Bug - Map Glitch (123)');
