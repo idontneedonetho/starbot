@@ -10,8 +10,7 @@ import { fetchCommitChoices } from './github.js';
 afterEach(() => vi.unstubAllGlobals());
 
 describe('fetchCommitChoices', () => {
-  // Regression: branches share history, so the same commit appears on both. Option
-  // values must be unique or Discord rejects the whole select menu (50035).
+  // Regression: Discord rejects a select menu with duplicate option values (50035).
   it('dedupes commits shared across branches', async () => {
     const commit = (sha: string, date: string) => ({
       sha, commit: { message: 'build', committer: { date } },

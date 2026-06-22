@@ -434,7 +434,6 @@ export class BotReportActions {
     }
 
     const requiredSha = interaction.values[0];
-    // ?. — entries persisted before the choices snapshot existed won't have it.
     const choice = pending.choices?.find(c => c.sha === requiredSha);
     const requiredShort = choice?.short ?? requiredSha.slice(0, 7);
     const branch = choice?.branch ?? 'unknown';

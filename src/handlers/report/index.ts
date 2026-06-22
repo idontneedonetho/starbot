@@ -385,8 +385,6 @@ async function handleConfirmRoute(interaction: ButtonInteraction) {
   let routesThreadUrl: string | null = null;
   if (guild) {
     const route = { dongleId, routeName, iteration, public: true, rlogsAvailable: confirmCheck.rlogsAvailable };
-    // Resolve this report's tracker by the URL on its OP, not by name; only create
-    // one (and record the link) if the report doesn't have a tracker yet.
     const existingUrl = embed.fields?.find(f => f.value?.startsWith(TRACKER_FIELD_PREFIX))?.value?.match(/\]\((.+?)\)/)?.[1];
     const existingId = existingUrl?.split('/').pop();
     if (existingUrl && existingId) {

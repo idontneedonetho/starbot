@@ -62,8 +62,7 @@ async function fetchBranchCommits(branch: string): Promise<CommitChoice[]> {
 export async function fetchCommitChoices(): Promise<CommitChoice[]> {
   const perBranch = await Promise.all(COMMIT_BRANCHES.map(fetchBranchCommits));
   const sorted = perBranch.flat().sort((a, b) => b.date.localeCompare(a.date));
-  // The branches share history, so a commit can appear on both. Dedupe by sha:
-  // select-menu option values must be unique or Discord rejects the whole menu.
+  // Dedupe by sha: Discord rejects a select menu with duplicate option values.
   const bySha = new Map<string, CommitChoice>();
   for (const c of sorted) if (!bySha.has(c.sha)) bySha.set(c.sha, c);
   return [...bySha.values()].slice(0, 25); // Discord select menus cap at 25 options

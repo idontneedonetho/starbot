@@ -6,13 +6,8 @@ import { setThreadStatusAndClose, type ReportStatus } from './title-sync.js';
 
 const log = createLogger('close-scheduler');
 
-// A report stays open for this long after being marked done so participants can add
-// final notes; the close (status emoji + lock + archive) runs when it elapses. By
-// then the 2-per-10-min title-edit window has usually cleared, so the close lands
-// cleanly — and if it's still rate-limited, title-sync's worker retries.
 export const CLOSE_DELAY_MS = 5 * 60 * 1000;
 
-// Identifies the countdown line so it can be stripped from the notice once closed.
 const CLOSING_PREFIX = '⏳ Closing ';
 
 interface ScheduledClose {
@@ -30,7 +25,6 @@ async function readIndex(): Promise<Record<string, ScheduledClose>> {
   return (await store.get(INDEX_KEY)) ?? {};
 }
 
-// Serialize read-modify-write so concurrent schedules can't drop each other's entry.
 let chain: Promise<unknown> = Promise.resolve();
 function mutate(fn: (index: Record<string, ScheduledClose>) => void): Promise<void> {
   const run = chain.then(async () => {

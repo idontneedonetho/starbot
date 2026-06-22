@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-// title-sync touches the sqlite store + pino logger at import; stub both so the
-// pure helpers can be imported in isolation.
+// title-sync opens the sqlite store + pino logger at import; stub both.
 vi.mock('../../store.js', () => ({
   createStore: () => ({ get: async () => undefined, set: async () => {}, delete: async () => {} }),
 }));

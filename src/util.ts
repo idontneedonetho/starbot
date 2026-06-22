@@ -25,10 +25,8 @@ export function discordTimestamp(iso: string, style: 't' | 'T' | 'd' | 'D' | 'f'
   return `<t:${Math.floor(ms / 1000)}:${style}>`;
 }
 
-// True when a route's build commit predates the required commit — the reopen gate's
-// guard against testing on a stale build. Branches rebase and don't share history, so
-// this is a pure commit-DATE comparison, not git ancestry. Unparsable/missing dates
-// are treated as not stale (can't verify → don't block).
+// Branches rebase and share no history, so "newer" is a commit-date check, not git
+// ancestry. Unparsable/missing dates count as not-stale (can't verify → don't block).
 export function isStaleBuild(routeDate: string, requiredDate: string | undefined): boolean {
   const routeTime = Date.parse(routeDate);
   const reqTime = requiredDate ? Date.parse(requiredDate) : NaN;

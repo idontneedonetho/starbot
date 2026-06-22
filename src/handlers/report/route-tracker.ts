@@ -249,8 +249,7 @@ export async function handleRefreshRoutes(interaction: import('discord.js').Butt
   );
 }
 
-// Each report owns one tracker; callers resolve an existing one via the URL stored on
-// the report's OP embed, so this just creates a fresh tracker thread.
+// Callers resolve an existing tracker via the OP's stored URL; this only creates.
 export async function createRouteTrackerThread(
   guild: Guild,
   config: ReturnType<typeof loadConfig>,
