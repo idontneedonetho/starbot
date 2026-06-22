@@ -1,3 +1,5 @@
+import humanizeDuration from 'humanize-duration';
+
 export const COLORS = {
   blurple: 0x5865f2,
   amber: 0xf0b132,
@@ -9,6 +11,26 @@ export function dot(a: number[], b: number[]): number {
   let result = 0;
   for (let i = 0; i < a.length; i++) result += a[i] * b[i];
   return result;
+}
+
+export function timeAgo(iso: string): string | null {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return null;
+  return `${humanizeDuration(Date.now() - ms, { largest: 1, round: true })} ago`;
+}
+
+export function discordTimestamp(iso: string, style: 't' | 'T' | 'd' | 'D' | 'f' | 'F' | 'R' = 'f'): string | null {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return null;
+  return `<t:${Math.floor(ms / 1000)}:${style}>`;
+}
+
+// Branches rebase and share no history, so "newer" is a commit-date check, not git
+// ancestry. Unparsable/missing dates count as not-stale (can't verify → don't block).
+export function isStaleBuild(routeDate: string, requiredDate: string | undefined): boolean {
+  const routeTime = Date.parse(routeDate);
+  const reqTime = requiredDate ? Date.parse(requiredDate) : NaN;
+  return Number.isFinite(routeTime) && Number.isFinite(reqTime) && routeTime < reqTime;
 }
 
 export function githubRemoteParts(remote: string): { owner: string; repo: string } | null {

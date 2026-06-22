@@ -1,4 +1,4 @@
-import type { ForumChannel, ModalSubmitInteraction, ButtonInteraction } from 'discord.js';
+import type { ForumChannel, ModalSubmitInteraction, ButtonInteraction, ThreadChannel } from 'discord.js';
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -12,6 +12,7 @@ import { searchWiki, formatWikiResults } from '../../wiki/searcher.js';
 import { embedBatch } from '../../wiki/embedder.js';
 import { dot } from '../../util.js';
 import { getForum, createRouteTrackerThread, addAdditionalRoutesToTracker, encodeConfirmCustomId, buildConfirmRows, TRACKER_FIELD_PREFIX } from './route-tracker.js';
+import { STATUS_EMOJI, isRateLimit } from './title-sync.js';
 import type { ExtractedRoute, RouteValidation } from '../../comma.js';
 
 const log = createLogger('report-service');
@@ -35,6 +36,24 @@ export function buildActionRow(ticketId: string): ActionRowBuilder<ButtonBuilder
       .setStyle(ButtonStyle.Primary)
       .setEmoji('🛠️'),
   );
+}
+
+export async function swapForumTags(
+  thread: ThreadChannel,
+  forum: ForumChannel,
+  opts: { add?: string[]; remove?: string[] },
+): Promise<void> {
+  const removeNames = new Set(opts.remove ?? []);
+  const keep = (thread.appliedTags as string[]).filter(id => {
+    const tag = forum.availableTags.find(t => t.id === id);
+    return !tag || !removeNames.has(tag.name);
+  });
+  const addIds = opts.add ? resolveTagIds(forum, opts.add) : [];
+  await thread.setAppliedTags([...new Set([...keep, ...addIds])]).catch((err: unknown) => {
+    // Rate-limits must propagate so close paths can defer + retry (see closeThread).
+    if (isRateLimit(err)) throw err;
+    log.warn({ err }, 'Failed to swap forum tags');
+  });
 }
 
 function isContentWord(w: string): boolean {
@@ -105,18 +124,19 @@ export async function generateThreadTitle(input: string): Promise<string | null>
   return top10.map(({ word }) => word[0].toUpperCase() + word.slice(1)).join(' ');
 }
 
-export function formatThreadTitle(emoji: string, label: string, title: string | null, ticketId: string): string {
+export function formatThreadTitle(emoji: string, label: string, title: string | null, ticketId: string | null): string {
   const MAX = 100;
+  const suffix = ticketId ? ` (${ticketId})` : '';
   if (title) {
-    const raw = `${emoji} ${label} - ${title} (${ticketId})`;
+    const raw = `${emoji} ${label} - ${title}${suffix}`;
     if (raw.length <= MAX) return raw;
-    const overhead = `${emoji} ${label} -  (${ticketId})`.length;
+    const overhead = `${emoji} ${label} - ${suffix}`.length;
     const maxTitleLen = MAX - overhead;
-    if (maxTitleLen <= 1) return `${emoji} ${label} - ${ticketId}`;
+    if (maxTitleLen <= 1) return ticketId ? `${emoji} ${label} - ${ticketId}` : `${emoji} ${label}`;
     const truncated = title.slice(0, maxTitleLen - 1) + '\u2026';
-    return `${emoji} ${label} - ${truncated} (${ticketId})`;
+    return `${emoji} ${label} - ${truncated}${suffix}`;
   }
-  return `${emoji} ${label} - ${ticketId}`;
+  return ticketId ? `${emoji} ${label} - ${ticketId}` : `${emoji} ${label}`;
 }
 
 async function addWikiSuggestions(embed: EmbedBuilder, query: string): Promise<void> {
@@ -142,7 +162,6 @@ export async function submitReport(
     dedicatedRoute?: ExtractedRoute & RouteValidation;
     additionalRoutes: Array<ExtractedRoute & RouteValidation>;
     label: string;
-    emoji: string;
     tagNames: string[];
     primaryNonPublicRoute?: ExtractedRoute;
     footerNote?: string;
@@ -168,7 +187,9 @@ export async function submitReport(
   let thread;
   try {
     thread = await forum.threads.create({
-      name: formatThreadTitle(params.emoji, params.label, generatedTitle, '...'),
+      // Ticket id omitted here: adding it would need a post-create rename, spending
+      // one of the 2-per-10-min title edits. title-sync folds it in on first status change.
+      name: formatThreadTitle(STATUS_EMOJI['new'], params.label, generatedTitle, null),
       message: { content: `<@${interaction.user.id}>`, embeds: [params.embed] },
       appliedTags: tagIds,
     });
@@ -179,12 +200,6 @@ export async function submitReport(
   }
 
   const ticketId = String(parseInt(thread.id.slice(-7), 10));
-
-  try {
-    await thread.edit({ name: formatThreadTitle(params.emoji, params.label, generatedTitle, ticketId) });
-  } catch (err) {
-    log.error({ err }, 'Failed to rename thread');
-  }
 
   params.embed.setTitle(`${params.label} ${ticketId}`);
 

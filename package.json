@@ -1,14 +1,16 @@
 {
   "name": "starbot",
   "version": "0.1.0",
-  "description": "StarPilot Discord bot — identity onboarding and report submission",
+  "description": "StarPilot Discord bot - identity onboarding and report submission",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "NODE_NO_WARNINGS=1 tsx watch src/index.ts",
     "start": "NODE_NO_WARNINGS=1 tsx src/index.ts",
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.0.0",
@@ -17,6 +19,7 @@
     "discordx": "^11.0.0",
     "dotenv": "^17.0.0",
     "eventsource": "^4.1.0",
+    "humanize-duration": "^3.33.2",
     "keyv": "6.0.0-alpha.3",
     "lru-cache": "^11.5.1",
     "minisearch": "^7.0.0",
@@ -24,9 +27,11 @@
   },
   "devDependencies": {
     "@types/eventsource": "^1.1.15",
+    "@types/humanize-duration": "^3.27.4",
     "@types/node": "^25.0.0",
     "pino-pretty": "^13.1.3",
     "tsx": "^4.0.0",
-    "typescript": "^6.0.0"
+    "typescript": "^6.0.0",
+    "vitest": "^4.1.9"
   }
 }

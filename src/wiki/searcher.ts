@@ -90,5 +90,5 @@ export async function searchWiki(
 }
 
 export function formatWikiResults(results: WikiResult[]): string {
-  return results.map((r, i) => `${i + 1}. ${r.title} — <${r.url}>`).join('\n');
+  return results.map((r, i) => `${i + 1}. ${r.title} - <${r.url}>`).join('\n');
 }

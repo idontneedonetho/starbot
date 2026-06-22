@@ -16,7 +16,7 @@ RUN npm ci
 COPY src/ ./src/
 RUN npm run build
 
-# Production image — only built output + production deps
+# Production image - only built output + production deps
 FROM base AS production
 
 WORKDIR /app

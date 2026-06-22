@@ -15,6 +15,8 @@ import { buildIndex } from '../wiki/indexer.js';
 import { setIndex, setInitFailed, getInitStatus, getIndex } from '../wiki/wiki.js';
 import { searchWiki, formatWikiResults } from '../wiki/searcher.js';
 import { WikiRateLimit } from './guards.js';
+import { initTitleSync } from './report/title-sync.js';
+import { initCloseScheduler } from './report/close-scheduler.js';
 import { COLORS } from '../util.js';
 
 const log = createLogger('events');
@@ -92,7 +94,7 @@ export class BotEvents {
           .setDescription(
             '## 📝 Submit a Report\n\n' +
             'Encountered an issue with navigation? Have an idea for a new feature? Let us know!\n\n' +
-              `> **Bug reports** _require_ a public **route ID** — visible only to <@&${config.staffRole}>`,
+              `> **Bug reports** _require_ a public **route ID** - visible only to <@&${config.staffRole}>`,
           )
           .setColor(5822093),
       ],
@@ -117,6 +119,9 @@ export class BotEvents {
     const status = getInitStatus();
     log.info(`Wiki status: ${status}`);
     log.info('StarPilot bot is ready');
+
+    initTitleSync(client);
+    initCloseScheduler(client);
 
     const commitHash = getCommitHash();
     if (commitHash) {

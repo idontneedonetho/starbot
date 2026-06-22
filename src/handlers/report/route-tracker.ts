@@ -12,6 +12,7 @@ import { LRUCache } from 'lru-cache';
 import { loadConfig } from '../../config.js';
 import { createLogger } from '../../logger.js';
 import { COLORS, formatGitBranch, formatGitCommit } from '../../util.js';
+import { stripLeadingEmoji } from './title-sync.js';
 import {
   parseRouteComponents,
   fetchRouteMetadata,
@@ -104,7 +105,13 @@ export function buildConfirmRows(
   userId: string,
 ): ActionRowBuilder<ButtonBuilder>[] {
   const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+  // Different mentions (URL vs bare, different segments) can resolve to the same
+  // underlying route + iteration; dedupe so custom_ids stay unique.
+  const seen = new Set<string>();
   for (const r of routes) {
+    const key = `${r.dongleId}/${r.routeName}/${r.iteration ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     if (rows.length === 0 || rows[rows.length - 1].components.length >= 3) {
       rows.push(new ActionRowBuilder<ButtonBuilder>());
     }
@@ -242,17 +249,7 @@ export async function handleRefreshRoutes(interaction: import('discord.js').Butt
   );
 }
 
-async function findRouteThread(forum: ForumChannel, name: string): Promise<ThreadChannel | null> {
-  const cached = forum.threads.cache.find(t => t.name === name);
-  if (cached) return cached;
-  try {
-    const active = await forum.threads.fetchActive();
-    return active.threads.find(t => t.name === name) ?? null;
-  } catch {
-    return null;
-  }
-}
-
+// Callers resolve an existing tracker via the OP's stored URL; this only creates.
 export async function createRouteTrackerThread(
   guild: Guild,
   config: ReturnType<typeof loadConfig>,
@@ -262,34 +259,12 @@ export async function createRouteTrackerThread(
 ): Promise<{ url: string; threadId: string } | null> {
   const routesForum = await getForum(guild, config.routesChannelId);
   if (!routesForum) return null;
-
+  const title = stripLeadingEmoji(publicThreadTitle).trimStart();
   const primaryLink = primaryRoute ? routeLinkMarkdown(primaryRoute) : null;
-
-  const existing = await findRouteThread(routesForum, publicThreadTitle);
-  if (existing) {
-    if (primaryLink) {
-      const starter = await existing.fetchStarterMessage();
-      if (starter) {
-        const embed = starter.embeds[0];
-        if (embed) {
-          const updated = EmbedBuilder.from(embed);
-          const desc = migrateFieldsToDescription(embed, updated);
-          if (!desc.includes(primaryLink)) {
-            updated.setDescription((desc ? desc + '\n' : '') + '**Additional Routes**\n' + primaryLink);
-            await starter.edit({ embeds: [updated] });
-          }
-        }
-      }
-    }
-    if (primaryRoute?.public) {
-      await postRouteMetadata(existing, primaryRoute.dongleId, primaryRoute.routeName);
-    }
-    return { url: existing.url, threadId: existing.id };
-  }
 
   const routeEmbed = new EmbedBuilder()
     .setColor(COLORS.amber)
-    .setTitle(publicThreadTitle)
+    .setTitle(title)
     .setFooter({ text: STATUS_LEGEND })
     .setTimestamp();
   if (primaryLink) {
@@ -297,7 +272,7 @@ export async function createRouteTrackerThread(
   }
 
   const routesThread = await routesForum.threads.create({
-    name: publicThreadTitle,
+    name: title,
     message: { embeds: [routeEmbed] },
   });
 

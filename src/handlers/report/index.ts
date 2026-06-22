@@ -13,7 +13,6 @@ import {
   LabelBuilder,
   EmbedBuilder,
   MessageFlags,
-  StringSelectMenuBuilder,
 } from 'discord.js';
 import { loadConfig } from '../../config.js';
 import { createLogger } from '../../logger.js';
@@ -34,6 +33,7 @@ import {
   parseConfirmCustomId,
   handleRefreshRoutes,
   createRouteTrackerThread,
+  addAdditionalRoutesToTracker,
   TRACKER_FIELD_PREFIX,
 } from './route-tracker.js';
 import {
@@ -56,7 +56,6 @@ interface BugReportInput {
   observed: string;
   expected: string;
   reproIntent: string;
-  branch: string;
 }
 
 interface PendingBugReport extends BugReportInput {
@@ -131,16 +130,6 @@ async function showBugModal(interaction: ButtonInteraction) {
   });
   modal.addLabelComponents(new LabelBuilder().setLabel('Route ID').setDescription('Visible only to server admins').setTextInputComponent(routeIdInput));
 
-  const branchSelect = new StringSelectMenuBuilder()
-    .setCustomId('current_branch')
-    .setPlaceholder('Select a branch\u2026')
-    .setMinValues(1)
-    .addOptions(
-      { label: 'StarPilot', value: 'StarPilot', description: 'The default branch, if you\'re unsure, pick this.', default: true },
-      { label: 'Dom', value: 'Dom', description: 'Bleeding edge' },
-    );
-  modal.addLabelComponents(new LabelBuilder().setLabel('Branch').setDescription('The branch you were on when you experienced this issue').setStringSelectMenuComponent(branchSelect));
-
   const observedInput = new TextInputBuilder({
     custom_id: 'observed',
     style: TextInputStyle.Paragraph,
@@ -195,20 +184,17 @@ async function showFeedbackModal(interaction: ButtonInteraction, type: string) {
 async function handleBugSubmit(interaction: ModalSubmitInteraction) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  const branchValues = interaction.fields.getStringSelectValues('current_branch');
   const input: BugReportInput = {
     routeIdInput: interaction.fields.getTextInputValue('route_id'),
     observed: interaction.fields.getTextInputValue('observed'),
     expected: interaction.fields.getTextInputValue('expected'),
     reproIntent: interaction.fields.getTextInputValue('reproducibility_intent'),
-    branch: branchValues.length > 0 ? branchValues[0] : 'StarPilot',
   };
 
   log.info({
     userId: interaction.user.id,
     type: 'bug',
     route: input.routeIdInput,
-    branch: input.branch,
     observed: input.observed,
     expected: input.expected,
     reproIntent: input.reproIntent,
@@ -222,7 +208,7 @@ async function processBugReport(
   input: BugReportInput,
   force: boolean,
 ): Promise<void> {
-  const { routeIdInput, observed, expected, reproIntent, branch } = input;
+  const { routeIdInput, observed, expected, reproIntent } = input;
 
   let components: RouteComponents;
   try {
@@ -304,7 +290,6 @@ async function processBugReport(
     .setColor(COLORS.blurple)
     .addFields(
       { name: 'By', value: `<@${interaction.user.id}>`, inline: true },
-      { name: 'Branch', value: branch, inline: true },
       { name: 'Observed Behavior', value: cleanObserved },
       { name: 'Expected Behavior', value: cleanExpected },
       { name: 'Reproducibility, Intent & Details', value: cleanReproIntent },
@@ -320,8 +305,7 @@ async function processBugReport(
     dedicatedRoute: dedicatedValidated,
     additionalRoutes: numberedAdditional,
     label: 'Bug Report',
-    emoji: '\uD83D\uDC1B',
-    tagNames: ['OPEN', 'BUG'],
+    tagNames: ['OPEN', 'BUG', 'WAITING FOR DEV'],
     primaryNonPublicRoute: primaryNonPublic,
     footerNote: ' with ticket ID / wiki / route link',
   });
@@ -400,17 +384,17 @@ async function handleConfirmRoute(interaction: ButtonInteraction) {
   const guild = interaction.guild;
   let routesThreadUrl: string | null = null;
   if (guild) {
-    const result = await createRouteTrackerThread(
-      guild, config,
-      { dongleId, routeName, iteration, public: true, rlogsAvailable: confirmCheck.rlogsAvailable },
-      thread.url, thread.name,
-    );
-    if (result) {
-      routesThreadUrl = result.url;
-      if (!embed.fields?.some((f: { value?: string }) => f.value?.includes(result.url))) {
-        updated.addFields(
-          { name: '\u200B', value: `${TRACKER_FIELD_PREFIX}(${result.url})` },
-        );
+    const route = { dongleId, routeName, iteration, public: true, rlogsAvailable: confirmCheck.rlogsAvailable };
+    const existingUrl = embed.fields?.find(f => f.value?.startsWith(TRACKER_FIELD_PREFIX))?.value?.match(/\]\((.+?)\)/)?.[1];
+    const existingId = existingUrl?.split('/').pop();
+    if (existingUrl && existingId) {
+      await addAdditionalRoutesToTracker(guild, existingId, [route]);
+      routesThreadUrl = existingUrl;
+    } else {
+      const result = await createRouteTrackerThread(guild, config, route, thread.url, thread.name);
+      if (result) {
+        routesThreadUrl = result.url;
+        updated.addFields({ name: '\u200B', value: `${TRACKER_FIELD_PREFIX}(${result.url})` });
       }
     }
   }
@@ -426,7 +410,6 @@ async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, type: '
 
   const content = interaction.fields.getTextInputValue('content');
 
-  const emoji = type === 'feedback' ? '\uD83D\uDCAC' : '\u2728';
   const label = type === 'feedback' ? 'Feedback' : 'Feature Request';
 
   log.info({
@@ -456,7 +439,6 @@ async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, type: '
     wikiQuery: cleanContent,
     additionalRoutes: numberedRoutes,
     label,
-    emoji,
-    tagNames: type === 'feedback' ? ['OPEN', 'FEEDBACK'] : ['OPEN', 'FEATURE REQUEST'],
+    tagNames: type === 'feedback' ? ['OPEN', 'FEEDBACK', 'WAITING FOR DEV'] : ['OPEN', 'FEATURE REQUEST', 'WAITING FOR DEV'],
   });
 }
