@@ -260,6 +260,14 @@ async function findRouteThread(forum: ForumChannel, name: string): Promise<Threa
   }
 }
 
+// Tracker name keyed per report: drop the status emoji and any existing ticket
+// suffix from the report title, then tag on the ticket id — so two reports about the
+// same route/title each get their own tracker instead of sharing the first one's.
+export function trackerThreadName(publicThreadTitle: string, ticketId: string): string {
+  const base = stripLeadingEmoji(publicThreadTitle).trimStart().replace(/\s*\(\d+\)\s*$/, '');
+  return ticketId ? `${base} (${ticketId})` : base;
+}
+
 export async function createRouteTrackerThread(
   guild: Guild,
   config: ReturnType<typeof loadConfig>,
@@ -269,7 +277,9 @@ export async function createRouteTrackerThread(
 ): Promise<{ url: string; threadId: string } | null> {
   const routesForum = await getForum(guild, config.routesChannelId);
   if (!routesForum) return null;
-  const title = stripLeadingEmoji(publicThreadTitle).trimStart();
+  const reportThreadId = threadUrl.split('/').pop() ?? '';
+  const ticketId = /^\d+$/.test(reportThreadId) ? String(parseInt(reportThreadId.slice(-7), 10)) : '';
+  const title = trackerThreadName(publicThreadTitle, ticketId);
   const primaryLink = primaryRoute ? routeLinkMarkdown(primaryRoute) : null;
 
   const existing = await findRouteThread(routesForum, title);
