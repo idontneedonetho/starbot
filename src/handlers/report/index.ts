@@ -33,6 +33,7 @@ import {
   parseConfirmCustomId,
   handleRefreshRoutes,
   createRouteTrackerThread,
+  addAdditionalRoutesToTracker,
   TRACKER_FIELD_PREFIX,
 } from './route-tracker.js';
 import {
@@ -383,17 +384,19 @@ async function handleConfirmRoute(interaction: ButtonInteraction) {
   const guild = interaction.guild;
   let routesThreadUrl: string | null = null;
   if (guild) {
-    const result = await createRouteTrackerThread(
-      guild, config,
-      { dongleId, routeName, iteration, public: true, rlogsAvailable: confirmCheck.rlogsAvailable },
-      thread.url, thread.name,
-    );
-    if (result) {
-      routesThreadUrl = result.url;
-      if (!embed.fields?.some((f: { value?: string }) => f.value?.includes(result.url))) {
-        updated.addFields(
-          { name: '\u200B', value: `${TRACKER_FIELD_PREFIX}(${result.url})` },
-        );
+    const route = { dongleId, routeName, iteration, public: true, rlogsAvailable: confirmCheck.rlogsAvailable };
+    // Resolve this report's tracker by the URL on its OP, not by name; only create
+    // one (and record the link) if the report doesn't have a tracker yet.
+    const existingUrl = embed.fields?.find(f => f.value?.startsWith(TRACKER_FIELD_PREFIX))?.value?.match(/\]\((.+?)\)/)?.[1];
+    const existingId = existingUrl?.split('/').pop();
+    if (existingUrl && existingId) {
+      await addAdditionalRoutesToTracker(guild, existingId, [route]);
+      routesThreadUrl = existingUrl;
+    } else {
+      const result = await createRouteTrackerThread(guild, config, route, thread.url, thread.name);
+      if (result) {
+        routesThreadUrl = result.url;
+        updated.addFields({ name: '\u200B', value: `${TRACKER_FIELD_PREFIX}(${result.url})` });
       }
     }
   }

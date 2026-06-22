@@ -249,25 +249,8 @@ export async function handleRefreshRoutes(interaction: import('discord.js').Butt
   );
 }
 
-async function findRouteThread(forum: ForumChannel, name: string): Promise<ThreadChannel | null> {
-  const cached = forum.threads.cache.find(t => t.name === name);
-  if (cached) return cached;
-  try {
-    const active = await forum.threads.fetchActive();
-    return active.threads.find(t => t.name === name) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-// Tracker name keyed per report: drop the status emoji and any existing ticket
-// suffix from the report title, then tag on the ticket id — so two reports about the
-// same route/title each get their own tracker instead of sharing the first one's.
-export function trackerThreadName(publicThreadTitle: string, ticketId: string): string {
-  const base = stripLeadingEmoji(publicThreadTitle).trimStart().replace(/\s*\(\d+\)\s*$/, '');
-  return ticketId ? `${base} (${ticketId})` : base;
-}
-
+// Each report owns one tracker; callers resolve an existing one via the URL stored on
+// the report's OP embed, so this just creates a fresh tracker thread.
 export async function createRouteTrackerThread(
   guild: Guild,
   config: ReturnType<typeof loadConfig>,
@@ -277,32 +260,8 @@ export async function createRouteTrackerThread(
 ): Promise<{ url: string; threadId: string } | null> {
   const routesForum = await getForum(guild, config.routesChannelId);
   if (!routesForum) return null;
-  const reportThreadId = threadUrl.split('/').pop() ?? '';
-  const ticketId = /^\d+$/.test(reportThreadId) ? String(parseInt(reportThreadId.slice(-7), 10)) : '';
-  const title = trackerThreadName(publicThreadTitle, ticketId);
+  const title = stripLeadingEmoji(publicThreadTitle).trimStart();
   const primaryLink = primaryRoute ? routeLinkMarkdown(primaryRoute) : null;
-
-  const existing = await findRouteThread(routesForum, title);
-  if (existing) {
-    if (primaryLink) {
-      const starter = await existing.fetchStarterMessage();
-      if (starter) {
-        const embed = starter.embeds[0];
-        if (embed) {
-          const updated = EmbedBuilder.from(embed);
-          const desc = migrateFieldsToDescription(embed, updated);
-          if (!desc.includes(primaryLink)) {
-            updated.setDescription((desc ? desc + '\n' : '') + '**Additional Routes**\n' + primaryLink);
-            await starter.edit({ embeds: [updated] });
-          }
-        }
-      }
-    }
-    if (primaryRoute?.public) {
-      await postRouteMetadata(existing, primaryRoute.dongleId, primaryRoute.routeName);
-    }
-    return { url: existing.url, threadId: existing.id };
-  }
 
   const routeEmbed = new EmbedBuilder()
     .setColor(COLORS.amber)
