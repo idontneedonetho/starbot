@@ -73,36 +73,27 @@ async function fire(threadId: string): Promise<void> {
     await mutate(index => { delete index[threadId]; });
     return;
   }
+  // Strip the countdown before closing — an archived thread can't be edited afterward.
+  await stripClosingNotice(ch, entry.noticeMessageId);
   const result = await tryStatusClose(ch, entry.status);
   if (!result.done) {
     const closeAt = Date.now() + result.retryMs;
     await mutate(index => { if (index[threadId]) index[threadId].closeAt = closeAt; });
-    await updateClosingNotice(ch, entry.noticeMessageId, closeAt);
+    await stripClosingNotice(ch, entry.noticeMessageId, closeAt);
     armTimer(threadId, closeAt);
     return;
   }
-  await stripClosingNotice(ch, entry.noticeMessageId);
   await mutate(index => { delete index[threadId]; });
 }
 
-async function updateClosingNotice(thread: ThreadChannel, messageId: string, closeAt: number): Promise<void> {
+async function stripClosingNotice(thread: ThreadChannel, messageId: string, replaceWith?: number): Promise<void> {
   if (!messageId) return;
   const msg = await thread.messages.fetch(messageId).catch(() => null);
   const embed = msg?.embeds[0];
   if (!msg || !embed) return;
-  const fields = (embed.fields ?? []).map(f => f.value.startsWith(CLOSING_PREFIX) ? closingNoticeField(closeAt) : f);
-  await msg.edit({ embeds: [EmbedBuilder.from(embed).setFields(fields)] }).catch(err => log.warn({ err }, 'Failed to update closing notice'));
-}
-
-async function stripClosingNotice(thread: ThreadChannel, messageId: string): Promise<void> {
-  if (!messageId) return;
-  const msg = await thread.messages.fetch(messageId).catch(() => null);
-  const embed = msg?.embeds[0];
-  if (!msg || !embed) return;
-  const updated = EmbedBuilder.from(embed).setFields(
-    (embed.fields ?? []).filter(f => !f.value.startsWith(CLOSING_PREFIX)),
-  );
-  await msg.edit({ embeds: [updated] }).catch(err => log.warn({ err }, 'Failed to strip closing notice'));
+  const fields = (embed.fields ?? []).filter(f => !f.value.startsWith(CLOSING_PREFIX));
+  if (replaceWith !== undefined) fields.push(closingNoticeField(replaceWith));
+  await msg.edit({ embeds: [EmbedBuilder.from(embed).setFields(fields)] }).catch(err => log.warn({ err }, 'Failed to edit closing notice'));
 }
 
 export function initCloseScheduler(c: Client): void {
