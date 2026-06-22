@@ -989,7 +989,7 @@ export class BotReportActions {
       lifecycleNote = ' The report is now marked **WAITING FOR DEV**.';
     }
 
-    await interaction.editReply({ content: `Route added to the tracker thread.${!isPublic ? ' The route is not yet public \u2014 make it public and use the Confirm button on the original report.' : ''}${lifecycleNote}` });
+    await interaction.editReply({ content: `Route added to the tracker thread.${!isPublic ? ' The route is not yet public \u2014 please make it public so staff can view it.' : ''}${lifecycleNote}` });
   }
 
   @ModalComponent({ id: /^merge_modal_/ })
