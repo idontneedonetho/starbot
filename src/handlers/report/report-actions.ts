@@ -1,5 +1,5 @@
 import { Discord, ButtonComponent, ModalComponent, SelectMenuComponent, Slash, SlashGroup, Guild } from 'discordx';
-import type { CommandInteraction, StringSelectMenuInteraction, UserSelectMenuInteraction, ActionRow, MessageActionRowComponent } from 'discord.js';
+import type { CommandInteraction, StringSelectMenuInteraction, ActionRow, MessageActionRowComponent } from 'discord.js';
 import {
   type ButtonInteraction,
   type ModalSubmitInteraction,
@@ -373,6 +373,22 @@ function buildWaitUserModal(ticketId: string): ModalBuilder {
       { label: 'Submitter', value: 'sub', description: 'Only the original submitter can respond' },
     );
   modal.addLabelComponents(new LabelBuilder().setLabel('Who may respond?').setStringSelectMenuComponent(audienceSelect));
+
+  return modal;
+}
+
+function buildAssignModal(ticketId: string, defaultUserId: string): ModalBuilder {
+  const modal = new ModalBuilder()
+    .setCustomId(`assign_modal_${ticketId}`)
+    .setTitle('Assign Report');
+
+  const userSelect = new UserSelectMenuBuilder()
+    .setCustomId('assignee')
+    .setPlaceholder('Select a staff member to assign')
+    .setMinValues(1)
+    .setMaxValues(1)
+    .setDefaultUsers(defaultUserId);
+  modal.addLabelComponents(new LabelBuilder().setLabel('Assign this report to').setUserSelectMenuComponent(userSelect));
 
   return modal;
 }
@@ -806,14 +822,7 @@ export class BotReportActions {
       const assignStarter = await thread.fetchStarterMessage();
       const current = assignStarter?.embeds[0]?.fields?.find(f => f.name === '👤 Assigned to')?.value.match(/<@(\d+)>/)?.[1];
       const ticketId = interaction.customId.replace('staff_select_', '');
-      const userSelect = new UserSelectMenuBuilder()
-        .setCustomId(`assign_user_${ticketId}`)
-        .setPlaceholder('Select a staff member to assign')
-        .setMinValues(1)
-        .setMaxValues(1)
-        .setDefaultUsers(current ?? interaction.user.id);
-      const row = new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(userSelect);
-      await interaction.update({ content: 'Assign this report to:', components: [row] });
+      await interaction.showModal(buildAssignModal(ticketId, current ?? interaction.user.id));
       return;
     }
 
@@ -850,8 +859,8 @@ export class BotReportActions {
     }
   }
 
-  @SelectMenuComponent({ id: /^assign_user_/ })
-  async assignUserSelect(interaction: UserSelectMenuInteraction) {
+  @ModalComponent({ id: /^assign_modal_/ })
+  async handleAssignSubmit(interaction: ModalSubmitInteraction) {
     if (!(interaction.member instanceof GuildMember) || !hasStaffRole(interaction.member)) {
       await interaction.reply({ content: 'Only staff can use staff actions.', flags: MessageFlags.Ephemeral });
       return;
@@ -875,7 +884,7 @@ export class BotReportActions {
       return;
     }
 
-    const target = interaction.users.first();
+    const target = interaction.fields.getSelectedUsers('assignee', false)?.first();
     if (!target) {
       await interaction.reply({ content: 'No user selected.', flags: MessageFlags.Ephemeral });
       return;
