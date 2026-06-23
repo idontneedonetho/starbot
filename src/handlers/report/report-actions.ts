@@ -198,7 +198,32 @@ interface WaitUserParams {
   requiredDate?: string;
 }
 
+const WAITING_FOR_USER_TITLE = '🧪 Waiting for User';
+
+async function clearOpenWaitUserPrompts(thread: ThreadChannel): Promise<void> {
+  const botId = thread.client.user?.id;
+  const messages = await thread.messages.fetch({ limit: 50 }).catch(err => {
+    log.warn({ err, threadId: thread.id }, 'Failed to fetch messages to clear prior Waiting for User prompts');
+    return null;
+  });
+  if (!messages) return;
+
+  const stale = messages.filter(m =>
+    (!botId || m.author.id === botId) &&
+    m.components.length > 0 &&
+    m.embeds[0]?.title === WAITING_FOR_USER_TITLE,
+  );
+
+  for (const msg of stale.values()) {
+    await readyReqStore.delete(msg.id);
+    await msg.delete().catch(err =>
+      log.warn({ err, msgId: msg.id }, 'Failed to delete prior Waiting for User prompt (may already be gone)'));
+  }
+}
+
 async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, params: WaitUserParams): Promise<void> {
+  await clearOpenWaitUserPrompts(thread);
+
   // Best-effort (no deferred retry like closeThread): swallow even rate-limits.
   await swapForumTags(thread, forum, { remove: ['WAITING FOR DEV'], add: ['WAITING FOR USER'] })
     .catch(err => log.warn({ err }, 'Failed to swap forum tags for WAITING FOR USER'));
@@ -216,7 +241,7 @@ async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, para
 
   const embed = new EmbedBuilder()
     .setColor(COLORS.amber)
-    .setTitle('🧪 Waiting for User')
+    .setTitle(WAITING_FOR_USER_TITLE)
     .setDescription(`${params.message ? params.message + '\n\n' : ''}${action}${required}`)
     .setTimestamp();
 
