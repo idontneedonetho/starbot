@@ -9,8 +9,6 @@ import { loadConfig } from '../../config.js';
 import { createLogger } from '../../logger.js';
 import { getIndex } from '../../wiki/wiki.js';
 import { searchWiki, formatWikiResults } from '../../wiki/searcher.js';
-import { embedBatch } from '../../wiki/embedder.js';
-import { dot } from '../../util.js';
 import { getForum, createRouteTrackerThread, addAdditionalRoutesToTracker, encodeConfirmCustomId, buildConfirmRows, TRACKER_FIELD_PREFIX } from './route-tracker.js';
 import { STATUS_EMOJI, isRateLimit } from './title-sync.js';
 import type { ExtractedRoute, RouteValidation } from '../../comma.js';
@@ -56,74 +54,6 @@ export async function swapForumTags(
   });
 }
 
-function isContentWord(w: string): boolean {
-  if (w.length >= 4) return true;
-  if (w.length >= 3 && w === w.toUpperCase() && /[A-Z]/.test(w[0])) return true;
-  if (w.includes("'t")) return true;
-  return false;
-}
-
-function getNGrams(words: string[], n: number): { phrase: string; start: number; len: number }[] {
-  const result: { phrase: string; start: number; len: number }[] = [];
-  for (let i = 0; i + n <= words.length; i++) {
-    result.push({ phrase: words.slice(i, i + n).join(' '), start: i, len: n });
-  }
-  return result;
-}
-
-export async function generateThreadTitle(input: string): Promise<string | null> {
-  const trimmed = input.trim().replace(/\s+/g, ' ');
-  if (!trimmed) return null;
-
-  const allWords = trimmed.split(/[^a-zA-Z0-9']+/).filter(w => w.length > 0);
-  if (allWords.length === 0) return null;
-
-  const words = allWords.length > 50 ? allWords.slice(0, 50) : allWords;
-
-  if (words.length <= 10) {
-    return words.map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
-  }
-
-  const ngrams2 = getNGrams(words, 2);
-  const ngrams3 = getNGrams(words, 3);
-  const ngrams = [...ngrams2, ...ngrams3];
-
-  const [textEmb, ...ngramEmbs] = await embedBatch([trimmed, ...ngrams.map(g => g.phrase)]);
-
-  const scoredNgrams = ngrams.map((g, i) => ({ ...g, score: dot(textEmb, ngramEmbs[i]) }));
-
-  const wordScores = new Array(words.length).fill(0);
-  for (const sg of scoredNgrams) {
-    for (let j = 0; j < sg.len; j++) {
-      const idx = sg.start + j;
-      if (idx < words.length) {
-        wordScores[idx] = Math.max(wordScores[idx], sg.score);
-      }
-    }
-  }
-
-  const seen = new Map<string, { word: string; score: number; index: number }>();
-  for (let i = 0; i < words.length; i++) {
-    const w = words[i];
-    if (!isContentWord(w)) continue;
-    const lower = w.toLowerCase();
-    const existing = seen.get(lower);
-    if (!existing || wordScores[i] > existing.score) {
-      seen.set(lower, { word: w, score: wordScores[i], index: i });
-    }
-  }
-
-  const scored = [...seen.values()].sort((a, b) => b.score - a.score);
-
-  const top10 = scored
-    .slice(0, 10)
-    .sort((a, b) => a.index - b.index);
-
-  if (top10.length === 0) return null;
-
-  return top10.map(({ word }) => word[0].toUpperCase() + word.slice(1)).join(' ');
-}
-
 export function formatThreadTitle(emoji: string, label: string, title: string | null, ticketId: string | null): string {
   const MAX = 100;
   const suffix = ticketId ? ` (${ticketId})` : '';
@@ -157,7 +87,7 @@ export async function submitReport(
   interaction: ModalSubmitInteraction | ButtonInteraction,
   params: {
     embed: EmbedBuilder;
-    titleSource: string;
+    title: Promise<string | null>;
     wikiQuery: string;
     dedicatedRoute?: ExtractedRoute & RouteValidation;
     additionalRoutes: Array<ExtractedRoute & RouteValidation>;
@@ -180,7 +110,7 @@ export async function submitReport(
     return;
   }
 
-  const generatedTitle = await generateThreadTitle(params.titleSource).catch(() => null);
+  const generatedTitle = await params.title.catch(() => null);
 
   const tagIds = params.tagNames.length > 0 ? resolveTagIds(forum, params.tagNames) : undefined;
 

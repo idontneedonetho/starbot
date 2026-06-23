@@ -39,6 +39,7 @@ import {
 import {
   submitReport,
 } from './report-service.js';
+import { titleGenerator } from './title-generator.js';
 
 const log = createLogger('report');
 
@@ -210,6 +211,12 @@ async function processBugReport(
 ): Promise<void> {
   const { routeIdInput, observed, expected, reproIntent } = input;
 
+  const llmContent =
+    `[Observed Behavior]\n${observed}\n\n` +
+    `[Expected Behavior]\n${expected}\n\n` +
+    `[Reproducibility, Intent & Details]\n${reproIntent}`;
+  const titlePromise = titleGenerator.generate('Bug Report', llmContent, observed);
+
   let components: RouteComponents;
   try {
     components = parseRouteComponents(routeIdInput);
@@ -300,7 +307,7 @@ async function processBugReport(
 
   await submitReport(interaction, {
     embed: reportEmbed,
-    titleSource: cleanObserved,
+    title: titlePromise,
     wikiQuery: `${cleanObserved} ${cleanExpected} ${cleanReproIntent}`,
     dedicatedRoute: dedicatedValidated,
     additionalRoutes: numberedAdditional,
@@ -412,6 +419,8 @@ async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, type: '
 
   const label = type === 'feedback' ? 'Feedback' : 'Feature Request';
 
+  const titlePromise = titleGenerator.generate(label, content, content);
+
   log.info({
     userId: interaction.user.id,
     type,
@@ -435,7 +444,7 @@ async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, type: '
 
   await submitReport(interaction, {
     embed,
-    titleSource: cleanContent,
+    title: titlePromise,
     wikiQuery: cleanContent,
     additionalRoutes: numberedRoutes,
     label,

@@ -15,6 +15,9 @@ export interface BotConfig {
   wikiRepo: string;
   wikiCacheDir: string;
   mainRepo: string;
+  openaiEndpoint?: string;
+  openaiApiKey?: string;
+  openaiModel?: string;
 }
 
 export function loadConfig(): BotConfig {
@@ -53,6 +56,10 @@ export function loadConfig(): BotConfig {
 
   const mainRepo = process.env.MAIN_REPO || 'firestar5683/openpilot';
 
+  const openaiEndpoint = process.env.OPENAI_ENDPOINT;
+  const openaiApiKey = process.env.OPENAI_API_KEY;
+  const openaiModel = process.env.OPENAI_MODEL;
+
   return {
     token,
     guildId,
@@ -67,5 +74,8 @@ export function loadConfig(): BotConfig {
     wikiRepo,
     wikiCacheDir,
     mainRepo,
+    openaiEndpoint,
+    openaiApiKey,
+    openaiModel,
   };
 }
