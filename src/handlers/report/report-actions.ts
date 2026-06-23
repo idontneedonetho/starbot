@@ -149,11 +149,16 @@ function buildAdditionalReportModal(customId: string): ModalBuilder {
 }
 
 // Split threads have no `By` field, so fall back to the linked Original Report's starter.
+// Pre-"Reported By" threads put the reporting user as a leading mention in the content.
+const leadingMention = (content?: string | null): string => content?.trimStart().match(/^<@!?(\d+)>/)?.[1] ?? '';
+
 async function resolveSubmitterId(thread: ThreadChannel, guild: import('discord.js').Guild): Promise<string> {
   const starter = await thread.fetchStarterMessage().catch(() => null);
   const fields = starter?.embeds[0]?.fields;
   const direct = fields?.find(f => f.name === 'By')?.value.match(/<@(\d+)>/)?.[1];
   if (direct) return direct;
+  const directLegacy = leadingMention(starter?.content);
+  if (directLegacy) return directLegacy;
 
   // Original Report URL: .../channels/<guild>/<channel>/<msg>
   const origUrl = fields?.find(f => /Original Report/.test(f.value ?? ''))?.value?.match(/\]\((.+?)\)/)?.[1];
@@ -164,6 +169,8 @@ async function resolveSubmitterId(thread: ThreadChannel, guild: import('discord.
       const origStarter = await origChannel.fetchStarterMessage().catch(() => null);
       const resolved = origStarter?.embeds[0]?.fields?.find(f => f.name === 'By')?.value.match(/<@(\d+)>/)?.[1];
       if (resolved) return resolved;
+      const resolvedLegacy = leadingMention(origStarter?.content);
+      if (resolvedLegacy) return resolvedLegacy;
     }
   }
   return '';
