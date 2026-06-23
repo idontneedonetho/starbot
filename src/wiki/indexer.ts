@@ -33,7 +33,7 @@ function float16ToFloat32(f16: number[]): number[] {
 }
 
 function cachePath(base: string): string {
-  return path.join(base, '..', 'data', 'wiki-embeddings.json');
+  return path.join(base, 'wiki-embeddings.json');
 }
 
 interface CachedChunk {
