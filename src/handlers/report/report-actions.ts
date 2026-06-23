@@ -1,5 +1,5 @@
 import { Discord, ButtonComponent, ModalComponent, SelectMenuComponent, Slash, SlashGroup, Guild } from 'discordx';
-import type { CommandInteraction, StringSelectMenuInteraction, ActionRow, MessageActionRowComponent } from 'discord.js';
+import type { CommandInteraction, StringSelectMenuInteraction, UserSelectMenuInteraction, ActionRow, MessageActionRowComponent } from 'discord.js';
 import {
   type ButtonInteraction,
   type ModalSubmitInteraction,
@@ -17,6 +17,7 @@ import {
   ButtonStyle,
   MessageFlags,
   StringSelectMenuBuilder,
+  UserSelectMenuBuilder,
   PermissionFlagsBits,
 } from 'discord.js';
 import { loadConfig } from '../../config.js';
@@ -67,12 +68,46 @@ function hasStaffRole(member: GuildMember): boolean {
   return member.roles.cache.has(loadConfig().staffRole);
 }
 
+async function applyAssignment(
+  thread: ThreadChannel,
+  guild: import('discord.js').Guild,
+  userId: string,
+  username: string,
+): Promise<void> {
+  await thread.members.add(userId).catch(err => log.warn({ err }, 'Failed to add member to thread'));
+
+  const starter = await thread.fetchStarterMessage();
+  const embed = starter?.embeds[0];
+  if (starter && embed) {
+    const updated = EmbedBuilder.from(embed);
+    const idx = embed.fields?.findIndex(f => f.name === '👤 Assigned to') ?? -1;
+    const field = { name: '👤 Assigned to', value: `<@${userId}>` };
+    if (idx >= 0) updated.spliceFields(idx, 1, field);
+    else updated.addFields(field);
+    await starter.edit({ embeds: [updated] }).catch(() => {});
+  }
+
+  const forum = await getForum(guild, loadConfig().forumChannelId);
+  if (forum) {
+    const assigneeTagId = await getOrCreateAssigneeTag(forum, userId, username);
+    const addTagIds = [...resolveTagIds(forum, ['ASSIGNED']), ...(assigneeTagId ? [assigneeTagId] : [])];
+
+    const assigneeTagIds = new Set(forum.availableTags.filter(t => t.name.startsWith('Assignee ')).map(t => t.id));
+    const existing = (thread.appliedTags as string[]).filter(
+      id => !assigneeTagIds.has(id) && !addTagIds.includes(id),
+    );
+    await thread.setAppliedTags([...existing, ...addTagIds]).catch(() => {});
+  }
+
+  await setThreadStatusEmoji(thread, 'waiting-for-dev');
+}
+
 function buildStaffActionsReply(ticketId: string) {
   const select = new StringSelectMenuBuilder()
     .setCustomId(`staff_select_${ticketId}`)
     .setPlaceholder('Choose an action...')
     .addOptions(
-      { label: 'Assign', value: 'assign', emoji: '👤', description: 'Assign yourself to this report' },
+      { label: 'Assign', value: 'assign', emoji: '👤', description: 'Assign a staff member to this report' },
       { label: 'Request User Testing', value: 'waituser', emoji: '🧪', description: 'Ask the user to test and report back' },
       { label: 'Merge', value: 'merge', emoji: '🔀', description: 'Merge this report into another thread' },
       { label: 'Close', value: 'close', emoji: '🔐', description: 'Close this report' },
@@ -769,49 +804,25 @@ export class BotReportActions {
       return;
     }
 
+    if (action === 'assign') {
+      const assignStarter = await thread.fetchStarterMessage();
+      const current = assignStarter?.embeds[0]?.fields?.find(f => f.name === '👤 Assigned to')?.value.match(/<@(\d+)>/)?.[1];
+      const ticketId = interaction.customId.replace('staff_select_', '');
+      const userSelect = new UserSelectMenuBuilder()
+        .setCustomId(`assign_user_${ticketId}`)
+        .setPlaceholder('Select a staff member to assign')
+        .setMinValues(1)
+        .setMaxValues(1)
+        .setDefaultUsers(current ?? interaction.user.id);
+      const row = new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(userSelect);
+      await interaction.update({ content: 'Assign this report to:', components: [row] });
+      return;
+    }
+
     await interaction.deferUpdate();
     await interaction.deleteReply().catch(() => {});
 
-    if (action === 'assign') {
-      await thread.members.add(interaction.user.id).catch(err => log.warn({ err }, 'Failed to add member to thread'));
-
-      const assignStarter = await thread.fetchStarterMessage();
-      if (assignStarter) {
-        const assignEmbed = assignStarter.embeds[0];
-        if (assignEmbed) {
-          const assignUpdated = EmbedBuilder.from(assignEmbed);
-          const assignIdx = assignEmbed.fields?.findIndex(f => f.name === '👤 Assigned to') ?? -1;
-          const assignField = { name: '👤 Assigned to', value: `<@${interaction.user.id}>` };
-          if (assignIdx >= 0) {
-            assignUpdated.spliceFields(assignIdx, 1, assignField);
-          } else {
-            assignUpdated.addFields(assignField);
-          }
-          await assignStarter.edit({ embeds: [assignUpdated] }).catch(() => {});
-        }
-      }
-
-      const assignConfig = loadConfig();
-      const assignForum = await getForum(guild, assignConfig.forumChannelId);
-      if (assignForum) {
-        const tagIds: string[] = [];
-
-        const assignedTagIds = resolveTagIds(assignForum, ['ASSIGNED']);
-        tagIds.push(...assignedTagIds);
-
-        const assigneeTagId = await getOrCreateAssigneeTag(assignForum, interaction.user.id, interaction.user.username);
-        if (assigneeTagId) tagIds.push(assigneeTagId);
-
-        if (tagIds.length > 0) {
-          const assignExisting = thread.appliedTags as string[];
-          const assignDeduped = assignExisting.filter(id => !tagIds.includes(id));
-          await thread.setAppliedTags([...assignDeduped, ...tagIds]).catch(() => {});
-        }
-      }
-
-      await setThreadStatusEmoji(thread, 'waiting-for-dev');
-      await interaction.followUp({ content: 'You have been assigned to this report.', flags: MessageFlags.Ephemeral });
-    } else {
+    {
       const closeAt = nextCloseAt();
       const closeStarter = await thread.fetchStarterMessage();
       if (closeStarter) {
@@ -839,6 +850,50 @@ export class BotReportActions {
       }
       await interaction.followUp({ content: 'Report will close shortly.', flags: MessageFlags.Ephemeral });
     }
+  }
+
+  @SelectMenuComponent({ id: /^assign_user_/ })
+  async assignUserSelect(interaction: UserSelectMenuInteraction) {
+    if (!(interaction.member instanceof GuildMember) || !hasStaffRole(interaction.member)) {
+      await interaction.reply({ content: 'Only staff can use staff actions.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const thread = interaction.channel;
+    if (!thread?.isThread()) {
+      await interaction.reply({ content: 'This can only be used from a thread.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const guild = interaction.guild;
+    if (!guild) {
+      await interaction.reply({ content: 'Could not resolve guild.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const pendingClose = await getScheduledClose(thread.id);
+    if (pendingClose) {
+      await interaction.reply({ content: 'This report is closing soon - staff actions are locked until then.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const target = interaction.users.first();
+    if (!target) {
+      await interaction.reply({ content: 'No user selected.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    await interaction.deferUpdate();
+
+    const member = await guild.members.fetch(target.id).catch(() => null);
+    if (!member || !hasStaffRole(member)) {
+      await interaction.followUp({ content: `<@${target.id}> doesn't have the staff role and can't be assigned.`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    await interaction.deleteReply().catch(() => {});
+    await applyAssignment(thread, guild, target.id, target.username);
+    await interaction.followUp({ content: `Assigned <@${target.id}> to this report.`, flags: MessageFlags.Ephemeral });
   }
 
   @ButtonComponent({ id: /^split_/ })
