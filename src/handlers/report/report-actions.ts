@@ -98,8 +98,6 @@ async function applyAssignment(
     );
     await thread.setAppliedTags([...existing, ...addTagIds]).catch(() => {});
   }
-
-  await setThreadStatusEmoji(thread, 'waiting-for-dev');
 }
 
 function buildStaffActionsReply(ticketId: string) {
