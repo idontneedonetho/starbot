@@ -66,6 +66,8 @@ interface PendingBugReport extends BugReportInput {
 const PENDING_BUG_TTL_MS = 15 * 60 * 1000;
 const pendingStore = createStore<PendingBugReport>('pending-bug-reports', { ttl: PENDING_BUG_TTL_MS });
 
+const gateTokensInFlight = new Set<string>();
+
 @Discord()
 export class BotReport {
   @ButtonComponent({ id: 'report_bug' })
@@ -320,23 +322,33 @@ async function processBugReport(
 
 async function handleRlogGateButton(interaction: ButtonInteraction, force: boolean): Promise<void> {
   const token = interaction.customId.split('_')[1];
-  const pending = await pendingStore.get(token);
-  if (!pending) {
-    await interaction.reply({
-      content: 'This request has expired. Please submit a new bug report.',
-      flags: MessageFlags.Ephemeral,
-    });
+
+  if (gateTokensInFlight.has(token)) {
+    await interaction.deferUpdate().catch(() => {});
     return;
   }
-  if (interaction.user.id !== pending.userId) {
-    await interaction.reply({
-      content: 'Only the original reporter can use these buttons.',
-      flags: MessageFlags.Ephemeral,
-    });
-    return;
+  gateTokensInFlight.add(token);
+  try {
+    const pending = await pendingStore.get(token);
+    if (!pending) {
+      await interaction.reply({
+        content: 'This request has expired. Please submit a new bug report.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    if (interaction.user.id !== pending.userId) {
+      await interaction.reply({
+        content: 'Only the original reporter can use these buttons.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    await interaction.deferUpdate();
+    await processBugReport(interaction, pending, force);
+  } finally {
+    gateTokensInFlight.delete(token);
   }
-  await interaction.deferUpdate();
-  await processBugReport(interaction, pending, force);
 }
 
 async function handleConfirmRoute(interaction: ButtonInteraction) {
