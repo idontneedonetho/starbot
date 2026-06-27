@@ -5,6 +5,7 @@ import {
   type ModalSubmitInteraction,
   type ThreadChannel,
   type ForumChannel,
+  type Message,
   ComponentType,
   GuildMember,
   ModalBuilder,
@@ -24,7 +25,8 @@ import { loadConfig } from '../../config.js';
 import { createLogger } from '../../logger.js';
 import { createStore } from '../../store.js';
 import { COLORS, formatGitCommit, discordTimestamp, timeAgo, isStaleBuild } from '../../util.js';
-import { normalizeRouteInput, parseNormalizedRoute, validateRoute, extractRouteIds, replaceRouteIds, fetchRouteMetadata } from '../../comma.js';
+import { normalizeRouteInput, parseNormalizedRoute, parseRouteComponents, validateRoute, computeRouteLogIssues, extractRouteIds, replaceRouteIds, fetchRouteMetadata, type RouteComponents } from '../../comma.js';
+import { randomUUID } from 'node:crypto';
 import { fetchCommitChoices, type CommitChoice } from '../../github.js';
 import { getForum, addAdditionalRoutesToTracker, createRouteTrackerThread, routeNumberLabel, TRACKER_FIELD_PREFIX } from './route-tracker.js';
 import { resolveTagIds, buildActionRow, buildDonateRow, swapForumTags } from './report-service.js';
@@ -153,6 +155,16 @@ const waitCommitStore = createStore<{
 const readyReqStore = createStore<{ requiredShort: string; requiredDate?: string }>(
   'wait-ready-req', { ttl: 30 * 24 * 60 * 60 * 1000 });
 
+const pendingAdditionalReportStore = createStore<{
+  userId: string;
+  threadId: string;
+  routeInput: string;
+  details: string;
+  readyMsgId: string | null;
+}>('pending-additional-report', { ttl: 15 * 60 * 1000 });
+
+const LOG_HELP_URL = 'https://wiki.firestar.link/faq/#how-do-i-upload-logs-for-troubleshooting';
+
 const CLOSING_LOCK_MSG = "This report is closing soon - it can't be reopened until then.";
 
 function buildAdditionalReportModal(customId: string): ModalBuilder {
@@ -233,6 +245,19 @@ interface WaitUserParams {
 
 const WAITING_FOR_USER_TITLE = '🧪 Waiting for User';
 
+function isOpenReadyPrompt(m: Message, botId?: string): boolean {
+  return (!botId || m.author.id === botId) &&
+    m.components.length > 0 &&
+    m.embeds[0]?.title === WAITING_FOR_USER_TITLE;
+}
+
+export async function findOpenReadyPrompt(thread: ThreadChannel): Promise<Message | null> {
+  const botId = thread.client.user?.id;
+  const messages = await thread.messages.fetch({ limit: 50 }).catch(() => null);
+  if (!messages) return null;
+  return messages.find(m => isOpenReadyPrompt(m, botId)) ?? null;
+}
+
 async function clearOpenWaitUserPrompts(thread: ThreadChannel): Promise<void> {
   const botId = thread.client.user?.id;
   const messages = await thread.messages.fetch({ limit: 50 }).catch(err => {
@@ -241,11 +266,7 @@ async function clearOpenWaitUserPrompts(thread: ThreadChannel): Promise<void> {
   });
   if (!messages) return;
 
-  const stale = messages.filter(m =>
-    (!botId || m.author.id === botId) &&
-    m.components.length > 0 &&
-    m.embeds[0]?.title === WAITING_FOR_USER_TITLE,
-  );
+  const stale = messages.filter(m => isOpenReadyPrompt(m, botId));
 
   for (const msg of stale.values()) {
     await readyReqStore.delete(msg.id);
@@ -393,11 +414,189 @@ function buildAssignModal(ticketId: string, defaultUserId: string): ModalBuilder
   return modal;
 }
 
+export async function submitAdditionalReport(params: {
+  interaction: ModalSubmitInteraction | CommandInteraction | ButtonInteraction;
+  thread: ThreadChannel;
+  guild: import('discord.js').Guild;
+  userId: string;
+  routeInput: string;
+  details: string;
+  ready: { readyMsgId: string } | null;
+  force: boolean;
+}): Promise<void> {
+  const { interaction, thread, guild, userId, routeInput, details, ready, force } = params;
+  const reply = (content: string) => interaction.editReply({ content, components: [] });
+
+  const trimmedInput = routeInput.trim();
+  let normalizedRoute: string;
+  let comps: RouteComponents | undefined;
+  try {
+    normalizedRoute = normalizeRouteInput(trimmedInput);
+    comps = parseRouteComponents(trimmedInput);
+  } catch (err) {
+    await reply(`Invalid route ID. ${err instanceof Error ? err.message : 'Use the format \`dongle_id/route_name\` or a connect.comma.ai URL.'}`);
+    return;
+  }
+
+  const parsed = parseNormalizedRoute(normalizedRoute);
+  if (!parsed) {
+    await reply('Invalid route ID. Use the format `dongle_id/route_name` (e.g. `a1b2c3d4e5f6a7b8/0000aaaa--98c2d4e6f8`) or a connect.comma.ai URL.');
+    return;
+  }
+  parsed.originalText = trimmedInput;
+  parsed.isUrl = /^https:\/\/connect\.comma\.ai\//i.test(trimmedInput);
+
+  const { dongleId, routeName } = parsed;
+  const primary = await validateRoute(dongleId, routeName, comps.startSegment, comps.endSegment);
+  if (!primary.valid) {
+    await reply('That route does not exist. Please check the Route ID and try again.');
+    return;
+  }
+  parsed.public = primary.public;
+  parsed.rlogsAvailable = primary.rlogsAvailable;
+
+  const detailRoutes = details
+    ? extractRouteIds(details).filter(r => (r.originalText ?? '').toLowerCase() !== trimmedInput.toLowerCase())
+    : [];
+  const detailValidations = await Promise.all(detailRoutes.map(r => validateRoute(r.dongleId, r.routeName)));
+  const numberedDetailRoutes = detailRoutes.map((r, i) => ({ ...r, ...detailValidations[i], routeNumber: i + 1 }));
+
+  if (!force) {
+    const issues = computeRouteLogIssues([
+      { originalText: parsed.originalText, public: primary.public, rlogsAvailable: primary.rlogsAvailable, rlogCheck: primary.rlogCheck },
+      ...numberedDetailRoutes.filter(r => r.valid),
+    ]);
+    if (issues.length > 0) {
+      const token = randomUUID();
+      await pendingAdditionalReportStore.set(token, { userId, threadId: thread.id, routeInput, details, readyMsgId: ready?.readyMsgId ?? null });
+      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setCustomId(`archk_${token}`).setLabel('Check Again').setStyle(ButtonStyle.Primary).setEmoji('🔄'),
+        new ButtonBuilder().setCustomId(`arfrc_${token}`).setLabel('Share Anyway').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setLabel('Need help?').setStyle(ButtonStyle.Link).setURL(LOG_HELP_URL),
+      );
+      await interaction.editReply({ content: issues.join('\n'), components: [row] });
+      return;
+    }
+  }
+
+  if (ready) {
+    const req = await readyReqStore.get(ready.readyMsgId);
+    if (req) {
+      const meta = await fetchRouteMetadata(dongleId, routeName);
+      if (!meta) {
+        await reply("Couldn't read this route's commit (make sure logs are uploaded). Nothing was submitted - the report is still **WAITING FOR USER**; try again once logs are up.");
+        return;
+      }
+      if (isStaleBuild(meta.git_commit_date, req.requiredDate)) {
+        const routeShort = meta.git_commit.slice(0, 7);
+        const routeWhen = discordTimestamp(meta.git_commit_date);
+        const reqWhen = req.requiredDate ? discordTimestamp(req.requiredDate) : null;
+        await reply(`Route **rejected** - it's from an older build than required: route commit \`${routeShort}\`${routeWhen ? ` (committed ${routeWhen})` : ''} predates required \`${req.requiredShort}\`${reqWhen ? ` (committed ${reqWhen})` : ''}. Nothing was submitted - the report is still **WAITING FOR USER**; test on a newer build and submit a fresh route.`);
+        return;
+      }
+    }
+  }
+
+  if (ready && await getScheduledClose(thread.id)) {
+    await reply(CLOSING_LOCK_MSG);
+    return;
+  }
+
+  const tracker = await ensureTrackerThread(thread, guild);
+  if (!tracker) {
+    await reply('Failed to create a route tracker thread.');
+    return;
+  }
+
+  const cleanDetails = details ? replaceRouteIds(details, [parsed, ...numberedDetailRoutes], routeNumberLabel) : '';
+
+  const msg = await thread.send({
+    content: `<@${userId}>`,
+    embeds: [
+      new EmbedBuilder()
+        .setColor(COLORS.blurple)
+        .setDescription(cleanDetails || 'No additional info')
+        .addFields({ name: '​', value: `${TRACKER_FIELD_PREFIX}(${tracker.url})` })
+        .setTimestamp(),
+    ],
+  });
+
+  const additionalReportId = String(parseInt(msg.id.slice(-7), 10));
+  await msg.edit({
+    components: [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`split_${additionalReportId}`)
+          .setLabel('✂️ Split to Thread')
+          .setStyle(ButtonStyle.Secondary),
+      ),
+    ],
+  });
+
+  await addAdditionalRoutesToTracker(
+    guild, tracker.threadId, [parsed, ...numberedDetailRoutes.filter(r => r.valid)],
+    msg.url, `Additional Report #${additionalReportId}`,
+  );
+
+  let lifecycleNote = '';
+  if (ready) {
+    const forum = await getForum(guild, loadConfig().forumChannelId);
+    if (forum) {
+      await swapForumTags(thread, forum, { remove: ['WAITING FOR USER'], add: ['WAITING FOR DEV'] })
+        .catch(err => log.warn({ err }, 'Failed to swap forum tags for WAITING FOR DEV'));
+    }
+    await setThreadStatusEmoji(thread, 'waiting-for-dev');
+    await completeReadyMessage(thread, ready.readyMsgId, `A new route was submitted by <@${userId}> - [Additional Report #${additionalReportId}](${msg.url})`);
+    await readyReqStore.delete(ready.readyMsgId);
+    await notifyAssigneeReady(thread, userId, msg.url);
+    lifecycleNote = ' The report is now marked **WAITING FOR DEV**.';
+  }
+
+  await reply(`Route added to the tracker thread.${!primary.public ? ' The route is not yet public — please make it public so staff can view it.' : ''}${lifecycleNote}`);
+}
+
 @Discord()
 export class BotReportActions {
   @ButtonComponent({ id: /^additional_report_/ })
   async additionalReport(interaction: ButtonInteraction) {
     await interaction.showModal(buildAdditionalReportModal(`additional_report_modal_${interaction.id}`));
+  }
+
+  @ButtonComponent({ id: /^archk_/ })
+  @ButtonComponent({ id: /^arfrc_/ })
+  async additionalReportGate(interaction: ButtonInteraction) {
+    const force = interaction.customId.startsWith('arfrc_');
+    const token = interaction.customId.split('_')[1];
+    const pending = await pendingAdditionalReportStore.get(token);
+    if (!pending) {
+      await interaction.reply({ content: 'This request has expired. Please submit the additional report again.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (interaction.user.id !== pending.userId) {
+      await interaction.reply({ content: 'Only the original submitter can use this.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    await interaction.deferUpdate();
+    const guild = interaction.guild;
+    if (!guild) {
+      await interaction.editReply({ content: 'Could not resolve guild.', components: [] });
+      return;
+    }
+    let thread: ThreadChannel | null = interaction.channel?.isThread() ? interaction.channel : null;
+    if (!thread) {
+      const fetched = await guild.channels.fetch(pending.threadId).catch(() => null);
+      thread = fetched?.isThread() ? fetched : null;
+    }
+    if (!thread) {
+      await interaction.editReply({ content: 'Could not resolve the report thread.', components: [] });
+      return;
+    }
+    await submitAdditionalReport({
+      interaction, thread, guild, userId: pending.userId,
+      routeInput: pending.routeInput, details: pending.details,
+      ready: pending.readyMsgId ? { readyMsgId: pending.readyMsgId } : null,
+      force,
+    });
   }
 
   @ModalComponent({ id: /^waituser_modal_/ })
@@ -1021,55 +1220,6 @@ export class BotReportActions {
       details: details || null,
     }, 'Additional report submitted');
 
-    let normalizedRoute: string;
-    try {
-      normalizedRoute = normalizeRouteInput(routeId);
-    } catch (err) {
-      await interaction.editReply({
-        content: `Invalid route ID. ${err instanceof Error ? err.message : 'Use the format \`dongle_id/route_name\` or a connect.comma.ai URL.'}`,
-      });
-      return;
-    }
-
-    const parsed = parseNormalizedRoute(normalizedRoute);
-    if (!parsed) {
-      await interaction.editReply({
-        content: `Invalid route ID. Use the format \`dongle_id/route_name\` (e.g. \`a1b2c3d4e5f6a7b8/0000aaaa--98c2d4e6f8\`) or a connect.comma.ai URL.`,
-      });
-      return;
-    }
-    const trimmedInput = routeId.trim();
-    parsed.originalText = trimmedInput;
-    parsed.isUrl = /^https:\/\/connect\.comma\.ai\//i.test(trimmedInput);
-
-    const { dongleId, routeName } = parsed;
-    const { valid, public: isPublic, rlogsAvailable } = await validateRoute(dongleId, routeName);
-    if (!valid) {
-      await interaction.editReply({ content: 'That route does not exist. Please check the Route ID and try again.' });
-      return;
-    }
-
-    parsed.public = isPublic;
-    parsed.rlogsAvailable = rlogsAvailable;
-
-    if (ready && readyMsgId) {
-      const req = await readyReqStore.get(readyMsgId);
-      if (req) {
-        const meta = await fetchRouteMetadata(dongleId, routeName);
-        if (!meta) {
-          await interaction.editReply({ content: "Couldn't read this route's commit (make sure logs are uploaded). Nothing was submitted - the report is still **WAITING FOR USER**; try again once logs are up." });
-          return;
-        }
-        if (isStaleBuild(meta.git_commit_date, req.requiredDate)) {
-          const routeShort = meta.git_commit.slice(0, 7);
-          const routeWhen = discordTimestamp(meta.git_commit_date);
-          const reqWhen = req.requiredDate ? discordTimestamp(req.requiredDate) : null;
-          await interaction.editReply({ content: `Route **rejected** - it's from an older build than required: route commit \`${routeShort}\`${routeWhen ? ` (committed ${routeWhen})` : ''} predates required \`${req.requiredShort}\`${reqWhen ? ` (committed ${reqWhen})` : ''}. Nothing was submitted - the report is still **WAITING FOR USER**; test on a newer build and submit a fresh route.` });
-          return;
-        }
-      }
-    }
-
     const thread = interaction.channel;
     if (!thread?.isThread()) {
       await interaction.editReply({ content: 'This can only be used from a thread.' });
@@ -1082,67 +1232,12 @@ export class BotReportActions {
       return;
     }
 
-    if (ready && await getScheduledClose(thread.id)) {
-      await interaction.editReply({ content: CLOSING_LOCK_MSG });
-      return;
-    }
-
-    const tracker = await ensureTrackerThread(thread, guild);
-    if (!tracker) {
-      await interaction.editReply({ content: 'Failed to create a route tracker thread.' });
-      return;
-    }
-
-    const detailRoutes = details
-      ? extractRouteIds(details).filter(r => (r.originalText ?? '').toLowerCase() !== trimmedInput.toLowerCase())
-      : [];
-    const detailValidations = await Promise.all(detailRoutes.map(r => validateRoute(r.dongleId, r.routeName)));
-    const numberedDetailRoutes = detailRoutes.map((r, i) => ({ ...r, ...detailValidations[i], routeNumber: i + 1 }));
-    const cleanDetails = details ? replaceRouteIds(details, [parsed, ...numberedDetailRoutes], routeNumberLabel) : '';
-
-    const msg = await thread.send({
-      content: `<@${interaction.user.id}>`,
-      embeds: [
-        new EmbedBuilder()
-          .setColor(COLORS.blurple)
-          .setDescription(cleanDetails || 'No additional info')
-          .addFields({ name: '\u200B', value: `${TRACKER_FIELD_PREFIX}(${tracker.url})` })
-          .setTimestamp(),
-      ],
+    await submitAdditionalReport({
+      interaction, thread, guild, userId: interaction.user.id,
+      routeInput: routeId, details,
+      ready: readyMsgId ? { readyMsgId } : null,
+      force: false,
     });
-
-    const additionalReportId = String(parseInt(msg.id.slice(-7), 10));
-    await msg.edit({
-      components: [
-        new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`split_${additionalReportId}`)
-            .setLabel('✂️ Split to Thread')
-            .setStyle(ButtonStyle.Secondary),
-        ),
-      ],
-    });
-
-    await addAdditionalRoutesToTracker(
-      guild, tracker.threadId, [parsed, ...numberedDetailRoutes.filter(r => r.valid)],
-      msg.url, `Additional Report #${additionalReportId}`,
-    );
-
-    let lifecycleNote = '';
-    if (ready && readyMsgId) {
-      const forum = await getForum(guild, loadConfig().forumChannelId);
-      if (forum) {
-        await swapForumTags(thread, forum, { remove: ['WAITING FOR USER'], add: ['WAITING FOR DEV'] })
-          .catch(err => log.warn({ err }, 'Failed to swap forum tags for WAITING FOR DEV'));
-      }
-      await setThreadStatusEmoji(thread, 'waiting-for-dev');
-      await completeReadyMessage(thread, readyMsgId, `A new route was submitted by <@${interaction.user.id}> - [Additional Report #${additionalReportId}](${msg.url})`);
-      await readyReqStore.delete(readyMsgId);
-      await notifyAssigneeReady(thread, interaction.user.id, msg.url);
-      lifecycleNote = ' The report is now marked **WAITING FOR DEV**.';
-    }
-
-    await interaction.editReply({ content: `Route added to the tracker thread.${!isPublic ? ' The route is not yet public \u2014 please make it public so staff can view it.' : ''}${lifecycleNote}` });
   }
 
   @ModalComponent({ id: /^merge_modal_/ })

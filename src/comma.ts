@@ -296,3 +296,22 @@ export async function validateRoute(
   }
   return { valid: false, public: false, rlogsAvailable: false };
 }
+
+export type RouteLogIssueInput = Pick<ExtractedRoute, 'originalText' | 'public' | 'rlogsAvailable'> & {
+  rlogCheck?: RlogCheckResult;
+};
+
+export function computeRouteLogIssues(routes: RouteLogIssueInput[]): string[] {
+  const issues: string[] = [];
+  for (const r of routes) {
+    if (!r.public) {
+      issues.push(`\`${r.originalText}\` is **private**. Make it public, then check again.`);
+    } else if (r.rlogCheck?.mode === 'whole' && !r.rlogsAvailable) {
+      issues.push(`\`${r.originalText}\` is missing some logs. Upload all logs from your device, then check again.`);
+    } else if (r.rlogCheck?.mode === 'segment' && r.rlogCheck.missing.length > 0) {
+      const segList = r.rlogCheck.missing.join(', ');
+      issues.push(`\`${r.originalText}\` is missing logs for segment(s) **${segList}**. Upload them, then check again.`);
+    }
+  }
+  return issues;
+}

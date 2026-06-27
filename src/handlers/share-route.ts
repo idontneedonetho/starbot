@@ -1,5 +1,5 @@
 import { Discord, Slash, SlashOption, ButtonComponent, Guild } from 'discordx';
-import type { CommandInteraction, ButtonInteraction } from 'discord.js';
+import type { CommandInteraction, ButtonInteraction, ThreadChannel } from 'discord.js';
 import {
   ActionRowBuilder,
   ApplicationCommandOptionType,
@@ -15,6 +15,7 @@ import { COLORS } from '../util.js';
 import {
   parseRouteComponents,
   validateRoute,
+  computeRouteLogIssues,
   type ExtractedRoute,
   type RouteValidation,
 } from '../comma.js';
@@ -25,6 +26,7 @@ import {
   STATUS_LEGEND,
   buildRefreshRow,
 } from './report/route-tracker.js';
+import { submitAdditionalReport, findOpenReadyPrompt } from './report/report-actions.js';
 
 const log = createLogger('share-route');
 
@@ -235,17 +237,7 @@ async function processShareRoute(
   }));
 
   if (!force) {
-    const issues: string[] = [];
-    for (const r of routes) {
-      if (!r.public) {
-        issues.push(`\`${r.originalText}\` is **private**. Make it public, then check again.`);
-      } else if (r.rlogCheck?.mode === 'whole' && !r.rlogsAvailable) {
-        issues.push(`\`${r.originalText}\` is missing some logs. Upload all logs from your device, then check again.`);
-      } else if (r.rlogCheck?.mode === 'segment' && r.rlogCheck.missing.length > 0) {
-        const segList = r.rlogCheck.missing.join(', ');
-        issues.push(`\`${r.originalText}\` is missing logs for segment(s) **${segList}**. Upload them, then check again.`);
-      }
-    }
+    const issues = computeRouteLogIssues(routes);
 
     if (issues.length > 0) {
       const token = interaction.id;
@@ -321,6 +313,40 @@ async function processShareRoute(
   await interaction.editReply({ content: '✅ Shared.', components: [] });
 }
 
+async function runShareRouteAsAdditionalReport(
+  interaction: CommandInteraction,
+  thread: ThreadChannel,
+  routeId: string,
+): Promise<void> {
+  const guild = interaction.guild;
+  if (!guild) {
+    await interaction.editReply({ content: 'Could not resolve guild.' });
+    return;
+  }
+
+  const entries = routeId.split(/[\s,]+/).filter(Boolean);
+  if (entries.length === 0) {
+    await interaction.editReply({ content: 'No route IDs provided. Please provide at least one route ID or URL.' });
+    return;
+  }
+  if (entries.length > 5) {
+    await interaction.editReply({ content: 'You can share up to 5 routes at a time.' });
+    return;
+  }
+
+  const [primaryRoute, ...extraRoutes] = entries;
+  const detailsWithExtraRoutes = extraRoutes.join('\n');
+
+  const readyMsg = await findOpenReadyPrompt(thread);
+
+  await submitAdditionalReport({
+    interaction, thread, guild, userId: interaction.user.id,
+    routeInput: primaryRoute, details: detailsWithExtraRoutes,
+    ready: readyMsg ? { readyMsgId: readyMsg.id } : null,
+    force: false,
+  });
+}
+
 const guildId = loadConfig().guildId;
 
 @Discord()
@@ -342,6 +368,11 @@ export class BotShareRoute {
     interaction: CommandInteraction,
   ) {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const channel = interaction.channel;
+    if (channel?.isThread() && channel.parentId === loadConfig().forumChannelId) {
+      await runShareRouteAsAdditionalReport(interaction, channel, routeId);
+      return;
+    }
     await processShareRoute(interaction, routeId, false);
   }
 
