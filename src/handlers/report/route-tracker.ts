@@ -245,6 +245,7 @@ export async function handleRefreshRoutes(interaction: import('discord.js').Butt
     updated.setDescription((await Promise.all(lines.map(refreshRouteLine))).join('\n'));
   }
 
+  if (interaction.channel?.isThread()) await reopenIfArchived(interaction.channel);
   await interaction.message.edit({ embeds: [updated] }).catch(err =>
     log.error({ err }, 'Failed to refresh route tracker'),
   );
@@ -292,6 +293,12 @@ export async function createRouteTrackerThread(
   return { url: routesThread.url, threadId: routesThread.id };
 }
 
+async function reopenIfArchived(thread: ThreadChannel): Promise<void> {
+  if (!thread.archived) return;
+  await thread.setArchived(false).catch(err =>
+    log.warn({ err, threadId: thread.id }, 'Failed to reopen archived tracker thread'));
+}
+
 export async function addAdditionalRoutesToTracker(
   guild: Guild,
   threadId: string,
@@ -303,6 +310,7 @@ export async function addAdditionalRoutesToTracker(
   try {
     const channel = await guild.channels.fetch(threadId);
     if (!channel?.isThread()) return;
+    await reopenIfArchived(channel);
     const starter = await channel.fetchStarterMessage();
     if (!starter) return;
     const embed = starter.embeds[0];
