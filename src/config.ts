@@ -9,6 +9,7 @@ export interface BotConfig {
   forumChannelId: string;
   developmentChannelId: string;
   routesChannelId: string;
+  donateChannelId?: string;
   verifiedRole: string;
   pendingRole: string;
   staffRole: string;
@@ -42,6 +43,8 @@ export function loadConfig(): BotConfig {
   const routesChannelId = process.env.ROUTES_CHANNEL_ID;
   if (!routesChannelId) throw new Error('ROUTES_CHANNEL_ID is required');
 
+  const donateChannelId = process.env.DONATE_CHANNEL_ID;
+
   const verifiedRole = process.env.VERIFIED_ROLE;
   if (!verifiedRole) throw new Error('VERIFIED_ROLE is required');
 
@@ -68,6 +71,7 @@ export function loadConfig(): BotConfig {
     forumChannelId,
     developmentChannelId,
     routesChannelId,
+    donateChannelId,
     verifiedRole,
     pendingRole,
     staffRole,

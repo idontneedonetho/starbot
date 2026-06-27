@@ -5,7 +5,7 @@ import {
   ButtonStyle,
   EmbedBuilder,
 } from 'discord.js';
-import { loadConfig } from '../../config.js';
+import { loadConfig, type BotConfig } from '../../config.js';
 import { createLogger } from '../../logger.js';
 import { getIndex } from '../../wiki/wiki.js';
 import { searchWiki, formatWikiResults } from '../../wiki/searcher.js';
@@ -34,6 +34,25 @@ export function buildActionRow(ticketId: string): ActionRowBuilder<ButtonBuilder
       .setStyle(ButtonStyle.Primary)
       .setEmoji('🛠️'),
   );
+}
+
+export function buildDonateRow(config: BotConfig, guildId: string): ActionRowBuilder<ButtonBuilder> | null {
+  if (!config.donateChannelId) return null;
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setStyle(ButtonStyle.Link)
+      .setLabel('Donate')
+      .setEmoji('💜')
+      .setURL(`https://discord.com/channels/${guildId}/${config.donateChannelId}`),
+  );
+}
+
+export function donateField(config: BotConfig): { name: string; value: string } | null {
+  if (!config.donateChannelId) return null;
+  return {
+    name: '​',
+    value: `-# 💜 StarPilot is free - if it has helped you, consider supporting it in <#${config.donateChannelId}>`,
+  };
 }
 
 export async function swapForumTags(
@@ -172,6 +191,8 @@ export async function submitReport(
   }
 
   await addWikiSuggestions(params.embed, params.wikiQuery);
+  const donate = donateField(config);
+  if (donate) params.embed.addFields(donate);
   const starter = await thread.fetchStarterMessage();
   if (starter) {
     const actionRow = buildActionRow(ticketId);

@@ -27,7 +27,7 @@ import { COLORS, formatGitCommit, discordTimestamp, timeAgo, isStaleBuild } from
 import { normalizeRouteInput, parseNormalizedRoute, validateRoute, extractRouteIds, replaceRouteIds, fetchRouteMetadata } from '../../comma.js';
 import { fetchCommitChoices, type CommitChoice } from '../../github.js';
 import { getForum, addAdditionalRoutesToTracker, createRouteTrackerThread, routeNumberLabel, TRACKER_FIELD_PREFIX } from './route-tracker.js';
-import { resolveTagIds, buildActionRow, swapForumTags } from './report-service.js';
+import { resolveTagIds, buildActionRow, buildDonateRow, swapForumTags } from './report-service.js';
 import { setThreadStatusEmoji, setThreadStatusAndClose, setReportCloseHandler } from './title-sync.js';
 import { scheduleClose, getScheduledClose, nextCloseAt, closingNoticeField } from './close-scheduler.js';
 
@@ -720,7 +720,8 @@ export class BotReportActions {
       .setTimestamp();
     if (note) resolvedEmbed.setDescription(note);
     resolvedEmbed.addFields(closingNoticeField(closeAt));
-    const noticeMsg = await thread.send({ content: `<@${interaction.user.id}> marked this issue as fixed.`, embeds: [resolvedEmbed] }).catch(err => { log.warn({ err }, 'Failed to post resolved embed'); return null; });
+    const donateRow = buildDonateRow(loadConfig(), guild.id);
+    const noticeMsg = await thread.send({ content: `<@${interaction.user.id}> marked this issue as fixed.`, embeds: [resolvedEmbed], components: donateRow ? [donateRow] : [] }).catch(err => { log.warn({ err }, 'Failed to post resolved embed'); return null; });
 
     const waitMsg = await thread.messages.fetch(msgId).catch(() => null);
     if (waitMsg) {
