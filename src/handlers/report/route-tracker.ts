@@ -91,12 +91,13 @@ export function routeNumberLabel(routeNumber: number): string {
   return `**[Route ${routeNumber}]**`;
 }
 
-export function routeLinkMarkdown(r: ExtractedRoute): string {
+export function routeLinkMarkdown(r: ExtractedRoute, sharedAt: number = Date.now()): string {
   const url = routeLinkUrl(r);
   const short = routeShortForm(r);
   const original = r.originalText ?? short;
   const linkText = r.routeNumber ? `Route ${r.routeNumber}` : 'Route';
-  return `${routeStatusEmoji(r)}[${linkText}](${url}) \u2014 \`${short}\` \u2014 ||\`${original}\`||`;
+  const ts = `<t:${Math.floor(sharedAt / 1000)}:f>`;
+  return `${routeStatusEmoji(r)}[${linkText}](${url}) \u2014 \`${short}\` \u2014 ${ts} \u2014 ||\`${original}\`||`;
 }
 
 export function buildConfirmRows(
