@@ -20,6 +20,7 @@ import { createStore } from '../../store.js';
 import { COLORS } from '../../util.js';
 import {
   parseRouteComponents,
+  parseRouteField,
   extractRouteIds,
   replaceRouteIds,
   validateRoute,
@@ -219,29 +220,34 @@ async function processBugReport(
     `[Reproducibility, Intent & Details]\n${reproIntent}`;
   const titlePromise = titleGenerator.generate('Bug Report', llmContent, observed);
 
-  let components: RouteComponents;
-  try {
-    components = parseRouteComponents(routeIdInput);
-  } catch (err) {
+  const field = parseRouteField(routeIdInput);
+  if (!field) {
+    let message = 'Use the format `dongle_id/route_name` or a connect.comma.ai URL.';
+    try {
+      parseRouteComponents(routeIdInput);
+    } catch (err) {
+      if (err instanceof Error) message = err.message;
+    }
     await interaction.editReply({
-      content: `Invalid route ID. You entered:\n\`${routeIdInput}\`\n\n${err instanceof Error ? err.message : 'Use the format `dongle_id/route_name` or a connect.comma.ai URL.'}`,
+      content: `Invalid route ID. You entered:\n\`${routeIdInput}\`\n\n${message}`,
     });
     return;
   }
 
-  const dedicatedTrimmed = routeIdInput.trim();
+  const components: RouteComponents = field.primary;
+  const primaryRoute = field.routes[0];
   const dedicatedRoute: ExtractedRoute = {
     dongleId: components.dongleId,
     routeName: components.routeName,
     iteration: components.iteration,
-    originalText: dedicatedTrimmed,
-    isUrl: /^https:\/\/connect\.comma\.ai\//i.test(dedicatedTrimmed),
+    originalText: primaryRoute.originalText,
+    isUrl: primaryRoute.isUrl,
   };
 
   const allRoutes: ExtractedRoute[] = [dedicatedRoute];
-  const seenKeys = new Set<string>([dedicatedTrimmed.toLowerCase()]);
+  const seenKeys = new Set<string>([(primaryRoute.originalText ?? '').toLowerCase()]);
   const allText = [observed, expected, reproIntent].join('\n');
-  for (const r of extractRouteIds(allText)) {
+  for (const r of [...field.routes.slice(1), ...extractRouteIds(allText)]) {
     const key = (r.originalText ?? '').toLowerCase();
     if (key && !seenKeys.has(key)) {
       seenKeys.add(key);

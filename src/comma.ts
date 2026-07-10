@@ -169,6 +169,19 @@ export function extractRouteIds(text: string): ExtractedRoute[] {
   return results;
 }
 
+export function parseRouteField(input: string): { primary: RouteComponents; routes: ExtractedRoute[] } | null {
+  const routes = extractRouteIds(input);
+  if (routes.length === 0) return null;
+  // Re-parse the primary alone so its connect-URL segment bounds survive (extractRouteIds drops them).
+  let primary: RouteComponents;
+  try {
+    primary = parseRouteComponents(routes[0].originalText ?? input);
+  } catch {
+    primary = { dongleId: routes[0].dongleId, routeName: routes[0].routeName, iteration: routes[0].iteration };
+  }
+  return { primary, routes };
+}
+
 export function replaceRouteIds(
   text: string,
   routes: ExtractedRoute[],
