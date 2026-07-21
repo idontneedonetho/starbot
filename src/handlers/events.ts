@@ -17,6 +17,7 @@ import { searchWiki, formatWikiResults } from '../wiki/searcher.js';
 import { WikiRateLimit } from './guards.js';
 import { initTitleSync } from './report/title-sync.js';
 import { initCloseScheduler } from './report/close-scheduler.js';
+import { initKonikToken, refreshKonikToken, konikEnabled } from '../konik.js';
 import { COLORS } from '../util.js';
 
 const log = createLogger('events');
@@ -122,6 +123,12 @@ export class BotEvents {
 
     initTitleSync(client);
     initCloseScheduler(client);
+
+    await initKonikToken();
+    if (konikEnabled()) {
+      void refreshKonikToken();
+      setInterval(() => { void refreshKonikToken(); }, 7 * 24 * 60 * 60 * 1000);
+    }
 
     const commitHash = getCommitHash();
     if (commitHash) {

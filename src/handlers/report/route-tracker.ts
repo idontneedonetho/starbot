@@ -21,7 +21,9 @@ import {
   validateRoute,
   type ExtractedRoute,
   type RouteComponents,
+  type RouteProvider,
 } from '../../comma.js';
+import { konikViewerUrl, getKonikRouteInfo } from '../../konik.js';
 
 const log = createLogger('route-tracker');
 
@@ -52,6 +54,7 @@ function routeStatusEmoji(r: ExtractedRoute): string {
 }
 
 function routeLinkUrl(r: ExtractedRoute): string {
+  if (r.provider === 'konik') return konikViewerUrl(r.dongleId, r.routeName);
   const orig = r.originalText;
   if (orig && /^https:\/\/connect\.comma\.ai\//i.test(orig)) return orig;
   if (orig) {
@@ -96,8 +99,9 @@ export function routeLinkMarkdown(r: ExtractedRoute, sharedAt: number = Date.now
   const short = routeShortForm(r);
   const original = r.originalText ?? short;
   const linkText = r.routeNumber ? `Route ${r.routeNumber}` : 'Route';
+  const konikMark = r.provider === 'konik' ? '\ud83d\udc34 ' : '';
   const ts = `<t:${Math.floor(sharedAt / 1000)}:f>`;
-  return `${routeStatusEmoji(r)}[${linkText}](${url}) \u2014 \`${short}\` \u2014 ${ts} \u2014 ||\`${original}\`||`;
+  return `${routeStatusEmoji(r)}${konikMark}[${linkText}](${url}) \u2014 \`${short}\` \u2014 ${ts} \u2014 ||\`${original}\`||`;
 }
 
 export function buildConfirmRows(
@@ -150,7 +154,8 @@ export function parseConfirmCustomId(customId: string): { ticketId: string; user
 const REFRESH_COOLDOWN_MS = 60_000;
 export const refreshCooldowns = new LRUCache<string, number>({ max: 500, ttl: REFRESH_COOLDOWN_MS });
 
-export async function postRouteMetadata(channel: ThreadChannel, dongleId: string, routeName: string): Promise<void> {
+export async function postRouteMetadata(channel: ThreadChannel, dongleId: string, routeName: string, provider: RouteProvider = 'comma'): Promise<void> {
+  if (provider === 'konik') return postKonikRouteMetadata(channel, dongleId, routeName);
   const meta = await fetchRouteMetadata(dongleId, routeName);
   if (!meta) return;
   const embed = new EmbedBuilder()
@@ -167,6 +172,23 @@ export async function postRouteMetadata(channel: ThreadChannel, dongleId: string
       { name: 'Git Dirty', value: String(meta.git_dirty), inline: true },
     );
   await channel.send({ embeds: [embed] }).catch(err => log.warn({ err }, 'Failed to post route metadata'));
+}
+
+async function postKonikRouteMetadata(channel: ThreadChannel, dongleId: string, routeName: string): Promise<void> {
+  const { metadata } = await getKonikRouteInfo(dongleId, routeName);
+  if (!metadata) return;
+  const remote = metadata.gitRemote ? metadata.gitRemote.replace(/^https?:\/\//, '').replace(/\.git$/, '') : '';
+  const fields: { name: string; value: string; inline: boolean }[] = [
+    { name: 'Route ID', value: `${dongleId}/${routeName}`, inline: true },
+  ];
+  if (metadata.gitRemote) fields.push({ name: 'Git Remote', value: metadata.gitRemote, inline: true });
+  if (metadata.gitBranch) fields.push({ name: 'Git Branch', value: formatGitBranch(metadata.gitBranch, remote), inline: true });
+  if (metadata.gitCommit) fields.push({ name: 'Git Commit', value: formatGitCommit(metadata.gitCommit, remote), inline: true });
+  if (metadata.gitCommitDate) fields.push({ name: 'Git Commit Date', value: metadata.gitCommitDate, inline: true });
+  if (metadata.gitDirty !== undefined) fields.push({ name: 'Git Dirty', value: String(metadata.gitDirty), inline: true });
+  if (metadata.version) fields.push({ name: 'Version', value: metadata.version, inline: true });
+  const embed = new EmbedBuilder().setColor(COLORS.amber).setTitle('Route Metadata (Konik)').addFields(...fields);
+  await channel.send({ embeds: [embed] }).catch(err => log.warn({ err }, 'Failed to post konik route metadata'));
 }
 
 function migrateFieldsToDescription(embed: { fields?: Array<{ name: string; value: string; inline?: boolean }> }, builder: EmbedBuilder): string {
@@ -202,7 +224,9 @@ async function refreshRouteLine(line: string): Promise<string> {
   } catch {
     return line;
   }
-  const v = await validateRoute(components.dongleId, components.routeName, components.startSegment, components.endSegment);
+  const urlMatch = line.match(/\]\((https?:\/\/[^)]+)\)/);
+  const provider: RouteProvider = urlMatch && /konik\.ai/i.test(urlMatch[1]) ? 'konik' : (components.provider ?? 'comma');
+  const v = await validateRoute(components.dongleId, components.routeName, components.startSegment, components.endSegment, provider);
   if (!v.valid) return line;
   const emoji = routeStatusEmoji({
     dongleId: components.dongleId,
@@ -287,7 +311,7 @@ export async function createRouteTrackerThread(
   }
 
   if (primaryRoute?.public) {
-    await postRouteMetadata(routesThread, primaryRoute.dongleId, primaryRoute.routeName);
+    await postRouteMetadata(routesThread, primaryRoute.dongleId, primaryRoute.routeName, primaryRoute.provider);
   }
 
   return { url: routesThread.url, threadId: routesThread.id };
@@ -335,7 +359,7 @@ export async function addAdditionalRoutesToTracker(
         const key = `${r.dongleId}/${r.routeName}`;
         if (!postedMeta.has(key)) {
           postedMeta.add(key);
-          await postRouteMetadata(channel, r.dongleId, r.routeName);
+          await postRouteMetadata(channel, r.dongleId, r.routeName, r.provider);
         }
       }
     }

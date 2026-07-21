@@ -209,7 +209,7 @@ async function processShareRoute(
   }
 
   const validations = await Promise.all(
-    parsed.map(p => validateRoute(p.components.dongleId, p.components.routeName, p.components.startSegment, p.components.endSegment)),
+    parsed.map(p => validateRoute(p.components.dongleId, p.components.routeName, p.components.startSegment, p.components.endSegment, p.components.provider)),
   );
 
   const invalidEntries: string[] = [];

@@ -242,6 +242,7 @@ async function processBugReport(
     iteration: components.iteration,
     originalText: primaryRoute.originalText,
     isUrl: primaryRoute.isUrl,
+    provider: components.provider,
   };
 
   const allRoutes: ExtractedRoute[] = [dedicatedRoute];
@@ -258,8 +259,8 @@ async function processBugReport(
   const validations = await Promise.all(
     allRoutes.map((r, i) =>
       i === 0
-        ? validateRoute(r.dongleId, r.routeName, components.startSegment, components.endSegment)
-        : validateRoute(r.dongleId, r.routeName),
+        ? validateRoute(r.dongleId, r.routeName, components.startSegment, components.endSegment, r.provider)
+        : validateRoute(r.dongleId, r.routeName, undefined, undefined, r.provider),
     ),
   );
   const validatedRoutes = allRoutes.map((r, i) => ({ ...r, ...validations[i] }));
@@ -267,7 +268,9 @@ async function processBugReport(
 
   if (!dedicatedValidated.valid) {
     await interaction.editReply({
-      content: `The route you entered doesn't appear to exist:\n\`${routeIdInput}\`\n\nPlease double-check the Route ID and try again.`,
+      content: dedicatedValidated.disabled
+        ? `Konik route support isn't configured on this bot yet, so \`${routeIdInput}\` can't be validated. Submit a \`connect.comma.ai\` route, or ask an admin to enable Konik.`
+        : `The route you entered doesn't appear to exist:\n\`${routeIdInput}\`\n\nPlease double-check the Route ID and try again.`,
     });
     return;
   }
@@ -447,7 +450,7 @@ async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, type: '
 
   const routes = extractRouteIds(content);
   const validatedRoutes: Array<ExtractedRoute & RouteValidation> = [];
-  for (const v of await Promise.all(routes.map(r => validateRoute(r.dongleId, r.routeName)))) {
+  for (const v of await Promise.all(routes.map(r => validateRoute(r.dongleId, r.routeName, undefined, undefined, r.provider)))) {
     validatedRoutes.push({ ...routes[validatedRoutes.length], ...v });
   }
   const numberedRoutes = validatedRoutes.map((r, i) => ({ ...r, routeNumber: i + 1 }));
