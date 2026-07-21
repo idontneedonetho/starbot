@@ -215,6 +215,71 @@ function migrateFieldsToDescription(embed: { fields?: Array<{ name: string; valu
   return desc;
 }
 
+const ROUTE_HEADER = '**Route**';
+const ADDITIONAL_HEADER = '**Additional Routes**';
+const MAX_DESC_LENGTH = 4096;
+const DESC_SAFETY_MARGIN = 64;
+
+export interface ParsedTrackerDescription {
+  primaryLine: string | null;
+  additionalLines: string[];
+}
+
+export function parseTrackerDescription(desc: string | undefined | null): ParsedTrackerDescription {
+  if (!desc) return { primaryLine: null, additionalLines: [] };
+  const lines = desc.split('\n');
+  let primaryLine: string | null = null;
+  const additionalLines: string[] = [];
+  let section: 'primary' | 'additional' | null = null;
+  for (const raw of lines) {
+    const line = raw;
+    if (line === ROUTE_HEADER) {
+      section = 'primary';
+      continue;
+    }
+    if (line === ADDITIONAL_HEADER) {
+      section = 'additional';
+      continue;
+    }
+    if (!line.trim()) continue;
+    if (section === 'primary' && primaryLine === null) primaryLine = line;
+    else if (section === 'additional') additionalLines.push(line);
+  }
+  return { primaryLine, additionalLines };
+}
+
+export function buildTrackerDescription(primaryLine: string | null, additionalLines: string[]): string {
+  const sections: string[] = [];
+  if (primaryLine) sections.push(`${ROUTE_HEADER}\n${primaryLine}`);
+
+  if (additionalLines.length > 0) {
+    const primarySection = primaryLine ? `${ROUTE_HEADER}\n${primaryLine}\n` : '';
+    const header = `${ADDITIONAL_HEADER}\n`;
+    const truncationNoticeMax = `\n_…N older route(s) omitted (tracker limit)._`.length;
+    const budget = MAX_DESC_LENGTH - DESC_SAFETY_MARGIN - primarySection.length - header.length - truncationNoticeMax;
+
+    const kept: string[] = [];
+    let used = 0;
+    for (let i = additionalLines.length - 1; i >= 0; i--) {
+      const line = additionalLines[i];
+      const cost = line.length + 1;
+      if (cost > budget) continue;
+      if (used + cost > budget && kept.length > 0) break;
+      kept.unshift(line);
+      used += cost;
+    }
+
+    let section = header + kept.join('\n');
+    const omitted = additionalLines.length - kept.length;
+    if (omitted > 0) {
+      section += `\n_…${omitted} older route(s) omitted (tracker limit)._`;
+    }
+    sections.push(section);
+  }
+
+  return sections.join('\n');
+}
+
 async function refreshRouteLine(line: string): Promise<string> {
   const shortMatch = line.match(/`([^`]+)`/);
   if (!shortMatch) return line;
@@ -341,17 +406,25 @@ export async function addAdditionalRoutesToTracker(
     if (!embed) return;
     const updated = EmbedBuilder.from(embed);
     const existingDesc = migrateFieldsToDescription(embed, updated);
+    const { primaryLine, additionalLines: existingAdditional } = parseTrackerDescription(existingDesc);
+    const seenShort = new Set<string>();
+    for (const line of existingAdditional) {
+      const m = line.match(/`([^`]+)`/);
+      if (m) seenShort.add(m[1]);
+    }
     const newRoutes = additionalRoutes.filter(r => {
       const short = routeShortForm(r);
-      return !existingDesc.includes(short);
+      if (seenShort.has(short)) return false;
+      seenShort.add(short);
+      return true;
     });
     const newLinks = newRoutes.map(r => {
       const base = routeLinkMarkdown(r);
       return sourceUrl && sourceName ? `${base} \u2014 [${sourceName}](${sourceUrl})` : base;
     });
     if (newLinks.length === 0) return;
-    const links = newLinks.join('\n');
-    updated.setDescription(existingDesc + '\n**Additional Routes**\n' + links);
+    const desc = buildTrackerDescription(primaryLine, [...existingAdditional, ...newLinks]);
+    updated.setDescription(desc);
     await starter.edit({ embeds: [updated] });
     const postedMeta = new Set<string>();
     for (const r of newRoutes) {
