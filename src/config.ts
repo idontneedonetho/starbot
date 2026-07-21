@@ -19,6 +19,8 @@ export interface BotConfig {
   openaiEndpoint?: string;
   openaiApiKey?: string;
   openaiModel?: string;
+  konikJwt?: string;
+  konikApiBase?: string;
 }
 
 export function loadConfig(): BotConfig {
@@ -63,6 +65,9 @@ export function loadConfig(): BotConfig {
   const openaiApiKey = process.env.OPENAI_API_KEY;
   const openaiModel = process.env.OPENAI_MODEL;
 
+  const konikJwt = process.env.KONIK_JWT;
+  const konikApiBase = process.env.KONIK_API_BASE;
+
   return {
     token,
     guildId,
@@ -81,5 +86,7 @@ export function loadConfig(): BotConfig {
     openaiEndpoint,
     openaiApiKey,
     openaiModel,
+    konikJwt,
+    konikApiBase,
   };
 }

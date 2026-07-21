@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { computeRouteLogIssues, parseRouteField, type RouteLogIssueInput } from './comma.js';
+import {
+  computeRouteLogIssues,
+  parseRouteField,
+  extractRouteIds,
+  replaceRouteIds,
+  parseRouteComponents,
+  type RouteLogIssueInput,
+} from './comma.js';
 
 describe('parseRouteField', () => {
   const d1 = '0123456789abcdef';
@@ -55,6 +62,55 @@ describe('parseRouteField', () => {
   it('returns null when no route is found', () => {
     expect(parseRouteField('not a route')).toBeNull();
     expect(parseRouteField('')).toBeNull();
+  });
+});
+
+describe('Konik route handling', () => {
+  const d = '59679e5e40b60ce0';
+  const r = '0000091b--316e931f07';
+  const onebox = `https://useradmin.konik.ai/?onebox=${d}|${r}`;
+  const viewer = `https://stable.konik.ai/${d}/${r}`;
+
+  it('extracts a Konik onebox URL as a whole konik route', () => {
+    const routes = extractRouteIds(`wheel shake ${onebox} thanks`);
+    expect(routes).toHaveLength(1);
+    expect(routes[0]).toMatchObject({ dongleId: d, routeName: r, provider: 'konik', isUrl: true, originalText: onebox });
+  });
+
+  it('extracts a stable.konik.ai viewer URL as a konik route', () => {
+    expect(extractRouteIds(viewer)[0]).toMatchObject({ dongleId: d, routeName: r, provider: 'konik', isUrl: true });
+  });
+
+  it('handles a url-encoded pipe in the onebox URL', () => {
+    const enc = `https://useradmin.konik.ai/?onebox=${d}%7C${r}`;
+    expect(extractRouteIds(enc)[0]).toMatchObject({ dongleId: d, routeName: r, provider: 'konik' });
+  });
+
+  it('handles a slash separator in the onebox URL', () => {
+    const slash = `https://useradmin.konik.ai/?onebox=${d}/${r}`;
+    expect(extractRouteIds(slash)[0]).toMatchObject({ dongleId: d, routeName: r, provider: 'konik', isUrl: true, originalText: slash });
+    expect(replaceRouteIds(slash, extractRouteIds(slash).map((x, i) => ({ ...x, routeNumber: i + 1 })), n => `**[Route ${n}]**`)).toBe('**[Route 1]**');
+  });
+
+  it('does not truncate a Konik onebox URL when numbering routes', () => {
+    const routes = extractRouteIds(onebox).map((x, i) => ({ ...x, routeNumber: i + 1 }));
+    const out = replaceRouteIds(`see ${onebox}`, routes, n => `**[Route ${n}]**`);
+    expect(out).toBe('see **[Route 1]**');
+    expect(out).not.toContain('onebox=');
+    expect(out).not.toContain('konik.ai');
+  });
+
+  it('strips an unnumbered Konik URL with no leftover shell', () => {
+    expect(replaceRouteIds(onebox, extractRouteIds(onebox), n => `**[Route ${n}]**`)).toBe('');
+  });
+
+  it('parseRouteComponents tags konik URLs', () => {
+    expect(parseRouteComponents(onebox)).toMatchObject({ dongleId: d, routeName: r, provider: 'konik' });
+    expect(parseRouteComponents(viewer)).toMatchObject({ dongleId: d, routeName: r, provider: 'konik' });
+  });
+
+  it('treats a bare id as comma, not konik', () => {
+    expect(extractRouteIds(`${d}|${r}`)[0].provider).toBe('comma');
   });
 });
 

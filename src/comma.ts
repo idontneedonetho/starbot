@@ -1,7 +1,10 @@
 import { LRUCache } from 'lru-cache';
 import { createLogger } from './logger.js';
+import { validateKonikRoute } from './konik.js';
 
 const log = createLogger('comma');
+
+export type RouteProvider = 'comma' | 'konik';
 
 // Fully decomposed route input: identity plus optional sub-route and segment bounds.
 export interface RouteComponents {
@@ -10,6 +13,7 @@ export interface RouteComponents {
   iteration?: string;
   startSegment?: number;
   endSegment?: number;
+  provider?: RouteProvider;
 }
 
 export interface ExtractedRoute {
@@ -23,6 +27,7 @@ export interface ExtractedRoute {
   routeNumber?: number;
   public?: boolean;
   rlogsAvailable?: boolean;
+  provider?: RouteProvider;
 }
 
 export interface RlogCheckResult {
@@ -35,6 +40,7 @@ export interface RouteValidation {
   public: boolean;
   rlogsAvailable: boolean;
   rlogCheck?: RlogCheckResult;
+  disabled?: boolean;
 }
 
 // Matches dongle/route or dongle|route with optional iteration (used for scanning free-form text).
@@ -46,11 +52,12 @@ const ROUTE_ID_REGEX = /^([a-f0-9]{16})[\/|]([a-f0-9]{8}--[a-f0-9]{10})(?:\/([a-
 // Matches connect.comma.ai URLs with optional start[/end] seconds.
 const CONNECT_URL_REGEX = /https:\/\/connect\.comma\.ai\/([a-f0-9]{16})\/([a-f0-9]{8}--[a-f0-9]{10})(?:\/(\d+)(?:\/(\d+))?)?/gi;
 
-// Captures: 1+2 = URL form (dongle, route); 3+4 = bare form (dongle, route).
-const ANY_ROUTE_REGEX = /(?:https:\/\/connect\.comma\.ai\/([a-f0-9]{16})\/([a-f0-9]{8}--[a-f0-9]{10})|([a-f0-9]{16})[\/|]([a-f0-9]{8}--[a-f0-9]{10}))(?:\/(?:[a-f0-9]{8}--[a-f0-9]{10}|\d+(?:\/\d+)?))?/gi;
+// Captures: 1+2 = comma URL; 3+4 = konik URL; 5+6 = bare form (dongle, route).
+const ANY_ROUTE_REGEX = /(?:https:\/\/connect\.comma\.ai\/([a-f0-9]{16})\/([a-f0-9]{8}--[a-f0-9]{10})|https:\/\/(?:useradmin\.konik\.ai\/\?onebox=|stable\.konik\.ai\/)([a-f0-9]{16})(?:%7C|[|\/])([a-f0-9]{8}--[a-f0-9]{10})|([a-f0-9]{16})[\/|]([a-f0-9]{8}--[a-f0-9]{10}))(?:\/(?:[a-f0-9]{8}--[a-f0-9]{10}|\d+(?:\/\d+)?))?/gi;
 
 // Lenient enough to catch malformed connect URLs so PII is stripped even if parsing fails.
 const CONNECT_URL_STRIP_REGEX = /https?:\/\/connect\.comma\.ai\/[^\s)<>"']*/gi;
+const KONIK_URL_STRIP_REGEX = /https?:\/\/(?:useradmin|stable)\.konik\.ai\/[^\s)<>"']*/gi;
 
 // connect.comma.ai URLs measure position in seconds; segments are 60s each.
 export function secondsToSegment(secStr: string): number {
@@ -66,6 +73,9 @@ export function segmentToSeconds(segment: number): number {
 // Throws with a user-facing message on malformed input.
 export function parseRouteComponents(input: string): RouteComponents {
   input = input.trim();
+
+  const konikMatch = input.match(/^https:\/\/(?:useradmin\.konik\.ai\/\?onebox=|stable\.konik\.ai\/)([a-f0-9]{16})(?:%7C|[|\/])([a-f0-9]{8}--[a-f0-9]{10})/i);
+  if (konikMatch) return { dongleId: konikMatch[1], routeName: konikMatch[2], provider: 'konik' };
 
   if (input.startsWith('https://connect.comma.ai/')) {
     const path = input.slice('https://connect.comma.ai/'.length).replace(/\/+$/, '');
@@ -154,9 +164,14 @@ export function extractRouteIds(text: string): ExtractedRoute[] {
     const key = original.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    const isUrl = m[1] !== undefined;
-    const dongle = isUrl ? m[1] : m[3];
-    const route = isUrl ? m[2] : m[4];
+    let dongle: string, route: string, provider: RouteProvider, isUrl: boolean;
+    if (m[1] !== undefined) {
+      dongle = m[1]; route = m[2]; provider = 'comma'; isUrl = true;
+    } else if (m[3] !== undefined) {
+      dongle = m[3]; route = m[4]; provider = 'konik'; isUrl = true;
+    } else {
+      dongle = m[5]; route = m[6]; provider = 'comma'; isUrl = false;
+    }
     const iterMatch = !isUrl ? original.match(/\/([a-f0-9]{8}--[a-f0-9]{10})$/i) : null;
     results.push({
       dongleId: dongle,
@@ -164,6 +179,7 @@ export function extractRouteIds(text: string): ExtractedRoute[] {
       iteration: iterMatch?.[1],
       originalText: original,
       isUrl,
+      provider,
     });
   }
   return results;
@@ -200,6 +216,7 @@ export function replaceRouteIds(
   return text
     .replace(new RegExp(ANY_ROUTE_REGEX.source, 'gi'), match => labelByText.get(match.toLowerCase()) ?? '')
     .replace(CONNECT_URL_STRIP_REGEX, '')
+    .replace(KONIK_URL_STRIP_REGEX, '')
     .split('\n')
     .map(line => line.replace(/\s+/g, ' ').trim())
     .join('\n')
@@ -209,6 +226,7 @@ export function replaceRouteIds(
 export function stripRouteIds(text: string): string {
   return text
     .replace(CONNECT_URL_REGEX, '')
+    .replace(KONIK_URL_STRIP_REGEX, '')
     .replace(ROUTE_REGEX, '')
     .split('\n')
     .map(line => line.replace(/\s+/g, ' ').trim())
@@ -273,7 +291,9 @@ export async function validateRoute(
   routeName: string,
   startSegment?: number,
   endSegment?: number,
+  provider: RouteProvider = 'comma',
 ): Promise<RouteValidation> {
+  if (provider === 'konik') return validateKonikRoute(dongleId, routeName);
   try {
     const res = await fetch(`https://api.comma.ai/v1/route/${dongleId}|${routeName}/files`);
     if (res.ok) {

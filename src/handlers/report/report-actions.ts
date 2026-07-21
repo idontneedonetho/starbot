@@ -425,6 +425,7 @@ export async function submitAdditionalReport(params: {
   force: boolean;
 }): Promise<void> {
   const { interaction, thread, guild, userId, routeInput, details, ready, force } = params;
+  log.info({ userId, threadId: thread.id, routeInput, details, ready: !!ready, force }, 'Additional report submitted');
   const reply = (content: string) => interaction.editReply({ content, components: [] });
 
   const trimmedInput = routeInput.trim();
@@ -444,10 +445,11 @@ export async function submitAdditionalReport(params: {
     return;
   }
   parsed.originalText = trimmedInput;
-  parsed.isUrl = /^https:\/\/connect\.comma\.ai\//i.test(trimmedInput);
+  parsed.isUrl = /^https?:\/\//i.test(trimmedInput);
+  parsed.provider = comps.provider;
 
   const { dongleId, routeName } = parsed;
-  const primary = await validateRoute(dongleId, routeName, comps.startSegment, comps.endSegment);
+  const primary = await validateRoute(dongleId, routeName, comps.startSegment, comps.endSegment, comps.provider);
   if (!primary.valid) {
     await reply('That route does not exist. Please check the Route ID and try again.');
     return;
@@ -458,7 +460,7 @@ export async function submitAdditionalReport(params: {
   const detailRoutes = details
     ? extractRouteIds(details).filter(r => (r.originalText ?? '').toLowerCase() !== trimmedInput.toLowerCase())
     : [];
-  const detailValidations = await Promise.all(detailRoutes.map(r => validateRoute(r.dongleId, r.routeName)));
+  const detailValidations = await Promise.all(detailRoutes.map(r => validateRoute(r.dongleId, r.routeName, undefined, undefined, r.provider)));
   const numberedDetailRoutes = detailRoutes.map((r, i) => ({ ...r, ...detailValidations[i], routeNumber: i + 1 }));
 
   if (!force) {
@@ -802,10 +804,11 @@ export class BotReportActions {
     }
 
     const feedback = interaction.fields.getTextInputValue('feedback');
+    log.info({ userId: interaction.user.id, threadId: thread.id, feedback }, 'Report marked ready');
     let feedbackMsg: import('discord.js').Message | null = null;
     if (feedback) {
       const routes = extractRouteIds(feedback);
-      const validations = await Promise.all(routes.map(r => validateRoute(r.dongleId, r.routeName)));
+      const validations = await Promise.all(routes.map(r => validateRoute(r.dongleId, r.routeName, undefined, undefined, r.provider)));
       const numbered = routes.map((r, i) => ({ ...r, ...validations[i], routeNumber: i + 1 }));
       const cleanFeedback = replaceRouteIds(feedback, numbered, routeNumberLabel);
       const validRoutes = numbered.filter(r => r.valid);
