@@ -1,11 +1,12 @@
-import { Discord, ButtonComponent, ModalComponent, SelectMenuComponent, Slash, SlashGroup, Guild } from 'discordx';
-import type { CommandInteraction, StringSelectMenuInteraction, ActionRow, MessageActionRowComponent } from 'discord.js';
+import { Discord, ButtonComponent, ModalComponent, SelectMenuComponent, Slash, SlashGroup, Guild, ContextMenu } from 'discordx';
+import type { CommandInteraction, StringSelectMenuInteraction, ActionRow, MessageActionRowComponent, MessageContextMenuCommandInteraction } from 'discord.js';
 import {
   type ButtonInteraction,
   type ModalSubmitInteraction,
   type ThreadChannel,
   type ForumChannel,
   type Message,
+  ApplicationCommandType,
   ComponentType,
   GuildMember,
   ModalBuilder,
@@ -412,6 +413,102 @@ function buildAssignModal(ticketId: string, defaultUserId: string): ModalBuilder
   modal.addLabelComponents(new LabelBuilder().setLabel('Assign this report to').setUserSelectMenuComponent(userSelect));
 
   return modal;
+}
+
+async function assignModalForThread(thread: ThreadChannel, ticketId: string, fallbackUserId: string): Promise<ModalBuilder> {
+  const starter = await thread.fetchStarterMessage();
+  const current = starter?.embeds[0]?.fields?.find(f => f.name === '👤 Assigned to')?.value.match(/<@(\d+)>/)?.[1];
+  return buildAssignModal(ticketId, current ?? fallbackUserId);
+}
+
+function buildMergeModal(customId: string): ModalBuilder {
+  const modal = new ModalBuilder()
+    .setCustomId(customId)
+    .setTitle('Merge Report');
+
+  const targetInput = new TextInputBuilder({
+    custom_id: 'target_thread',
+    style: TextInputStyle.Short,
+    placeholder: 'Paste the target thread URL or ID',
+    required: true,
+    max_length: 200,
+  });
+  modal.addLabelComponents(new LabelBuilder().setLabel('Target Thread').setTextInputComponent(targetInput));
+
+  return modal;
+}
+
+function ticketIdFromStarter(starter: Message | null): string | null {
+  if (!starter) return null;
+  const staffButton = starter.components
+    .filter(row => row.type === ComponentType.ActionRow)
+    .flatMap(row => (row as ActionRow<MessageActionRowComponent>).components)
+    .find(c => c.type === ComponentType.Button && c.customId?.startsWith('staff_actions_'));
+  if (!staffButton || staffButton.type !== ComponentType.Button) return null;
+  return staffButton.customId!.replace('staff_actions_', '');
+}
+
+interface StaffActionContext {
+  thread: ThreadChannel;
+  guild: import('discord.js').Guild;
+  ticketId: string;
+}
+
+// Must not defer: callers showModal on success, which fails on an acknowledged interaction.
+async function resolveStaffActionContext(interaction: MessageContextMenuCommandInteraction): Promise<StaffActionContext | null> {
+  const thread = interaction.channel;
+  if (!thread?.isThread()) {
+    await interaction.reply({ content: 'This can only be used inside a report thread.', flags: MessageFlags.Ephemeral });
+    return null;
+  }
+
+  const guild = interaction.guild;
+  if (!guild) {
+    await interaction.reply({ content: 'Could not resolve guild.', flags: MessageFlags.Ephemeral });
+    return null;
+  }
+
+  const starter = await thread.fetchStarterMessage().catch(() => null);
+  const ticketId = ticketIdFromStarter(starter);
+  if (!ticketId) {
+    await interaction.reply({ content: 'This thread is not a report thread (no Staff Actions button found in its starter message).', flags: MessageFlags.Ephemeral });
+    return null;
+  }
+
+  if (await getScheduledClose(thread.id)) {
+    await interaction.reply({ content: 'This report is closing soon - staff actions are locked until then.', flags: MessageFlags.Ephemeral });
+    return null;
+  }
+
+  return { thread, guild, ticketId };
+}
+
+async function beginScheduledClose(thread: ThreadChannel, closedByUserId: string): Promise<{ ok: boolean; message: string }> {
+  const closeAt = nextCloseAt();
+  const closeStarter = await thread.fetchStarterMessage();
+  if (closeStarter) {
+    const closeEmbed = closeStarter.embeds[0];
+    if (closeEmbed) {
+      const closeUpdated = EmbedBuilder.from(closeEmbed);
+      closeUpdated.addFields({ name: '​', value: `🔐 Closed by <@${closedByUserId}>` });
+      await closeStarter.edit({ embeds: [closeUpdated] }).catch(err => log.warn({ err }, 'Failed to edit starter'));
+    }
+  }
+
+  const noticeEmbed = new EmbedBuilder()
+    .setColor(COLORS.blurple)
+    .setTitle('🔐 Closed')
+    .setDescription(`Closed by <@${closedByUserId}>.`)
+    .addFields(closingNoticeField(closeAt))
+    .setTimestamp();
+  const noticeMsg = await thread.send({ embeds: [noticeEmbed] }).catch(err => { log.warn({ err }, 'Failed to post closing notice'); return null; });
+
+  const scheduled = await scheduleClose(thread, 'closed', closeAt, noticeMsg?.id ?? '');
+  if (!scheduled) {
+    await noticeMsg?.delete().catch(() => {});
+    return { ok: false, message: 'This report is already closing.' };
+  }
+  return { ok: true, message: 'Report will close shortly.' };
 }
 
 export async function submitAdditionalReport(params: {
@@ -1004,62 +1101,21 @@ export class BotReportActions {
     }
 
     if (action === 'merge') {
-      const modal = new ModalBuilder()
-        .setCustomId(`merge_modal_${interaction.id}`)
-        .setTitle('Merge Report');
-
-      const targetInput = new TextInputBuilder({
-        custom_id: 'target_thread',
-        style: TextInputStyle.Short,
-        placeholder: 'Paste the target thread URL or ID',
-        required: true,
-        max_length: 200,
-      });
-      modal.addLabelComponents(new LabelBuilder().setLabel('Target Thread').setTextInputComponent(targetInput));
-
-      await interaction.showModal(modal);
+      await interaction.showModal(buildMergeModal(`merge_modal_${interaction.id}`));
       return;
     }
 
     if (action === 'assign') {
-      const assignStarter = await thread.fetchStarterMessage();
-      const current = assignStarter?.embeds[0]?.fields?.find(f => f.name === '👤 Assigned to')?.value.match(/<@(\d+)>/)?.[1];
       const ticketId = interaction.customId.replace('staff_select_', '');
-      await interaction.showModal(buildAssignModal(ticketId, current ?? interaction.user.id));
+      await interaction.showModal(await assignModalForThread(thread, ticketId, interaction.user.id));
       return;
     }
 
     await interaction.deferUpdate();
     await interaction.deleteReply().catch(() => {});
 
-    {
-      const closeAt = nextCloseAt();
-      const closeStarter = await thread.fetchStarterMessage();
-      if (closeStarter) {
-        const closeEmbed = closeStarter.embeds[0];
-        if (closeEmbed) {
-          const closeUpdated = EmbedBuilder.from(closeEmbed);
-          closeUpdated.addFields({ name: '\u200B', value: `🔐 Closed by <@${interaction.user.id}>` });
-          await closeStarter.edit({ embeds: [closeUpdated] }).catch(err => log.warn({ err }, 'Failed to edit starter'));
-        }
-      }
-
-      const noticeEmbed = new EmbedBuilder()
-        .setColor(COLORS.blurple)
-        .setTitle('🔐 Closed')
-        .setDescription(`Closed by <@${interaction.user.id}>.`)
-        .addFields(closingNoticeField(closeAt))
-        .setTimestamp();
-      const noticeMsg = await thread.send({ embeds: [noticeEmbed] }).catch(err => { log.warn({ err }, 'Failed to post closing notice'); return null; });
-
-      const scheduled = await scheduleClose(thread, 'closed', closeAt, noticeMsg?.id ?? '');
-      if (!scheduled) {
-        await noticeMsg?.delete().catch(() => {});
-        await interaction.followUp({ content: 'This report is already closing.', flags: MessageFlags.Ephemeral });
-        return;
-      }
-      await interaction.followUp({ content: 'Report will close shortly.', flags: MessageFlags.Ephemeral });
-    }
+    const closeResult = await beginScheduledClose(thread, interaction.user.id);
+    await interaction.followUp({ content: closeResult.message, flags: MessageFlags.Ephemeral });
   }
 
   @ModalComponent({ id: /^assign_modal_/ })
@@ -1093,17 +1149,26 @@ export class BotReportActions {
       return;
     }
 
-    await interaction.deferUpdate();
+    const fromMessage = interaction.isFromMessage();
+    if (fromMessage) {
+      await interaction.deferUpdate();
+    } else {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    }
+    const respond = (content: string) =>
+      fromMessage
+        ? interaction.followUp({ content, flags: MessageFlags.Ephemeral })
+        : interaction.editReply({ content });
 
     const member = await guild.members.fetch(target.id).catch(() => null);
     if (!member || !hasStaffRole(member)) {
-      await interaction.followUp({ content: `<@${target.id}> doesn't have the staff role and can't be assigned.`, flags: MessageFlags.Ephemeral });
+      await respond(`<@${target.id}> doesn't have the staff role and can't be assigned.`);
       return;
     }
 
-    await interaction.deleteReply().catch(() => {});
+    if (fromMessage) await interaction.deleteReply().catch(() => {});
     await applyAssignment(thread, guild, target.id, target.username);
-    await interaction.followUp({ content: `Assigned <@${target.id}> to this report.`, flags: MessageFlags.Ephemeral });
+    await respond(`Assigned <@${target.id}> to this report.`);
   }
 
   @ButtonComponent({ id: /^split_/ })
@@ -1373,22 +1438,49 @@ export class ReportCommands {
     }
 
     const starter = await thread.fetchStarterMessage();
-    if (!starter) {
-      await interaction.reply({ content: 'Could not find the report starter message.', flags: MessageFlags.Ephemeral });
-      return;
-    }
-
-    const staffButton = starter.components
-      .filter(row => row.type === ComponentType.ActionRow)
-      .flatMap(row => (row as ActionRow<MessageActionRowComponent>).components)
-      .find(c => c.type === ComponentType.Button && c.customId?.startsWith('staff_actions_'));
-
-    if (!staffButton || staffButton.type !== ComponentType.Button) {
+    const ticketId = ticketIdFromStarter(starter);
+    if (!ticketId) {
       await interaction.reply({ content: 'No Staff Actions button found in this thread\'s starter message.', flags: MessageFlags.Ephemeral });
       return;
     }
 
-    const ticketId = staffButton.customId!.replace('staff_actions_', '');
     await interaction.reply(buildStaffActionsReply(ticketId));
+  }
+}
+
+@Discord()
+export class BotReportStaffContextMenus {
+  @ContextMenu({ name: 'Assign', type: ApplicationCommandType.Message, defaultMemberPermissions: PermissionFlagsBits.ManageThreads })
+  @Guild(guildId)
+  async assignContext(interaction: MessageContextMenuCommandInteraction) {
+    const ctx = await resolveStaffActionContext(interaction);
+    if (!ctx) return;
+    await interaction.showModal(await assignModalForThread(ctx.thread, ctx.ticketId, interaction.user.id));
+  }
+
+  @ContextMenu({ name: 'Request User Testing', type: ApplicationCommandType.Message, defaultMemberPermissions: PermissionFlagsBits.ManageThreads })
+  @Guild(guildId)
+  async waitUserContext(interaction: MessageContextMenuCommandInteraction) {
+    const ctx = await resolveStaffActionContext(interaction);
+    if (!ctx) return;
+    await interaction.showModal(buildWaitUserModal(ctx.ticketId));
+  }
+
+  @ContextMenu({ name: 'Merge', type: ApplicationCommandType.Message, defaultMemberPermissions: PermissionFlagsBits.ManageThreads })
+  @Guild(guildId)
+  async mergeContext(interaction: MessageContextMenuCommandInteraction) {
+    const ctx = await resolveStaffActionContext(interaction);
+    if (!ctx) return;
+    await interaction.showModal(buildMergeModal(`merge_modal_${interaction.id}`));
+  }
+
+  @ContextMenu({ name: 'Close', type: ApplicationCommandType.Message, defaultMemberPermissions: PermissionFlagsBits.ManageThreads })
+  @Guild(guildId)
+  async closeContext(interaction: MessageContextMenuCommandInteraction) {
+    const ctx = await resolveStaffActionContext(interaction);
+    if (!ctx) return;
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const result = await beginScheduledClose(ctx.thread, interaction.user.id);
+    await interaction.editReply({ content: result.message });
   }
 }

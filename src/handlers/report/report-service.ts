@@ -114,6 +114,7 @@ export async function submitReport(
     tagNames: string[];
     primaryNonPublicRoute?: ExtractedRoute;
     footerNote?: string;
+    reporterId: string;
   },
 ): Promise<void> {
   const config = loadConfig();
@@ -139,7 +140,7 @@ export async function submitReport(
       // Ticket id omitted here: adding it would need a post-create rename, spending
       // one of the 2-per-10-min title edits. title-sync folds it in on first status change.
       name: formatThreadTitle(STATUS_EMOJI['new'], params.label, generatedTitle, null),
-      message: { content: `<@${interaction.user.id}>`, embeds: [params.embed] },
+      message: { content: `<@${params.reporterId}>`, embeds: [params.embed] },
       appliedTags: tagIds,
     });
   } catch (err) {
@@ -169,12 +170,12 @@ export async function submitReport(
   const nonPublic = params.additionalRoutes.filter(r => r.valid && !r.public);
   if (params.primaryNonPublicRoute) {
     const btn = new ButtonBuilder()
-      .setCustomId(encodeConfirmCustomId(ticketId, interaction.user.id, params.primaryNonPublicRoute.dongleId, params.primaryNonPublicRoute.routeName, params.primaryNonPublicRoute.iteration))
+      .setCustomId(encodeConfirmCustomId(ticketId, params.reporterId, params.primaryNonPublicRoute.dongleId, params.primaryNonPublicRoute.routeName, params.primaryNonPublicRoute.iteration))
       .setLabel('Confirm Route')
       .setStyle(ButtonStyle.Primary)
       .setEmoji('📍');
     await thread.send({
-      content: `<@${interaction.user.id}> Your route is valid but not yet public. Once you've made it public, click the button below to link it to this report.\n\nNeed help? Follow [these instructions](<https://wiki.firestar.link/faq/#how-do-i-upload-logs-for-troubleshooting>).`,
+      content: `<@${params.reporterId}> Your route is valid but not yet public. Once you've made it public, click the button below to link it to this report.\n\nNeed help? Follow [these instructions](<https://wiki.firestar.link/faq/#how-do-i-upload-logs-for-troubleshooting>).`,
       components: [new ActionRowBuilder<ButtonBuilder>().addComponents(btn)],
     }).catch(err => log.error({ err }, 'Failed to send primary confirm button'));
   }
@@ -183,9 +184,9 @@ export async function submitReport(
     ? nonPublic.filter(r => r.dongleId !== params.primaryNonPublicRoute!.dongleId || r.routeName !== params.primaryNonPublicRoute!.routeName)
     : nonPublic;
   if (remainingNonPublic.length > 0) {
-    const confirmRows = buildConfirmRows(remainingNonPublic, ticketId, interaction.user.id);
+    const confirmRows = buildConfirmRows(remainingNonPublic, ticketId, params.reporterId);
     await thread.send({
-      content: `<@${interaction.user.id}> Some additional routes are not yet public. Once you've made them public, click the button below to link them to this report.`,
+      content: `<@${params.reporterId}> Some additional routes are not yet public. Once you've made them public, click the button below to link them to this report.`,
       components: confirmRows,
     }).catch(err => log.error({ err }, 'Failed to send additional confirm buttons'));
   }

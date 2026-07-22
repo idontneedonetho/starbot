@@ -1,7 +1,8 @@
-import { Discord, ButtonComponent, ModalComponent } from 'discordx';
+import { Discord, ButtonComponent, ModalComponent, ContextMenu, Guild } from 'discordx';
 import type {
   ButtonInteraction,
   ModalSubmitInteraction,
+  UserContextMenuCommandInteraction,
 } from 'discord.js';
 import {
   ModalBuilder,
@@ -13,6 +14,8 @@ import {
   LabelBuilder,
   EmbedBuilder,
   MessageFlags,
+  PermissionFlagsBits,
+  ApplicationCommandType,
 } from 'discord.js';
 import { loadConfig } from '../../config.js';
 import { createLogger } from '../../logger.js';
@@ -61,13 +64,19 @@ interface BugReportInput {
 }
 
 interface PendingBugReport extends BugReportInput {
-  userId: string;
+  reporterId: string;
+  actingUserId: string;
 }
 
 const PENDING_BUG_TTL_MS = 15 * 60 * 1000;
 const pendingStore = createStore<PendingBugReport>('pending-bug-reports', { ttl: PENDING_BUG_TTL_MS });
 
 const gateTokensInFlight = new Set<string>();
+
+function reporterFromModalId(interaction: ModalSubmitInteraction): string {
+  const match = interaction.customId.match(/_obo_(\d+)$/);
+  return match ? match[1] : interaction.user.id;
+}
 
 @Discord()
 export class BotReport {
@@ -106,24 +115,68 @@ export class BotReport {
     await handleRefreshRoutes(interaction);
   }
 
-  @ModalComponent({ id: 'bug_modal' })
+  @ModalComponent({ id: /^bug_modal/ })
   async bugModal(interaction: ModalSubmitInteraction) {
     await handleBugSubmit(interaction);
   }
 
-  @ModalComponent({ id: 'feedback_modal' })
+  @ModalComponent({ id: /^feedback_modal/ })
   async feedbackModal(interaction: ModalSubmitInteraction) {
     await handleFeedbackSubmit(interaction, 'feedback');
   }
 
-  @ModalComponent({ id: 'feature_modal' })
+  @ModalComponent({ id: /^feature_modal/ })
   async featureModal(interaction: ModalSubmitInteraction) {
     await handleFeedbackSubmit(interaction, 'feature');
   }
 }
 
-async function showBugModal(interaction: ButtonInteraction) {
-  const modal = new ModalBuilder().setCustomId('bug_modal').setTitle('Submit Bug Report');
+@Discord()
+export class BotReportOnBehalf {
+  @ContextMenu({
+    name: 'Open Report On Behalf Of',
+    type: ApplicationCommandType.User,
+    defaultMemberPermissions: PermissionFlagsBits.ManageThreads,
+  })
+  @Guild(loadConfig().guildId)
+  async openOnBehalf(interaction: UserContextMenuCommandInteraction) {
+    const target = interaction.targetUser;
+    if (target.bot) {
+      await interaction.reply({ content: "You can't open a report on behalf of a bot.", flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setCustomId(`obo_bug_${target.id}`).setLabel('Bug Report').setStyle(ButtonStyle.Primary).setEmoji('🐛'),
+      new ButtonBuilder().setCustomId(`obo_feedback_${target.id}`).setLabel('Feedback').setStyle(ButtonStyle.Secondary).setEmoji('💬'),
+      new ButtonBuilder().setCustomId(`obo_feature_${target.id}`).setLabel('Feature Request').setStyle(ButtonStyle.Success).setEmoji('✨'),
+    );
+    await interaction.reply({
+      content: `Open a report on behalf of <@${target.id}>. Choose the type - they'll be credited as the reporter and pinged in the thread.`,
+      components: [row],
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  @ButtonComponent({ id: /^obo_/ })
+  async oboChoice(interaction: ButtonInteraction) {
+    const [, type, targetId] = interaction.customId.split('_');
+    if (type === 'bug') {
+      await showBugModal(interaction, targetId);
+    } else if (type === 'feedback') {
+      await showFeedbackModal(interaction, 'Feedback', targetId);
+    } else if (type === 'feature') {
+      await showFeedbackModal(interaction, 'Feature Request', targetId);
+    } else {
+      await interaction.reply({ content: 'Unknown report type.', flags: MessageFlags.Ephemeral });
+    }
+  }
+}
+
+async function showBugModal(interaction: ButtonInteraction, onBehalfOf?: string) {
+  const modal = new ModalBuilder()
+    .setCustomId(onBehalfOf ? `bug_modal_obo_${onBehalfOf}` : 'bug_modal')
+    .setTitle(onBehalfOf ? 'Bug Report (On Behalf Of)' : 'Submit Bug Report');
 
   const routeIdInput = new TextInputBuilder({
     custom_id: 'route_id',
@@ -167,9 +220,10 @@ async function showBugModal(interaction: ButtonInteraction) {
   await interaction.showModal(modal);
 }
 
-async function showFeedbackModal(interaction: ButtonInteraction, type: string) {
+async function showFeedbackModal(interaction: ButtonInteraction, type: string, onBehalfOf?: string) {
+  const base = type === 'Feedback' ? 'feedback_modal' : 'feature_modal';
   const modal = new ModalBuilder()
-    .setCustomId(type === 'Feedback' ? 'feedback_modal' : 'feature_modal')
+    .setCustomId(onBehalfOf ? `${base}_obo_${onBehalfOf}` : base)
     .setTitle(type === 'Feedback' ? 'Submit Feedback' : 'Submit Feature Request');
 
   const input = new TextInputBuilder({
@@ -188,6 +242,8 @@ async function showFeedbackModal(interaction: ButtonInteraction, type: string) {
 async function handleBugSubmit(interaction: ModalSubmitInteraction) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
+  const reporterId = reporterFromModalId(interaction);
+
   const input: BugReportInput = {
     routeIdInput: interaction.fields.getTextInputValue('route_id'),
     observed: interaction.fields.getTextInputValue('observed'),
@@ -197,6 +253,8 @@ async function handleBugSubmit(interaction: ModalSubmitInteraction) {
 
   log.info({
     userId: interaction.user.id,
+    reporterId,
+    onBehalf: reporterId !== interaction.user.id,
     type: 'bug',
     route: input.routeIdInput,
     observed: input.observed,
@@ -204,13 +262,14 @@ async function handleBugSubmit(interaction: ModalSubmitInteraction) {
     reproIntent: input.reproIntent,
   }, 'Bug report submitted');
 
-  await processBugReport(interaction, input, false);
+  await processBugReport(interaction, input, false, reporterId);
 }
 
 async function processBugReport(
   interaction: ModalSubmitInteraction | ButtonInteraction,
   input: BugReportInput,
   force: boolean,
+  reporterId: string,
 ): Promise<void> {
   const { routeIdInput, observed, expected, reproIntent } = input;
 
@@ -277,7 +336,7 @@ async function processBugReport(
 
   if (!force && dedicatedValidated.public && dedicatedValidated.rlogCheck && !dedicatedValidated.rlogsAvailable) {
     const token = interaction.id;
-    await pendingStore.set(token, { ...input, userId: interaction.user.id });
+    await pendingStore.set(token, { ...input, reporterId, actingUserId: interaction.user.id });
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
         .setCustomId(`rlogchk_${token}`)
@@ -307,7 +366,7 @@ async function processBugReport(
   const reportEmbed = new EmbedBuilder()
     .setColor(COLORS.blurple)
     .addFields(
-      { name: 'By', value: `<@${interaction.user.id}>`, inline: true },
+      { name: 'By', value: `<@${reporterId}>`, inline: true },
       { name: 'Observed Behavior', value: cleanObserved },
       { name: 'Expected Behavior', value: cleanExpected },
       { name: 'Reproducibility, Intent & Details', value: cleanReproIntent },
@@ -326,6 +385,7 @@ async function processBugReport(
     tagNames: ['OPEN', 'BUG', 'WAITING FOR DEV'],
     primaryNonPublicRoute: primaryNonPublic,
     footerNote: ' with ticket ID / wiki / route link',
+    reporterId,
   });
 }
 
@@ -346,15 +406,15 @@ async function handleRlogGateButton(interaction: ButtonInteraction, force: boole
       });
       return;
     }
-    if (interaction.user.id !== pending.userId) {
+    if (interaction.user.id !== pending.actingUserId) {
       await interaction.reply({
-        content: 'Only the original reporter can use these buttons.',
+        content: 'Only the person who started this report can use these buttons.',
         flags: MessageFlags.Ephemeral,
       });
       return;
     }
     await interaction.deferUpdate();
-    await processBugReport(interaction, pending, force);
+    await processBugReport(interaction, pending, force, pending.reporterId);
   } finally {
     gateTokensInFlight.delete(token);
   }
@@ -436,6 +496,7 @@ async function handleConfirmRoute(interaction: ButtonInteraction) {
 async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, type: 'feedback' | 'feature') {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
+  const reporterId = reporterFromModalId(interaction);
   const content = interaction.fields.getTextInputValue('content');
 
   const label = type === 'feedback' ? 'Feedback' : 'Feature Request';
@@ -444,6 +505,8 @@ async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, type: '
 
   log.info({
     userId: interaction.user.id,
+    reporterId,
+    onBehalf: reporterId !== interaction.user.id,
     type,
     content,
   }, `${label} submitted`);
@@ -460,7 +523,7 @@ async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, type: '
     .setColor(type === 'feedback' ? COLORS.green : COLORS.blurple)
     .setTitle(label)
     .setDescription(cleanContent.length > 4096 ? cleanContent.slice(0, 4093) + '...' : cleanContent)
-    .addFields({ name: 'By', value: `<@${interaction.user.id}>`, inline: true })
+    .addFields({ name: 'By', value: `<@${reporterId}>`, inline: true })
     .setTimestamp();
 
   await submitReport(interaction, {
@@ -470,5 +533,6 @@ async function handleFeedbackSubmit(interaction: ModalSubmitInteraction, type: '
     additionalRoutes: numberedRoutes,
     label,
     tagNames: type === 'feedback' ? ['OPEN', 'FEEDBACK', 'WAITING FOR DEV'] : ['OPEN', 'FEATURE REQUEST', 'WAITING FOR DEV'],
+    reporterId,
   });
 }
