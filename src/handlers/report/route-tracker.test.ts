@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   parseTrackerDescription,
   buildTrackerDescription,
+  routeLinkMarkdown,
 } from './route-tracker.js';
+import type { ExtractedRoute } from '../../comma.js';
 
 const SAMPLE_LINE = '\uD83C\uDF0E \uD83D\uDCDC [Route](https://connect.comma.ai/abc/00000001--1234567890) \u2014 `abc/00000001--1234567890` \u2014 ||`https://connect.comma.ai/abc/00000001--1234567890`||';
 
@@ -85,5 +87,26 @@ describe('buildTrackerDescription', () => {
     expect(out.length).toBeLessThanOrEqual(4096);
     expect(out).toContain('[normal]');
     expect(out).not.toContain(hugeLine);
+  });
+});
+
+describe('routeLinkMarkdown (konik segment ranges)', () => {
+  const d = 'a818613ca4cdcfa5';
+  const r = '00000067--cde15f929d';
+  const base: ExtractedRoute = { dongleId: d, routeName: r, provider: 'konik', public: true, rlogsAvailable: true };
+
+  it('gives distinct short forms and links for different segment ranges of the same route', () => {
+    const whole = routeLinkMarkdown({ ...base, originalText: `https://stable.konik.ai/${d}/${r}` });
+    const first = routeLinkMarkdown({ ...base, originalText: `https://stable.konik.ai/${d}/${r}/0/100`, routeNumber: 1 });
+    const second = routeLinkMarkdown({ ...base, originalText: `https://stable.konik.ai/${d}/${r}/50/150`, routeNumber: 2 });
+
+    const shortFormOf = (line: string) => line.match(/`([^`]+)`/)?.[1];
+    expect(shortFormOf(whole)).toBe(`${d}/${r}`);
+    expect(shortFormOf(first)).not.toBe(shortFormOf(whole));
+    expect(shortFormOf(second)).not.toBe(shortFormOf(whole));
+    expect(shortFormOf(first)).not.toBe(shortFormOf(second));
+
+    expect(first).toContain(`](https://stable.konik.ai/${d}/${r}/0/100)`);
+    expect(second).toContain(`](https://stable.konik.ai/${d}/${r}/50/150)`);
   });
 });

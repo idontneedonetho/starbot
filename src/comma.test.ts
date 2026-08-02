@@ -109,6 +109,18 @@ describe('Konik route handling', () => {
     expect(parseRouteComponents(viewer)).toMatchObject({ dongleId: d, routeName: r, provider: 'konik' });
   });
 
+  it('parseRouteComponents extracts a start/end segment range from a stable.konik.ai URL', () => {
+    expect(parseRouteComponents(`${viewer}/0/100`)).toMatchObject({
+      dongleId: d, routeName: r, provider: 'konik', startSegment: 0, endSegment: 1,
+    });
+  });
+
+  it('parseRouteComponents extracts a start-only segment from a stable.konik.ai URL', () => {
+    expect(parseRouteComponents(`${viewer}/150`)).toMatchObject({
+      dongleId: d, routeName: r, provider: 'konik', startSegment: 2,
+    });
+  });
+
   it('treats a bare id as comma, not konik', () => {
     expect(extractRouteIds(`${d}|${r}`)[0].provider).toBe('comma');
   });

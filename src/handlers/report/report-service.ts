@@ -170,7 +170,14 @@ export async function submitReport(
   const nonPublic = params.additionalRoutes.filter(r => r.valid && !r.public);
   if (params.primaryNonPublicRoute) {
     const btn = new ButtonBuilder()
-      .setCustomId(encodeConfirmCustomId(ticketId, params.reporterId, params.primaryNonPublicRoute.dongleId, params.primaryNonPublicRoute.routeName, params.primaryNonPublicRoute.iteration))
+      .setCustomId(encodeConfirmCustomId(
+        ticketId,
+        params.reporterId,
+        params.primaryNonPublicRoute.dongleId,
+        params.primaryNonPublicRoute.routeName,
+        params.primaryNonPublicRoute.provider ?? 'comma',
+        params.primaryNonPublicRoute.iteration,
+      ))
       .setLabel('Confirm Route')
       .setStyle(ButtonStyle.Primary)
       .setEmoji('📍');

@@ -40,7 +40,6 @@ export interface RouteValidation {
   public: boolean;
   rlogsAvailable: boolean;
   rlogCheck?: RlogCheckResult;
-  disabled?: boolean;
 }
 
 // Matches dongle/route or dongle|route with optional iteration (used for scanning free-form text).
@@ -74,8 +73,18 @@ export function segmentToSeconds(segment: number): number {
 export function parseRouteComponents(input: string): RouteComponents {
   input = input.trim();
 
-  const konikMatch = input.match(/^https:\/\/(?:useradmin\.konik\.ai\/\?onebox=|stable\.konik\.ai\/)([a-f0-9]{16})(?:%7C|[|\/])([a-f0-9]{8}--[a-f0-9]{10})/i);
-  if (konikMatch) return { dongleId: konikMatch[1], routeName: konikMatch[2], provider: 'konik' };
+  const konikMatch = input.match(/^https:\/\/(?:useradmin\.konik\.ai\/\?onebox=|stable\.konik\.ai\/)([a-f0-9]{16})(?:%7C|[|\/])([a-f0-9]{8}--[a-f0-9]{10})(\/.*)?$/i);
+  if (konikMatch) {
+    const [, dongleId, routeName, rest] = konikMatch;
+    const segStr = rest?.replace(/^\/+/, '').replace(/\/+$/, '') || '';
+    if (!segStr) return { dongleId, routeName, provider: 'konik' };
+    const [startStr, endStr, extra] = segStr.split('/');
+    if (extra !== undefined) throw new Error(`Invalid Konik URL format`);
+    if (!/^\d+$/.test(startStr)) throw new Error(`Invalid seconds value in URL: "${startStr}"`);
+    if (endStr === undefined) return { dongleId, routeName, startSegment: secondsToSegment(startStr), provider: 'konik' };
+    if (!/^\d+$/.test(endStr)) throw new Error(`Invalid end seconds value in URL: "${endStr}"`);
+    return { dongleId, routeName, startSegment: secondsToSegment(startStr), endSegment: secondsToSegment(endStr), provider: 'konik' };
+  }
 
   if (input.startsWith('https://connect.comma.ai/')) {
     const path = input.slice('https://connect.comma.ai/'.length).replace(/\/+$/, '');
@@ -293,7 +302,7 @@ export async function validateRoute(
   endSegment?: number,
   provider: RouteProvider = 'comma',
 ): Promise<RouteValidation> {
-  if (provider === 'konik') return validateKonikRoute(dongleId, routeName);
+  if (provider === 'konik') return validateKonikRoute(dongleId, routeName, startSegment, endSegment);
   try {
     const res = await fetch(`https://api.comma.ai/v1/route/${dongleId}|${routeName}/files`);
     if (res.ok) {

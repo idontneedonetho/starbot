@@ -44,6 +44,7 @@ import {
   submitReport,
 } from './report-service.js';
 import { titleGenerator } from './title-generator.js';
+import { konikViewerUrl } from '../../konik.js';
 
 const log = createLogger('report');
 
@@ -327,9 +328,7 @@ async function processBugReport(
 
   if (!dedicatedValidated.valid) {
     await interaction.editReply({
-      content: dedicatedValidated.disabled
-        ? `Konik route support isn't configured on this bot yet, so \`${routeIdInput}\` can't be validated. Submit a \`connect.comma.ai\` route, or ask an admin to enable Konik.`
-        : `The route you entered doesn't appear to exist:\n\`${routeIdInput}\`\n\nPlease double-check the Route ID and try again.`,
+      content: `The route you entered doesn't appear to exist:\n\`${routeIdInput}\`\n\nPlease double-check the Route ID and try again.`,
     });
     return;
   }
@@ -427,16 +426,19 @@ async function handleConfirmRoute(interaction: ButtonInteraction) {
     return;
   }
 
-  const { ticketId, userId, dongleId, routeName, iteration } = parsed;
+  const { ticketId, userId, dongleId, routeName, provider, iteration } = parsed;
 
   if (interaction.user.id !== userId) {
     await interaction.reply({ content: 'Only the original reporter can confirm the route.', flags: MessageFlags.Ephemeral });
     return;
   }
 
-  const routeUrl = `https://connect.comma.ai/${dongleId}/${routeName}`;
+  const routeUrl = provider === 'konik'
+    ? konikViewerUrl(dongleId, routeName)
+    : `https://connect.comma.ai/${dongleId}/${routeName}`;
+  const platformName = provider === 'konik' ? 'stable.konik.ai' : 'connect.comma.ai';
 
-  const confirmCheck = await validateRoute(dongleId, routeName);
+  const confirmCheck = await validateRoute(dongleId, routeName, undefined, undefined, provider);
   const nowPublic = confirmCheck.public;
 
   const thread = interaction.channel;
@@ -447,7 +449,7 @@ async function handleConfirmRoute(interaction: ButtonInteraction) {
 
   if (!nowPublic) {
     await interaction.reply({
-      content: `Your route is still not public. Make sure it's accessible on [connect.comma.ai](${routeUrl}) and try again.\n\nFollow [these instructions](<https://wiki.firestar.link/faq/#how-do-i-upload-logs-for-troubleshooting>) to make your route public.`,
+      content: `Your route is still not public. Make sure it's accessible on [${platformName}](${routeUrl}) and try again.\n\nFollow [these instructions](<https://wiki.firestar.link/faq/#how-do-i-upload-logs-for-troubleshooting>) to make your route public.`,
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -472,7 +474,7 @@ async function handleConfirmRoute(interaction: ButtonInteraction) {
   const guild = interaction.guild;
   let routesThreadUrl: string | null = null;
   if (guild) {
-    const route = { dongleId, routeName, iteration, public: true, rlogsAvailable: confirmCheck.rlogsAvailable };
+    const route = { dongleId, routeName, iteration, provider, public: true, rlogsAvailable: confirmCheck.rlogsAvailable };
     const existingUrl = embed.fields?.find(f => f.value?.startsWith(TRACKER_FIELD_PREFIX))?.value?.match(/\]\((.+?)\)/)?.[1];
     const existingId = existingUrl?.split('/').pop();
     if (existingUrl && existingId) {

@@ -54,7 +54,10 @@ function routeStatusEmoji(r: ExtractedRoute): string {
 }
 
 function routeLinkUrl(r: ExtractedRoute): string {
-  if (r.provider === 'konik') return konikViewerUrl(r.dongleId, r.routeName);
+  if (r.provider === 'konik') {
+    const seg = r.originalText?.match(/^https:\/\/(?:useradmin\.konik\.ai\/\?onebox=|stable\.konik\.ai\/)[a-f0-9]{16}(?:%7C|[|\/])[a-f0-9]{8}--[a-f0-9]{10}(\/\d+(?:\/\d+)?)?\/?$/i);
+    return `${konikViewerUrl(r.dongleId, r.routeName)}${seg?.[1] ?? ''}`;
+  }
   const orig = r.originalText;
   if (orig && /^https:\/\/connect\.comma\.ai\//i.test(orig)) return orig;
   if (orig) {
@@ -72,7 +75,8 @@ function routeShortForm(r: ExtractedRoute): string {
   const orig = r.originalText;
   const base = `${r.dongleId}/${r.routeName}`;
   if (orig) {
-    const url = orig.match(/^https:\/\/connect\.comma\.ai\/[a-f0-9]{16}\/[a-f0-9]{8}--[a-f0-9]{10}(?:\/(\d+)(?:\/(\d+))?)?\/?$/i);
+    const url = orig.match(/^https:\/\/connect\.comma\.ai\/[a-f0-9]{16}\/[a-f0-9]{8}--[a-f0-9]{10}(?:\/(\d+)(?:\/(\d+))?)?\/?$/i)
+      ?? orig.match(/^https:\/\/(?:useradmin\.konik\.ai\/\?onebox=|stable\.konik\.ai\/)[a-f0-9]{16}(?:%7C|[|\/])[a-f0-9]{8}--[a-f0-9]{10}(?:\/(\d+)(?:\/(\d+))?)?\/?$/i);
     if (url) {
       if (url[1] === undefined) return base;
       const seg1 = secondsToSegment(url[1]);
@@ -105,7 +109,7 @@ export function routeLinkMarkdown(r: ExtractedRoute, sharedAt: number = Date.now
 }
 
 export function buildConfirmRows(
-  routes: Array<{ dongleId: string; routeName: string; iteration?: string }>,
+  routes: Array<{ dongleId: string; routeName: string; iteration?: string; provider?: RouteProvider }>,
   ticketId: string,
   userId: string,
 ): ActionRowBuilder<ButtonBuilder>[] {
@@ -122,7 +126,7 @@ export function buildConfirmRows(
     }
     rows[rows.length - 1].addComponents(
       new ButtonBuilder()
-        .setCustomId(encodeConfirmCustomId(ticketId, userId, r.dongleId, r.routeName, r.iteration))
+        .setCustomId(encodeConfirmCustomId(ticketId, userId, r.dongleId, r.routeName, r.provider ?? 'comma', r.iteration))
         .setLabel(`Confirm ${r.dongleId.slice(0, 8)}`)
         .setStyle(ButtonStyle.Primary)
         .setEmoji('\uD83D\uDCCD'),
@@ -141,14 +145,24 @@ export function buildRefreshRow(): ActionRowBuilder<ButtonBuilder> {
   );
 }
 
-export function encodeConfirmCustomId(ticketId: string, userId: string, dongleId: string, routeName: string, iteration?: string): string {
-  return `cr_${ticketId}_${userId}_${dongleId}_${routeName}${iteration ? '_' + iteration : ''}`;
+export function encodeConfirmCustomId(
+  ticketId: string,
+  userId: string,
+  dongleId: string,
+  routeName: string,
+  provider: RouteProvider,
+  iteration?: string,
+): string {
+  return `cr_${ticketId}_${userId}_${dongleId}_${routeName}_${provider}${iteration ? '_' + iteration : ''}`;
 }
 
-export function parseConfirmCustomId(customId: string): { ticketId: string; userId: string; dongleId: string; routeName: string; iteration?: string } | null {
+export function parseConfirmCustomId(
+  customId: string,
+): { ticketId: string; userId: string; dongleId: string; routeName: string; provider: RouteProvider; iteration?: string } | null {
   const parts = customId.split('_');
-  if (parts.length < 5 || parts[0] !== 'cr') return null;
-  return { ticketId: parts[1], userId: parts[2], dongleId: parts[3], routeName: parts[4], iteration: parts[5] || undefined };
+  if (parts.length < 6 || parts[0] !== 'cr') return null;
+  const provider: RouteProvider = parts[5] === 'konik' ? 'konik' : 'comma';
+  return { ticketId: parts[1], userId: parts[2], dongleId: parts[3], routeName: parts[4], provider, iteration: parts[6] || undefined };
 }
 
 const REFRESH_COOLDOWN_MS = 60_000;
@@ -184,9 +198,8 @@ async function postKonikRouteMetadata(channel: ThreadChannel, dongleId: string, 
   if (metadata.gitRemote) fields.push({ name: 'Git Remote', value: metadata.gitRemote, inline: true });
   if (metadata.gitBranch) fields.push({ name: 'Git Branch', value: formatGitBranch(metadata.gitBranch, remote), inline: true });
   if (metadata.gitCommit) fields.push({ name: 'Git Commit', value: formatGitCommit(metadata.gitCommit, remote), inline: true });
-  if (metadata.gitCommitDate) fields.push({ name: 'Git Commit Date', value: metadata.gitCommitDate, inline: true });
   if (metadata.gitDirty !== undefined) fields.push({ name: 'Git Dirty', value: String(metadata.gitDirty), inline: true });
-  if (metadata.version) fields.push({ name: 'Version', value: metadata.version, inline: true });
+  if (metadata.platform) fields.push({ name: 'Platform', value: metadata.platform, inline: true });
   const embed = new EmbedBuilder().setColor(COLORS.amber).setTitle('Route Metadata (Konik)').addFields(...fields);
   await channel.send({ embeds: [embed] }).catch(err => log.warn({ err }, 'Failed to post konik route metadata'));
 }
