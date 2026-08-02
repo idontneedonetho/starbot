@@ -26,7 +26,7 @@ import { loadConfig } from '../../config.js';
 import { createLogger } from '../../logger.js';
 import { createStore } from '../../store.js';
 import { COLORS, formatGitCommit, discordTimestamp, timeAgo, isStaleBuild } from '../../util.js';
-import { normalizeRouteInput, parseNormalizedRoute, parseRouteComponents, validateRoute, computeRouteLogIssues, extractRouteIds, replaceRouteIds, fetchRouteMetadata, type RouteComponents } from '../../comma.js';
+import { normalizeRouteInput, parseNormalizedRoute, parseRouteComponents, validateRoute, computeRouteLogIssues, extractRouteIds, replaceRouteIds, fetchRouteCommitInfo, type RouteComponents } from '../../comma.js';
 import { randomUUID } from 'node:crypto';
 import { fetchCommitChoices, type CommitChoice } from '../../github.js';
 import { getForum, addAdditionalRoutesToTracker, createRouteTrackerThread, routeNumberLabel, TRACKER_FIELD_PREFIX } from './route-tracker.js';
@@ -176,7 +176,7 @@ function buildAdditionalReportModal(customId: string): ModalBuilder {
   const routeInput = new TextInputBuilder({
     custom_id: 'route_id',
     style: TextInputStyle.Short,
-    placeholder: 'dongle_id/route_name or connect.comma.ai URL',
+    placeholder: 'dongle_id/route_name, connect.comma.ai, or stable.konik.ai URL',
     required: true,
     max_length: 256,
   });
@@ -532,13 +532,13 @@ export async function submitAdditionalReport(params: {
     normalizedRoute = normalizeRouteInput(trimmedInput);
     comps = parseRouteComponents(trimmedInput);
   } catch (err) {
-    await reply(`Invalid route ID. ${err instanceof Error ? err.message : 'Use the format \`dongle_id/route_name\` or a connect.comma.ai URL.'}`);
+    await reply(`Invalid route ID. ${err instanceof Error ? err.message : 'Use the format \`dongle_id/route_name\`, a connect.comma.ai URL, or a stable.konik.ai URL.'}`);
     return;
   }
 
   const parsed = parseNormalizedRoute(normalizedRoute);
   if (!parsed) {
-    await reply('Invalid route ID. Use the format `dongle_id/route_name` (e.g. `a1b2c3d4e5f6a7b8/0000aaaa--98c2d4e6f8`) or a connect.comma.ai URL.');
+    await reply('Invalid route ID. Use the format `dongle_id/route_name` (e.g. `a1b2c3d4e5f6a7b8/0000aaaa--98c2d4e6f8`), a connect.comma.ai URL, or a stable.konik.ai URL.');
     return;
   }
   parsed.originalText = trimmedInput;
@@ -581,7 +581,7 @@ export async function submitAdditionalReport(params: {
   if (ready) {
     const req = await readyReqStore.get(ready.readyMsgId);
     if (req) {
-      const meta = await fetchRouteMetadata(dongleId, routeName);
+      const meta = await fetchRouteCommitInfo(dongleId, routeName, parsed.provider);
       if (!meta) {
         await reply("Couldn't read this route's commit (make sure logs are uploaded). Nothing was submitted - the report is still **WAITING FOR USER**; try again once logs are up.");
         return;

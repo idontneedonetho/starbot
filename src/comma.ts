@@ -1,6 +1,6 @@
 import { LRUCache } from 'lru-cache';
 import { createLogger } from './logger.js';
-import { validateKonikRoute } from './konik.js';
+import { validateKonikRoute, getKonikRouteInfo } from './konik.js';
 
 const log = createLogger('comma');
 
@@ -293,6 +293,28 @@ export async function fetchRouteMetadata(dongleId: string, routeName: string): P
     log.warn({ err }, 'Failed to fetch route metadata');
     return null;
   }
+}
+
+export interface RouteCommitInfo {
+  git_commit: string;
+  git_commit_date: string;
+}
+
+// Konik's route info has no commit-date field, so we hand back an empty one -
+// isStaleBuild() already treats an unparsable date as "can't verify, don't block".
+export async function fetchRouteCommitInfo(
+  dongleId: string,
+  routeName: string,
+  provider: RouteProvider = 'comma',
+): Promise<RouteCommitInfo | null> {
+  if (provider === 'konik') {
+    const info = await getKonikRouteInfo(dongleId, routeName);
+    if (!info.valid || !info.metadata?.gitCommit) return null;
+    return { git_commit: info.metadata.gitCommit, git_commit_date: '' };
+  }
+  const meta = await fetchRouteMetadata(dongleId, routeName);
+  if (!meta) return null;
+  return { git_commit: meta.git_commit, git_commit_date: meta.git_commit_date };
 }
 
 export async function validateRoute(

@@ -182,7 +182,7 @@ async function showBugModal(interaction: ButtonInteraction, onBehalfOf?: string)
   const routeIdInput = new TextInputBuilder({
     custom_id: 'route_id',
     style: TextInputStyle.Short,
-    placeholder: 'dongle_id/route_name or connect.comma.ai URL',
+    placeholder: 'dongle_id/route_name, connect.comma.ai, or stable.konik.ai URL',
     required: true,
     max_length: 256,
   });
@@ -282,7 +282,7 @@ async function processBugReport(
 
   const field = parseRouteField(routeIdInput);
   if (!field) {
-    let message = 'Use the format `dongle_id/route_name` or a connect.comma.ai URL.';
+    let message = 'Use the format `dongle_id/route_name`, a connect.comma.ai URL, or a stable.konik.ai URL.';
     try {
       parseRouteComponents(routeIdInput);
     } catch (err) {

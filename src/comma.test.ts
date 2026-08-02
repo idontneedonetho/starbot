@@ -1,10 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   computeRouteLogIssues,
   parseRouteField,
   extractRouteIds,
   replaceRouteIds,
   parseRouteComponents,
+  fetchRouteCommitInfo,
   type RouteLogIssueInput,
 } from './comma.js';
 
@@ -180,5 +181,42 @@ describe('computeRouteLogIssues', () => {
       '`priv/route` is **private**. Make it public, then check again.',
       '`nolog/route` is missing some logs. Upload all logs from your device, then check again.',
     ]);
+  });
+});
+
+describe('fetchRouteCommitInfo', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('reads a commit from Konik route info, with an empty (unverifiable) commit date', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        is_public: true, git_remote: null, git_branch: null,
+        git_commit: 'abc123def456', git_dirty: null, platform: null, maxqlog: 0,
+      }),
+    }));
+    const info = await fetchRouteCommitInfo('59679e5e40b60ce0', '0000091b--316e931f07', 'konik');
+    expect(info).toEqual({ git_commit: 'abc123def456', git_commit_date: '' });
+  });
+
+  it('returns null for a Konik route with no commit info', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, json: () => Promise.resolve({}) }));
+    const info = await fetchRouteCommitInfo('59679e5e40b60ce0', '0000091b--316e931f08', 'konik');
+    expect(info).toBeNull();
+  });
+
+  it('reads a commit + date from comma route metadata', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve([{
+        maxqlog: 0, start_time_utc_millis: 0, end_time_utc_millis: 0,
+        git_remote: 'https://github.com/foo/openpilot.git', git_branch: 'master',
+        git_commit: 'deadbeef', git_commit_date: '2026-01-01 00:00:00 -0000', git_dirty: false,
+      }]),
+    }));
+    const info = await fetchRouteCommitInfo('59679e5e40b60ce0', '0000091b--316e931f07', 'comma');
+    expect(info).toEqual({ git_commit: 'deadbeef', git_commit_date: '2026-01-01 00:00:00 -0000' });
   });
 });
