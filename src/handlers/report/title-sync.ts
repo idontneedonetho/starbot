@@ -4,7 +4,7 @@ import { createLogger } from '../../logger.js';
 
 const log = createLogger('title-sync');
 
-export type ReportStatus = 'new' | 'waiting-for-dev' | 'waiting-for-user' | 'resolved' | 'closed';
+export type ReportStatus = 'new' | 'waiting-for-dev' | 'waiting-for-user' | 'resolved' | 'closed' | 'snoozed';
 
 export const STATUS_EMOJI: Record<ReportStatus, string> = {
   'new': '🟠',
@@ -12,6 +12,7 @@ export const STATUS_EMOJI: Record<ReportStatus, string> = {
   'waiting-for-user': '🟣',
   'resolved': '🟢',
   'closed': '🔵',
+  'snoozed': '💤',
 };
 
 const LEGACY_TYPE_EMOJIS = ['🐛', '💬', '✨'];
