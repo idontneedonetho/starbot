@@ -68,7 +68,41 @@ export function stripLeadingEmoji(name: string): string {
   return name;
 }
 
-const MAX_TITLE_LEN = 100;
+export const MAX_TITLE_LEN = 100;
+
+const REPORT_LABELS = ['Bug Report', 'Feedback', 'Feature Request'];
+const FIRST_LABEL_SPLIT_RE = new RegExp(`^(.*?(?:${REPORT_LABELS.join('|')}) - )(.*)$`);
+const TRAILING_TICKET_ID_RE = /\s*\((\d+)\)\s*$/;
+
+export interface ReportTitleParts {
+  prefix: string;
+  title: string;
+  suffix: string;
+}
+
+export function splitReportTitle(currentName: string, ticketId: string): ReportTitleParts {
+  const suffix = ` (${ticketId})`;
+  const trailingId = currentName.match(TRAILING_TICKET_ID_RE);
+  const body = trailingId?.[1] === ticketId ? currentName.slice(0, trailingId.index) : currentName;
+
+  const labelled = body.match(FIRST_LABEL_SPLIT_RE);
+  if (labelled) return { prefix: labelled[1], title: labelled[2], suffix };
+
+  const stripped = stripLeadingEmoji(body);
+  const emoji = body.slice(0, body.length - stripped.length);
+  return { prefix: emoji + (stripped.startsWith(' ') ? ' ' : ''), title: stripped.trimStart(), suffix };
+}
+
+export function maxRenameLength(parts: ReportTitleParts): number {
+  return Math.max(1, MAX_TITLE_LEN - parts.prefix.length - parts.suffix.length);
+}
+
+export function composeReportTitle(parts: ReportTitleParts, newTitle: string): string {
+  const trimmed = newTitle.trim();
+  const budget = maxRenameLength(parts);
+  const title = trimmed.length > budget ? trimmed.slice(0, budget - 1).trimEnd() + '…' : trimmed;
+  return `${parts.prefix}${title}${parts.suffix}`;
+}
 
 function ticketIdFor(thread: ThreadChannel): string {
   return String(parseInt(thread.id.slice(-7), 10));

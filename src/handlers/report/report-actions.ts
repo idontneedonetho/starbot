@@ -31,7 +31,19 @@ import { randomUUID } from 'node:crypto';
 import { fetchCommitChoices, type CommitChoice } from '../../github.js';
 import { getForum, addAdditionalRoutesToTracker, createRouteTrackerThread, routeNumberLabel, TRACKER_FIELD_PREFIX } from './route-tracker.js';
 import { resolveTagIds, buildActionRow, buildDonateRow, swapForumTags } from './report-service.js';
-import { setThreadStatusEmoji, setThreadStatusAndClose, setReportCloseHandler, stripLeadingEmoji } from './title-sync.js';
+import {
+  setThreadStatusEmoji,
+  setThreadStatusAndClose,
+  setReportCloseHandler,
+  stripLeadingEmoji,
+  withThreadLock,
+  isRateLimit,
+  retryDelay,
+  splitReportTitle,
+  composeReportTitle,
+  maxRenameLength,
+  MAX_TITLE_LEN,
+} from './title-sync.js';
 import { scheduleClose, getScheduledClose, nextCloseAt, closingNoticeField } from './close-scheduler.js';
 import {
   scheduleSnooze,
@@ -82,6 +94,15 @@ function hasStaffRole(member: GuildMember): boolean {
   return member.roles.cache.has(loadConfig().staffRole);
 }
 
+function hasScholarRole(member: GuildMember): boolean {
+  const { scholarRole } = loadConfig();
+  return scholarRole != null && member.roles.cache.has(scholarRole);
+}
+
+function canRenameThread(member: GuildMember): boolean {
+  return hasStaffRole(member) || hasScholarRole(member);
+}
+
 async function applyAssignment(
   thread: ThreadChannel,
   guild: import('discord.js').Guild,
@@ -114,16 +135,21 @@ async function applyAssignment(
   }
 }
 
-function buildStaffActionsReply(ticketId: string) {
+const RENAME_OPTION = { label: 'Rename Thread', value: 'rename', emoji: '✏️', description: "Change this report thread's title" };
+
+function buildStaffActionsReply(ticketId: string, renameOnly = false) {
   const select = new StringSelectMenuBuilder()
     .setCustomId(`staff_select_${ticketId}`)
     .setPlaceholder('Choose an action...')
     .addOptions(
-      { label: 'Assign', value: 'assign', emoji: '👤', description: 'Assign a staff member to this report' },
-      { label: 'Request User Testing', value: 'waituser', emoji: '🧪', description: 'Ask the user to test and report back' },
-      { label: 'Merge', value: 'merge', emoji: '🔀', description: 'Merge this report into another thread' },
-      { label: 'Snooze', value: 'snooze', emoji: '😴', description: 'Temporarily close and auto-reopen later' },
-      { label: 'Close', value: 'close', emoji: '🔐', description: 'Close this report' },
+      ...(renameOnly ? [RENAME_OPTION] : [
+        { label: 'Assign', value: 'assign', emoji: '👤', description: 'Assign a staff member to this report' },
+        { label: 'Request User Testing', value: 'waituser', emoji: '🧪', description: 'Ask the user to test and report back' },
+        { label: 'Merge', value: 'merge', emoji: '🔀', description: 'Merge this report into another thread' },
+        RENAME_OPTION,
+        { label: 'Snooze', value: 'snooze', emoji: '😴', description: 'Temporarily close and auto-reopen later' },
+        { label: 'Close', value: 'close', emoji: '🔐', description: 'Close this report' },
+      ]),
     );
   const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select);
   return { content: 'Select a staff action:', components: [row], flags: MessageFlags.Ephemeral } as const;
@@ -366,11 +392,8 @@ async function completeReadyMessage(thread: ThreadChannel, msgId: string, note: 
 async function ensureTrackerThread(thread: ThreadChannel, guild: import('discord.js').Guild): Promise<{ url: string; threadId: string } | null> {
   const starter = await thread.fetchStarterMessage().catch(() => null);
   const embed = starter?.embeds[0];
-  const trackerUrl = embed?.fields
-    ?.find(f => f.value?.startsWith(TRACKER_FIELD_PREFIX))
-    ?.value?.match(/\]\((.+?)\)/)?.[1];
-  const trackerThreadId = trackerUrl?.split('/').pop();
-  if (trackerUrl && trackerThreadId) return { url: trackerUrl, threadId: trackerThreadId };
+  const existing = trackerRefFromStarter(starter);
+  if (existing) return existing;
 
   const tracker = await createRouteTrackerThread(guild, loadConfig(), undefined, thread.url, thread.name);
   if (tracker && starter && embed) {
@@ -481,6 +504,65 @@ function buildSnoozeModal(ticketId: string): ModalBuilder {
   modal.addLabelComponents(new LabelBuilder().setLabel('Reason (optional)').setTextInputComponent(reasonInput));
 
   return modal;
+}
+
+function buildRenameModal(thread: ThreadChannel, ticketId: string): ModalBuilder {
+  const parts = splitReportTitle(thread.name, ticketId);
+  const max = maxRenameLength(parts);
+
+  const modal = new ModalBuilder()
+    .setCustomId(`rename_modal_${ticketId}`)
+    .setTitle('Rename Thread');
+
+  const titleInput = new TextInputBuilder({
+    custom_id: 'title',
+    style: TextInputStyle.Short,
+    required: true,
+    max_length: max,
+    value: parts.title.slice(0, max),
+  });
+  modal.addLabelComponents(
+    new LabelBuilder()
+      .setLabel('New title')
+      .setDescription(`Result: ${parts.prefix}…${parts.suffix}`)
+      .setTextInputComponent(titleInput),
+  );
+
+  return modal;
+}
+
+function quoteTitle(title: string): string {
+  return `\`\`\`\n${title}\n\`\`\``;
+}
+
+function trackerRefFromStarter(starter: Message | null): { url: string; threadId: string } | null {
+  const trackerUrl = starter?.embeds[0]?.fields
+    ?.find(f => f.value?.startsWith(TRACKER_FIELD_PREFIX))
+    ?.value?.match(/\]\((.+?)\)/)?.[1];
+  const trackerThreadId = trackerUrl?.split('/').pop();
+  if (!trackerUrl || !trackerThreadId) return null;
+  return { url: trackerUrl, threadId: trackerThreadId };
+}
+
+async function renameTrackerThread(
+  guild: import('discord.js').Guild,
+  trackerThreadId: string,
+  reportName: string,
+): Promise<void> {
+  const tracker = await guild.channels.fetch(trackerThreadId).catch(() => null);
+  if (!tracker?.isThread()) return;
+
+  const name = stripLeadingEmoji(reportName).trimStart().slice(0, MAX_TITLE_LEN);
+  if (tracker.name !== name) {
+    await withThreadLock(tracker.id, async () => { await tracker.setName(name); })
+      .catch(err => log.warn({ err, trackerThreadId }, 'Failed to rename route tracker thread'));
+  }
+
+  const starter = await tracker.fetchStarterMessage().catch(() => null);
+  const embed = starter?.embeds[0];
+  if (!starter || !embed || embed.title === name) return;
+  await starter.edit({ embeds: [EmbedBuilder.from(embed).setTitle(name)] })
+    .catch(err => log.warn({ err, trackerThreadId }, 'Failed to retitle route tracker embed'));
 }
 
 function ticketIdFromStarter(starter: Message | null): string | null {
@@ -1105,25 +1187,30 @@ export class BotReportActions {
 
   @ButtonComponent({ id: /^staff_actions_/ })
   async staffActions(interaction: ButtonInteraction) {
-    if (!(interaction.member instanceof GuildMember) || !hasStaffRole(interaction.member)) {
-      await interaction.reply({ content: 'Only staff can use staff actions.', flags: MessageFlags.Ephemeral });
+    if (!(interaction.member instanceof GuildMember) || !canRenameThread(interaction.member)) {
+      await interaction.reply({ content: 'You do not have permission to use this action.', flags: MessageFlags.Ephemeral });
       return;
     }
 
     const ticketId = interaction.customId.replace('staff_actions_', '');
-    await interaction.reply(buildStaffActionsReply(ticketId));
+    await interaction.reply(buildStaffActionsReply(ticketId, !hasStaffRole(interaction.member)));
   }
 
   @SelectMenuComponent({ id: /^staff_select_/ })
   async staffSelect(interaction: StringSelectMenuInteraction) {
-    if (!(interaction.member instanceof GuildMember) || !hasStaffRole(interaction.member)) {
-      await interaction.reply({ content: 'Only staff can use staff actions.', flags: MessageFlags.Ephemeral });
+    if (!(interaction.member instanceof GuildMember) || !canRenameThread(interaction.member)) {
+      await interaction.reply({ content: 'You do not have permission to use this action.', flags: MessageFlags.Ephemeral });
       return;
     }
 
     const [action] = interaction.values;
-    if (!['assign', 'close', 'merge', 'waituser', 'snooze'].includes(action)) {
+    if (!['assign', 'close', 'merge', 'waituser', 'snooze', 'rename'].includes(action)) {
       await interaction.reply({ content: 'Invalid action.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (action !== 'rename' && !hasStaffRole(interaction.member)) {
+      await interaction.reply({ content: 'You do not have permission to use this action.', flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -1148,6 +1235,12 @@ export class BotReportActions {
     const pendingSnooze = await getScheduledSnooze(thread.id);
     if (pendingSnooze) {
       await interaction.reply({ content: snoozeLockMsg(pendingSnooze), flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (action === 'rename') {
+      const ticketId = interaction.customId.replace('staff_select_', '');
+      await interaction.showModal(buildRenameModal(thread, ticketId));
       return;
     }
 
@@ -1232,6 +1325,93 @@ export class BotReportActions {
     if (fromMessage) await interaction.deleteReply().catch(() => {});
     await applyAssignment(thread, guild, target.id, target.username);
     await respond(`Assigned <@${target.id}> to this report.`);
+  }
+
+  @ModalComponent({ id: /^rename_modal_/ })
+  async handleRenameSubmit(interaction: ModalSubmitInteraction) {
+    if (!(interaction.member instanceof GuildMember) || !canRenameThread(interaction.member)) {
+      await interaction.reply({ content: 'You do not have permission to rename report threads.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const thread = interaction.channel;
+    if (!thread?.isThread()) {
+      await interaction.reply({ content: 'This can only be used from a thread.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const guild = interaction.guild;
+    if (!guild) {
+      await interaction.reply({ content: 'Could not resolve guild.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (await getScheduledClose(thread.id)) {
+      await interaction.reply({ content: 'This report is closing soon - staff actions are locked until then.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const pendingSnooze = await getScheduledSnooze(thread.id);
+    if (pendingSnooze) {
+      await interaction.reply({ content: snoozeLockMsg(pendingSnooze), flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const newTitle = interaction.fields.getTextInputValue('title').trim();
+    if (!newTitle) {
+      await interaction.reply({ content: 'The title cannot be empty.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const ticketId = interaction.customId.replace('rename_modal_', '');
+
+    const fromMessage = interaction.isFromMessage();
+    if (fromMessage) {
+      await interaction.deferUpdate();
+      await interaction.deleteReply().catch(() => {});
+    } else {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    }
+    const respond = (content: string) =>
+      fromMessage
+        ? interaction.followUp({ content, flags: MessageFlags.Ephemeral })
+        : interaction.editReply({ content });
+
+    // Compute `desired` inside the lock so a concurrent status-emoji change can't
+    // be clobbered: if the status worker renames the thread between computing the
+    // title and acquiring the lock, we'd write back a stale prefix. Recomputing
+    // from thread.name under the lock preserves whatever emoji is current.
+    let outcome: { noop: true } | { noop: false; name: string };
+    try {
+      outcome = await withThreadLock(thread.id, async () => {
+        const desired = composeReportTitle(splitReportTitle(thread.name, ticketId), newTitle);
+        if (thread.name === desired) return { noop: true as const };
+        await thread.setName(desired);
+        return { noop: false as const, name: desired };
+      });
+    } catch (err) {
+      if (isRateLimit(err)) {
+        const retryAt = Math.floor((Date.now() + retryDelay(err)) / 1000);
+        await respond(`Discord only allows 2 thread renames per 10 minutes. Try again <t:${retryAt}:R> with:\n${quoteTitle(newTitle)}`);
+        return;
+      }
+      log.warn({ err, threadId: thread.id }, 'Failed to rename report thread');
+      await respond(`Failed to rename this thread. Your title was:\n${quoteTitle(newTitle)}`);
+      return;
+    }
+
+    if (outcome.noop) {
+      await respond('The title is already set to that.');
+      return;
+    }
+
+    log.info({ userId: interaction.user.id, threadId: thread.id, ticketId, name: outcome.name }, 'Report thread renamed');
+
+    const starter = await thread.fetchStarterMessage().catch(() => null);
+    const tracker = trackerRefFromStarter(starter);
+    if (tracker) await renameTrackerThread(guild, tracker.threadId, outcome.name);
+
+    await respond(`Renamed to **${outcome.name}**`);
   }
 
   @ButtonComponent({ id: /^split_/ })
@@ -1591,8 +1771,8 @@ export class ReportCommands {
 
   @Slash({ description: 'Open the staff actions menu for this report thread', name: 'staff-actions' })
   async staffActionsCommand(interaction: CommandInteraction) {
-    if (!(interaction.member instanceof GuildMember) || !hasStaffRole(interaction.member)) {
-      await interaction.reply({ content: 'Only staff can use staff actions.', flags: MessageFlags.Ephemeral });
+    if (!(interaction.member instanceof GuildMember) || !canRenameThread(interaction.member)) {
+      await interaction.reply({ content: 'You do not have permission to use this action.', flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -1609,12 +1789,24 @@ export class ReportCommands {
       return;
     }
 
-    await interaction.reply(buildStaffActionsReply(ticketId));
+    await interaction.reply(buildStaffActionsReply(ticketId, !hasStaffRole(interaction.member)));
   }
 }
 
 @Discord()
 export class BotReportStaffContextMenus {
+  @ContextMenu({ name: 'Rename Thread', type: ApplicationCommandType.Message, defaultMemberPermissions: 0n })
+  @Guild(guildId)
+  async renameContext(interaction: MessageContextMenuCommandInteraction) {
+    if (!(interaction.member instanceof GuildMember) || !canRenameThread(interaction.member)) {
+      await interaction.reply({ content: 'You do not have permission to rename report threads.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const ctx = await resolveStaffActionContext(interaction);
+    if (!ctx) return;
+    await interaction.showModal(buildRenameModal(ctx.thread, ctx.ticketId));
+  }
+
   @ContextMenu({ name: 'Assign', type: ApplicationCommandType.Message, defaultMemberPermissions: PermissionFlagsBits.ManageThreads })
   @Guild(guildId)
   async assignContext(interaction: MessageContextMenuCommandInteraction) {

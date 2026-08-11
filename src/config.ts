@@ -13,6 +13,7 @@ export interface BotConfig {
   verifiedRole: string;
   pendingRole: string;
   staffRole: string;
+  scholarRole?: string;
   wikiRepo: string;
   wikiCacheDir: string;
   mainRepo: string;
@@ -54,6 +55,8 @@ export function loadConfig(): BotConfig {
   const staffRole = process.env.STAFF_ROLE;
   if (!staffRole) throw new Error('STAFF_ROLE is required');
 
+  const scholarRole = process.env.SCHOLAR_ROLE;
+
   const wikiRepo = process.env.WIKI_REPO || 'StarPilot-Docs/docs';
   const wikiCacheDir = process.env.WIKI_CACHE_DIR || 'data/wiki';
 
@@ -75,6 +78,7 @@ export function loadConfig(): BotConfig {
     verifiedRole,
     pendingRole,
     staffRole,
+    scholarRole,
     wikiRepo,
     wikiCacheDir,
     mainRepo,
