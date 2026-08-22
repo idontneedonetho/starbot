@@ -90,6 +90,18 @@ async function getOrCreateAssigneeTag(forum: import('discord.js').ForumChannel, 
   }
 }
 
+async function ensureForumTag(forum: ForumChannel, name: string): Promise<ForumChannel> {
+  if (forum.availableTags.some(t => t.name === name)) return forum;
+  const updated = await forum.setAvailableTags([
+    ...forum.availableTags.map(t => ({ name: t.name, id: t.id, moderated: t.moderated, emoji: t.emoji ?? undefined })),
+    { name },
+  ]).catch(err => {
+    log.warn({ err, name }, 'Failed to create forum tag');
+    return null;
+  });
+  return updated ?? forum;
+}
+
 function hasStaffRole(member: GuildMember): boolean {
   return member.roles.cache.has(loadConfig().staffRole);
 }
@@ -242,7 +254,7 @@ function buildAdditionalReportModal(customId: string): ModalBuilder {
 // Pre-"Reported By" threads put the reporting user as a leading mention in the content.
 const leadingMention = (content?: string | null): string => content?.trimStart().match(/^<@!?(\d+)>/)?.[1] ?? '';
 
-async function resolveSubmitterId(thread: ThreadChannel, guild: import('discord.js').Guild): Promise<string> {
+export async function resolveSubmitterId(thread: ThreadChannel, guild: import('discord.js').Guild): Promise<string> {
   const starter = await thread.fetchStarterMessage().catch(() => null);
   const fields = starter?.embeds[0]?.fields;
   const direct = fields?.find(f => f.name === 'By')?.value.match(/<@(\d+)>/)?.[1];
@@ -1662,8 +1674,9 @@ export class BotReportActions {
       return;
     }
 
-    const forum = await getForum(guild, loadConfig().forumChannelId);
-    if (forum) {
+    const fetched = await getForum(guild, loadConfig().forumChannelId);
+    if (fetched) {
+      const forum = await ensureForumTag(fetched, 'SNOOZED');
       await swapForumTags(thread, forum, { remove: ['OPEN', 'WAITING FOR DEV', 'WAITING FOR USER'], add: ['SNOOZED'] })
         .catch(err => log.warn({ err }, 'Failed to swap forum tags for snooze'));
     }

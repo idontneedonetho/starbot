@@ -3,6 +3,9 @@ import type {
   ButtonInteraction,
   ModalSubmitInteraction,
   UserContextMenuCommandInteraction,
+  ForumChannel,
+  Guild as DiscordGuild,
+  ThreadChannel,
 } from 'discord.js';
 import {
   ModalBuilder,
@@ -33,6 +36,7 @@ import {
   type RlogCheckResult,
 } from '../../comma.js';
 import {
+  getForum,
   routeNumberLabel,
   parseConfirmCustomId,
   handleRefreshRoutes,
@@ -45,6 +49,15 @@ import {
 } from './report-service.js';
 import { titleGenerator } from './title-generator.js';
 import { konikViewerUrl } from '../../konik.js';
+import { resolveSubmitterId } from './report-actions.js';
+import { getScheduledSnooze } from './snooze-scheduler.js';
+import {
+  CATEGORY_ORDER,
+  paginateReports,
+  reportCategory,
+  sortReports,
+  type ReportSummary,
+} from './my-reports.js';
 
 const log = createLogger('report');
 
@@ -73,6 +86,54 @@ const PENDING_BUG_TTL_MS = 15 * 60 * 1000;
 const pendingStore = createStore<PendingBugReport>('pending-bug-reports', { ttl: PENDING_BUG_TTL_MS });
 
 const gateTokensInFlight = new Set<string>();
+
+const MY_REPORTS_CACHE_TTL_MS = 2 * 60 * 1000;
+const myReportsCache = new Map<string, { reports: ReportSummary[]; expires: number }>();
+
+// Bots can't use Discord's message search, so enumerate forum threads instead.
+async function collectUserReports(guild: DiscordGuild, forum: ForumChannel, userId: string): Promise<ReportSummary[]> {
+  const [active, firstArchived] = await Promise.all([
+    forum.threads.fetchActive().catch(() => null),
+    forum.threads.fetchArchived({ limit: 100 }).catch(() => null),
+  ]);
+
+  const threads: ThreadChannel[] = [];
+  if (active) threads.push(...active.threads.values());
+
+  let page = firstArchived;
+  let guard = 0;
+  while (page && guard++ < 20) {
+    threads.push(...page.threads.values());
+    if (!page.hasMore || page.threads.size === 0) break;
+    const earliest = page.threads.reduce((a, t) =>
+      (t.archiveTimestamp ?? 0) < (a.archiveTimestamp ?? 0) ? t : a);
+    page = await forum.threads.fetchArchived({ limit: 100, before: earliest }).catch(() => null);
+  }
+
+  const tagNameById = new Map(forum.availableTags.map(tag => [tag.id, tag.name]));
+  const matches: ReportSummary[] = [];
+  for (let i = 0; i < threads.length; i += 8) {
+    const chunk = threads.slice(i, i + 8);
+    const found = await Promise.all(chunk.map(async (thread): Promise<ReportSummary | null> => {
+      const submitter = await resolveSubmitterId(thread, guild).catch(() => '');
+      if (submitter !== userId) return null;
+      const snooze = await getScheduledSnooze(thread.id).catch(() => undefined);
+      return {
+        threadId: thread.id,
+        threadName: thread.name,
+        url: thread.url,
+        tagNames: thread.appliedTags.map(id => tagNameById.get(id) ?? ''),
+        createdTimestamp: thread.createdTimestamp ?? 0,
+        archived: thread.archived ?? false,
+        snoozedUntil: snooze?.wakeAt,
+      };
+    }));
+    for (const summary of found) if (summary) matches.push(summary);
+  }
+
+  return sortReports(matches);
+}
+
 
 function reporterFromModalId(interaction: ModalSubmitInteraction): string {
   const match = interaction.customId.match(/_obo_(\d+)$/);
@@ -114,6 +175,99 @@ export class BotReport {
   @ButtonComponent({ id: 'refresh_routes' })
   async refreshRoutes(interaction: ButtonInteraction) {
     await handleRefreshRoutes(interaction);
+  }
+
+  @ButtonComponent({ id: 'view_my_reports' })
+  async viewMyReports(interaction: ButtonInteraction) {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    await interaction.editReply(await this.myReportsPayload(interaction, 1));
+  }
+
+  @ButtonComponent({ id: /^myreports_page_\d+$/ })
+  async myReportsPage(interaction: ButtonInteraction) {
+    await interaction.deferUpdate();
+    const page = parseInt(interaction.customId.slice('myreports_page_'.length), 10);
+    await interaction.editReply(await this.myReportsPayload(interaction, page));
+  }
+
+  private async myReportsPayload(interaction: ButtonInteraction, page: number) {
+    const guild = interaction.guild;
+    if (!guild) return { content: 'Could not resolve guild.', components: [] };
+
+    const forum = await getForum(guild, loadConfig().forumChannelId);
+    if (!forum) return { content: 'Could not resolve the report forum.', components: [] };
+
+    const userId = interaction.user.id;
+    const cached = myReportsCache.get(userId);
+    const reports = cached && cached.expires > Date.now()
+      ? cached.reports
+      : await collectUserReports(guild, forum, userId);
+    if (!cached || cached.expires <= Date.now()) {
+      myReportsCache.set(userId, { reports, expires: Date.now() + MY_REPORTS_CACHE_TTL_MS });
+    }
+
+    if (reports.length === 0) {
+      return { content: `No reports found in <#${forum.id}> for <@${userId}>.`, components: [] };
+    }
+
+    const { pageItems, page: current, totalPages } = paginateReports(reports, page);
+
+    // The cached scan may predate a staff tag change, so re-read live state for
+    // just the threads on this page before categorising them.
+    const tagNameById = new Map(forum.availableTags.map(tag => [tag.id, tag.name]));
+    const fresh = await Promise.all(pageItems.map(async report => {
+      const channel = await guild.channels.fetch(report.threadId).catch(() => null);
+      if (!channel?.isThread()) return report;
+      const snooze = await getScheduledSnooze(channel.id).catch(() => undefined);
+      return {
+        ...report,
+        threadName: channel.name,
+        tagNames: channel.appliedTags.map(id => tagNameById.get(id) ?? ''),
+        archived: channel.archived ?? false,
+        snoozedUntil: snooze?.wakeAt,
+      };
+    }));
+
+    const sections: string[] = [`You have **${reports.length}** report(s) in <#${forum.id}>, sorted by status - those waiting on you first.`];
+    for (const category of CATEGORY_ORDER) {
+      const lines = fresh
+        .filter(report => reportCategory(report.tagNames, report.archived) === category)
+        .map(report => {
+          if (report.snoozedUntil) {
+            const until = Math.floor(report.snoozedUntil / 1000);
+            return `[${report.threadName}](${report.url}) - snoozed until <t:${until}:f>`;
+          }
+          const created = Math.floor(report.createdTimestamp / 1000);
+          return `[${report.threadName}](${report.url}) - <t:${created}:R>`;
+        });
+      if (lines.length > 0) sections.push(`**${category}**\n${lines.join('\n')}`);
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle('📋 Your Reports')
+      .setColor(COLORS.blurple)
+      .setFooter({ text: `Page ${current} of ${totalPages}` });
+    // Long thread names can still overflow the 4096-char description cap;
+    // drop oldest-listed lines rather than failing the whole reply.
+    let description = sections.join('\n\n');
+    while (description.length > 4096 && sections.length > 1) {
+      sections.pop();
+      description = sections.join('\n\n');
+    }
+    embed.setDescription(description.slice(0, 4096));
+
+    const row = new ActionRowBuilder<ButtonBuilder>();
+    if (current > 1) {
+      row.addComponents(new ButtonBuilder()
+        .setCustomId(`myreports_page_${current - 1}`).setLabel('Previous')
+        .setStyle(ButtonStyle.Secondary).setEmoji('◀️'));
+    }
+    if (current < totalPages) {
+      row.addComponents(new ButtonBuilder()
+        .setCustomId(`myreports_page_${current + 1}`).setLabel('Next')
+        .setStyle(ButtonStyle.Secondary).setEmoji('▶️'));
+    }
+    return { embeds: [embed], components: row.components.length > 0 ? [row] : [] };
   }
 
   @ModalComponent({ id: /^bug_modal/ })

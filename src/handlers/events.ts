@@ -70,6 +70,7 @@ export class BotEvents {
         { label: 'Bug Report', customId: 'report_bug', style: ButtonStyle.Primary, emoji: '🐛' },
         { label: 'Feedback', customId: 'report_feedback', style: ButtonStyle.Secondary, emoji: '💬' },
         { label: 'Feature Request', customId: 'report_feature', style: ButtonStyle.Success, emoji: '✨' },
+        { label: 'View My Reports', customId: 'view_my_reports', style: ButtonStyle.Primary, emoji: '📋' },
       ],
       undefined,
       [
