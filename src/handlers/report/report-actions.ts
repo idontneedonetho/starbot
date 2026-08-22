@@ -205,7 +205,7 @@ const waitCommitStore = createStore<{
   message: string; audience: string; submitterId: string; ticketId: string; threadId: string; choices: CommitChoice[];
 }>('wait-commit-pending', { ttl: 15 * 60 * 1000 });
 
-const readyReqStore = createStore<{ requiredShort: string; requiredDate?: string }>(
+const readyReqStore = createStore<{ requiredShort?: string; requiredDate?: string }>(
   'wait-ready-req', { ttl: 30 * 24 * 60 * 60 * 1000 });
 
 const pendingAdditionalReportStore = createStore<{
@@ -348,6 +348,9 @@ async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, para
   if (params.mode === 'newer' && params.requiredSha) {
     const committed = params.requiredDate ? discordTimestamp(params.requiredDate) : null;
     required = `\n\nThe route must be on commit ${formatGitCommit(params.requiredSha, `github.com/${loadConfig().mainRepo}`)} (${params.branch}${committed ? `, committed ${committed}` : ''}) or newer.`;
+  } else if (params.mode === 'newernow' && params.requiredDate) {
+    const committed = discordTimestamp(params.requiredDate);
+    required = `\n\nThe route must be on a commit newer than the latest one${committed ? ` as of ${committed}` : ''}.`;
   }
 
   const embed = new EmbedBuilder()
@@ -381,9 +384,9 @@ async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, para
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
 
   const sent = await thread.send({ embeds: [embed], components: [row] });
-  if (params.mode === 'newer' && params.requiredSha) {
+  if (params.requiredDate) {
     await readyReqStore.set(sent.id, {
-      requiredShort: params.requiredShort ?? params.requiredSha.slice(0, 7),
+      requiredShort: params.requiredSha ? (params.requiredShort ?? params.requiredSha.slice(0, 7)) : undefined,
       requiredDate: params.requiredDate,
     });
   }
@@ -436,7 +439,8 @@ function buildWaitUserModal(ticketId: string): ModalBuilder {
     .addOptions(
       { label: 'Anytime', value: 'anytime', description: 'The user can respond right away', default: true },
       { label: 'With a new route', value: 'route', description: 'Responding requires submitting a new route' },
-      { label: 'From a newer commit', value: 'newer', description: 'New route must be on a chosen commit or newer' },
+      { label: 'From commit newer than now', value: 'newernow', description: 'New route must be on a commit newer than the latest one now' },
+      { label: 'Newer than a specific commit', value: 'newer', description: 'New route must be on a chosen commit or newer' },
     );
   modal.addLabelComponents(new LabelBuilder().setLabel('When may the user reopen?').setStringSelectMenuComponent(modeSelect));
 
@@ -735,7 +739,8 @@ export async function submitAdditionalReport(params: {
         const routeShort = meta.git_commit.slice(0, 7);
         const routeWhen = discordTimestamp(meta.git_commit_date);
         const reqWhen = req.requiredDate ? discordTimestamp(req.requiredDate) : null;
-        await reply(`Route **rejected** - it's from an older build than required: route commit \`${routeShort}\`${routeWhen ? ` (committed ${routeWhen})` : ''} predates required \`${req.requiredShort}\`${reqWhen ? ` (committed ${reqWhen})` : ''}. Nothing was submitted - the report is still **WAITING FOR USER**; test on a newer build and submit a fresh route.`);
+        const reqLabel = req.requiredShort ? `required \`${req.requiredShort}\`` : 'the required build';
+        await reply(`Route **rejected** - it's from an older build than required: route commit \`${routeShort}\`${routeWhen ? ` (committed ${routeWhen})` : ''} predates ${reqLabel}${reqWhen ? ` (committed ${reqWhen})` : ''}. Nothing was submitted - the report is still **WAITING FOR USER**; test on a newer build and submit a fresh route.`);
         return;
       }
     }
@@ -888,6 +893,17 @@ export class BotReportActions {
     const forum = await getForum(guild, loadConfig().forumChannelId);
     if (!forum) {
       await interaction.editReply({ content: 'Forum channel not found. Contact an admin.', components: [] });
+      return;
+    }
+
+    if (mode === 'newernow') {
+      const requiredDate = new Date().toISOString();
+      await finalizeWaitUser(thread, forum, { mode, audience, message, submitterId, ticketId, requiredDate });
+      const committed = discordTimestamp(requiredDate);
+      await interaction.editReply({
+        content: `Report marked **WAITING FOR USER** - required a build newer than the latest commit${committed ? ` as of ${committed}` : ''}.`,
+        components: [],
+      });
       return;
     }
 
