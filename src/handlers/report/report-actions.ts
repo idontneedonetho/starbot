@@ -45,6 +45,7 @@ import {
   MAX_TITLE_LEN,
 } from './title-sync.js';
 import { scheduleClose, getScheduledClose, nextCloseAt, closingNoticeField } from './close-scheduler.js';
+import { StoredReport } from './report-store.js';
 import {
   scheduleSnooze,
   getScheduledSnooze,
@@ -178,6 +179,8 @@ async function closeThread(thread: ThreadChannel, guild: import('discord.js').Gu
   // archive - archiving first blocks the lock edit.
   if (!thread.locked) await thread.setLocked(true);
   if (!thread.archived) await thread.setArchived(true);
+  await StoredReport.syncFromThread(thread);
+  await StoredReport.markClosed(thread.id);
 }
 
 // title-sync's deferred worker and restart recovery finalize closes; give it a
@@ -384,6 +387,7 @@ async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, para
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
 
   const sent = await thread.send({ embeds: [embed], components: [row] });
+  await StoredReport.syncFromThread(thread);
   if (params.requiredDate) {
     await readyReqStore.set(sent.id, {
       requiredShort: params.requiredSha ? (params.requiredShort ?? params.requiredSha.slice(0, 7)) : undefined,
@@ -795,12 +799,14 @@ export async function submitAdditionalReport(params: {
         .catch(err => log.warn({ err }, 'Failed to swap forum tags for WAITING FOR DEV'));
     }
     await setThreadStatusEmoji(thread, 'waiting-for-dev');
+    await StoredReport.syncFromThread(thread);
     await completeReadyMessage(thread, ready.readyMsgId, `A new route was submitted by <@${userId}> - [Additional Report #${additionalReportId}](${msg.url})`);
     await readyReqStore.delete(ready.readyMsgId);
     await notifyAssigneeReady(thread, userId, msg.url);
     lifecycleNote = ' The report is now marked **WAITING FOR DEV**.';
   }
 
+  await StoredReport.update(thread.id, { lastActivityAt: Date.now() });
   await reply(`Route added to the tracker thread.${!primary.public ? ' The route is not yet public — please make it public so staff can view it.' : ''}${lifecycleNote}`);
 }
 
@@ -1100,6 +1106,7 @@ export class BotReportActions {
         .catch(err => log.warn({ err }, 'Failed to swap forum tags for WAITING FOR DEV'));
     }
     await setThreadStatusEmoji(thread, 'waiting-for-dev');
+    await StoredReport.syncFromThread(thread);
     await completeReadyMessage(thread, msgId, feedbackMsg
       ? `Feedback submitted by <@${interaction.user.id}> - [view it](${feedbackMsg.url})`
       : `Marked ready by <@${interaction.user.id}>`);
@@ -1434,6 +1441,7 @@ export class BotReportActions {
     }
 
     log.info({ userId: interaction.user.id, threadId: thread.id, ticketId, name: outcome.name }, 'Report thread renamed');
+    await StoredReport.update(thread.id, { threadName: outcome.name });
 
     const starter = await thread.fetchStarterMessage().catch(() => null);
     const tracker = trackerRefFromStarter(starter);
@@ -1517,6 +1525,25 @@ export class BotReportActions {
     });
 
     const splitTicketId = String(parseInt(newThread.id.slice(-7), 10));
+
+    // Creation hook: a split is a new report owned by the original submitter.
+    // A split is a new report owned by the original submitter.
+    const splitSubmitter = await resolveSubmitterId(thread, guild);
+    if (splitSubmitter) {
+      const splitTagNameById = new Map(forum.availableTags.map(t => [t.id, t.name]));
+      await StoredReport.record({
+        threadId: newThread.id,
+        ticketId: splitTicketId,
+        reporterId: splitSubmitter,
+        label: 'Split',
+        threadName: newThread.name,
+        url: newThread.url,
+        tagNames: (newThread.appliedTags as string[]).map(id => splitTagNameById.get(id) ?? ''),
+        createdTimestamp: newThread.createdTimestamp ?? Date.now(),
+        lastActivityAt: Date.now(),
+      });
+    }
+
     const splitStarter = await newThread.fetchStarterMessage();
     if (splitStarter) {
       const actionRow = buildActionRow(splitTicketId);
@@ -1701,6 +1728,7 @@ export class BotReportActions {
     if (!thread.archived) await thread.setArchived(true).catch(err => log.warn({ err }, 'Failed to archive snoozed thread'));
 
     await scheduleSnooze(thread.id, wakeAt, snoozeMsg.id, reason || undefined, interaction.user.id, priorTagIds, priorName);
+    await StoredReport.syncFromThread(thread);
 
     await interaction.editReply({ content: `Report snoozed — it will reopen <t:${Math.floor(wakeAt / 1000)}:R>. Use **Reopen Now** on the notice to cancel early.` });
   }

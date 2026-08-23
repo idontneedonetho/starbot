@@ -3,6 +3,7 @@ import { EmbedBuilder } from 'discord.js';
 import { createLogger } from '../../logger.js';
 import { COLORS } from '../../util.js';
 import { isRateLimit, retryDelay, STATUS_EMOJI } from './title-sync.js';
+import { StoredReport } from './report-store.js';
 import { ScheduledTimerIndex } from './scheduled-timer-index.js';
 
 const log = createLogger('snooze-scheduler');
@@ -102,6 +103,7 @@ class SnoozeScheduler extends ScheduledTimerIndex<ScheduledSnooze> {
       this.log.warn({ err, threadId: thread.id }, 'failed to unlock/unarchive on manual reopen');
     }
     await this.applyThreadRestore(thread, entry, 0);
+    await StoredReport.syncFromThread(thread);
     return entry;
   }
 
@@ -122,6 +124,7 @@ class SnoozeScheduler extends ScheduledTimerIndex<ScheduledSnooze> {
     }
 
     await this.applyThreadRestore(ch, entry, 2);
+    await StoredReport.syncFromThread(ch);
     await finalizeSnoozeMessage(ch, entry.snoozeMessageId, { title: '⏰ Snooze Over' });
     await this.bump(ch, entry.snoozeMessageId);
   }

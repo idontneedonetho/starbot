@@ -3,9 +3,6 @@ import type {
   ButtonInteraction,
   ModalSubmitInteraction,
   UserContextMenuCommandInteraction,
-  ForumChannel,
-  Guild as DiscordGuild,
-  ThreadChannel,
 } from 'discord.js';
 import {
   ModalBuilder,
@@ -49,8 +46,8 @@ import {
 } from './report-service.js';
 import { titleGenerator } from './title-generator.js';
 import { konikViewerUrl } from '../../konik.js';
-import { resolveSubmitterId } from './report-actions.js';
 import { getScheduledSnooze } from './snooze-scheduler.js';
+import { StoredReport } from './report-store.js';
 import {
   CATEGORY_ORDER,
   paginateReports,
@@ -87,52 +84,6 @@ const pendingStore = createStore<PendingBugReport>('pending-bug-reports', { ttl:
 
 const gateTokensInFlight = new Set<string>();
 
-const MY_REPORTS_CACHE_TTL_MS = 2 * 60 * 1000;
-const myReportsCache = new Map<string, { reports: ReportSummary[]; expires: number }>();
-
-// Bots can't use Discord's message search, so enumerate forum threads instead.
-async function collectUserReports(guild: DiscordGuild, forum: ForumChannel, userId: string): Promise<ReportSummary[]> {
-  const [active, firstArchived] = await Promise.all([
-    forum.threads.fetchActive().catch(() => null),
-    forum.threads.fetchArchived({ limit: 100 }).catch(() => null),
-  ]);
-
-  const threads: ThreadChannel[] = [];
-  if (active) threads.push(...active.threads.values());
-
-  let page = firstArchived;
-  let guard = 0;
-  while (page && guard++ < 20) {
-    threads.push(...page.threads.values());
-    if (!page.hasMore || page.threads.size === 0) break;
-    const earliest = page.threads.reduce((a, t) =>
-      (t.archiveTimestamp ?? 0) < (a.archiveTimestamp ?? 0) ? t : a);
-    page = await forum.threads.fetchArchived({ limit: 100, before: earliest }).catch(() => null);
-  }
-
-  const tagNameById = new Map(forum.availableTags.map(tag => [tag.id, tag.name]));
-  const matches: ReportSummary[] = [];
-  for (let i = 0; i < threads.length; i += 8) {
-    const chunk = threads.slice(i, i + 8);
-    const found = await Promise.all(chunk.map(async (thread): Promise<ReportSummary | null> => {
-      const submitter = await resolveSubmitterId(thread, guild).catch(() => '');
-      if (submitter !== userId) return null;
-      const snooze = await getScheduledSnooze(thread.id).catch(() => undefined);
-      return {
-        threadId: thread.id,
-        threadName: thread.name,
-        url: thread.url,
-        tagNames: thread.appliedTags.map(id => tagNameById.get(id) ?? ''),
-        createdTimestamp: thread.createdTimestamp ?? 0,
-        archived: thread.archived ?? false,
-        snoozedUntil: snooze?.wakeAt,
-      };
-    }));
-    for (const summary of found) if (summary) matches.push(summary);
-  }
-
-  return sortReports(matches);
-}
 
 
 function reporterFromModalId(interaction: ModalSubmitInteraction): string {
@@ -198,13 +149,11 @@ export class BotReport {
     if (!forum) return { content: 'Could not resolve the report forum.', components: [] };
 
     const userId = interaction.user.id;
-    const cached = myReportsCache.get(userId);
-    const reports = cached && cached.expires > Date.now()
-      ? cached.reports
-      : await collectUserReports(guild, forum, userId);
-    if (!cached || cached.expires <= Date.now()) {
-      myReportsCache.set(userId, { reports, expires: Date.now() + MY_REPORTS_CACHE_TTL_MS });
-    }
+    // Insertion order from forUser; sort before pagination so ordering holds across pages.
+    const reports: ReportSummary[] = sortReports(
+      (await StoredReport.forUser(userId))
+        .map(r => ({ ...r.toSummary(), snoozedUntil: undefined })),
+    );
 
     if (reports.length === 0) {
       return { content: `No reports found in <#${forum.id}> for <@${userId}>.`, components: [] };
@@ -212,13 +161,13 @@ export class BotReport {
 
     const { pageItems, page: current, totalPages } = paginateReports(reports, page);
 
-    // The cached scan may predate a staff tag change, so re-read live state for
-    // just the threads on this page before categorising them.
+    // Re-read live state for just this page's threads.
     const tagNameById = new Map(forum.availableTags.map(tag => [tag.id, tag.name]));
     const fresh = await Promise.all(pageItems.map(async report => {
       const channel = await guild.channels.fetch(report.threadId).catch(() => null);
       if (!channel?.isThread()) return report;
       const snooze = await getScheduledSnooze(channel.id).catch(() => undefined);
+      await StoredReport.syncFromThread(channel);
       return {
         ...report,
         threadName: channel.name,
