@@ -137,7 +137,7 @@ async function cancelDormantCloseOnActivity(thread: ThreadChannel): Promise<void
   log.info({ threadId: thread.id }, 'Dormant close cancelled by new activity');
 }
 
-// Fixes tag drift on already-closed threads without touching lock/archive state.
+// Fixes tag drift on already-closed threads without touching lock state.
 async function reconcileClosedTags(thread: ThreadChannel, forum: import('discord.js').ForumChannel): Promise<boolean> {
   const tagNameById = new Map(forum.availableTags.map(t => [t.id, t.name.toUpperCase()]));
   const live = (thread.appliedTags as string[]).map(id => tagNameById.get(id) ?? '');
@@ -146,7 +146,12 @@ async function reconcileClosedTags(thread: ThreadChannel, forum: import('discord
     !hasClosed ||
     live.includes('OPEN') || live.includes('WAITING FOR DEV') || live.includes('WAITING FOR USER');
   if (!needsFix) return false;
+  // Discord rejects applied_tags edits on archived threads (50083), so unarchive
+  // for the swap and restore the archived state after.
+  const wasArchived = thread.archived;
+  if (wasArchived) await thread.setArchived(false).catch(() => {});
   await swapForumTags(thread, forum, { remove: ['OPEN', 'WAITING FOR DEV', 'WAITING FOR USER'], add: ['CLOSED'] });
+  if (wasArchived) await thread.setArchived(true).catch(() => {});
   await StoredReport.syncFromThread(thread);
   return true;
 }
