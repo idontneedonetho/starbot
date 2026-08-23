@@ -91,20 +91,39 @@ function reporterFromModalId(interaction: ModalSubmitInteraction): string {
   return match ? match[1] : interaction.user.id;
 }
 
+// Fast pre-modal gate so a capped user never fills out the form. Store-backed,
+// so it stays well inside the undeferred showModal window. submitReport
+// re-checks authoritatively under the creation lock.
+async function ensureWithinActiveLimit(interaction: ButtonInteraction): Promise<boolean> {
+  const limit = loadConfig().maxActiveReports;
+  if (limit <= 0) return true;
+  const active = await StoredReport.activeForUser(interaction.user.id);
+  if (active.length < limit) return true;
+  const lines = active.map(r => `- [${r.data.threadName}](${r.url})`).join('\n');
+  await interaction.reply({
+    content: `You can only have **${limit}** active report thread(s) at a time. Please wait until one of yours is resolved, or add to an existing thread instead:\n${lines}`,
+    flags: MessageFlags.Ephemeral,
+  });
+  return false;
+}
+
 @Discord()
 export class BotReport {
   @ButtonComponent({ id: 'report_bug' })
   async bug(interaction: ButtonInteraction) {
+    if (!(await ensureWithinActiveLimit(interaction))) return;
     await showBugModal(interaction);
   }
 
   @ButtonComponent({ id: 'report_feedback' })
   async feedback(interaction: ButtonInteraction) {
+    if (!(await ensureWithinActiveLimit(interaction))) return;
     await showFeedbackModal(interaction, 'Feedback');
   }
 
   @ButtonComponent({ id: 'report_feature' })
   async feature(interaction: ButtonInteraction) {
+    if (!(await ensureWithinActiveLimit(interaction))) return;
     await showFeedbackModal(interaction, 'Feature Request');
   }
 
