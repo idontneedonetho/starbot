@@ -18,6 +18,7 @@ import { WikiRateLimit } from './guards.js';
 import { initTitleSync } from './report/title-sync.js';
 import { initCloseScheduler } from './report/close-scheduler.js';
 import { initSnoozeScheduler } from './report/snooze-scheduler.js';
+import { initDormantScheduler } from './report/dormant-scheduler.js';
 import { COLORS } from '../util.js';
 
 const log = createLogger('events');
@@ -125,6 +126,7 @@ export class BotEvents {
     initTitleSync(client);
     initCloseScheduler(client);
     initSnoozeScheduler(client);
+    initDormantScheduler(client);
 
     const commitHash = getCommitHash();
     if (commitHash) {
