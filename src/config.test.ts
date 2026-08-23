@@ -1,18 +1,22 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig } from './config.js';
 
-const ENV_VARS = [
+const REQUIRED_VARS = [
   'DISCORD_TOKEN', 'GUILD_ID', 'IDENTIFICATION_CHANNEL_ID', 'REPORT_BUTTON_CHANNEL_ID',
   'FORUM_CHANNEL_ID', 'DEVELOPMENT_CHANNEL_ID', 'ROUTES_CHANNEL_ID', 'VERIFIED_ROLE',
   'PENDING_ROLE', 'STAFF_ROLE',
 ] as const;
 
+const saved: Record<string, string | undefined> = {};
+for (const v of REQUIRED_VARS) saved[v] = process.env[v];
+
 describe('maxActiveReports parsing', () => {
-  const saved: Record<string, string | undefined> = {};
-  for (const v of ENV_VARS) { saved[v] = process.env[v]; process.env[v] = 'x'; }
+  beforeEach(() => {
+    for (const v of REQUIRED_VARS) process.env[v] = 'x';
+  });
 
   afterEach(() => {
-    for (const v of ENV_VARS) {
+    for (const v of REQUIRED_VARS) {
       if (saved[v] === undefined) delete process.env[v];
       else process.env[v] = saved[v];
     }
