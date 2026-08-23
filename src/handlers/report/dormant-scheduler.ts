@@ -1,15 +1,14 @@
 import type { Client, ThreadChannel } from 'discord.js';
-import { EmbedBuilder, Events, GuildMember, MessageFlags, PermissionFlagsBits } from 'discord.js';
-import { Discord, On, ArgsOf, Slash, SlashOption, Guild } from 'discordx';
-import { ApplicationCommandOptionType } from 'discord.js';
+import { EmbedBuilder, Events } from 'discord.js';
+import { Discord, On, ArgsOf } from 'discordx';
 import { loadConfig } from '../../config.js';
 import { createLogger } from '../../logger.js';
 import { COLORS } from '../../util.js';
 import { StoredReport } from './report-store.js';
+import { reportNoun } from './report-copy.js';
 import { getForum } from './route-tracker.js';
 import { swapForumTags } from './report-service.js';
 import { scheduleClose, cancelScheduledClose, getScheduledClose, nextCloseAt, closingNoticeField } from './close-scheduler.js';
-import { computeStatusTitle } from './title-sync.js';
 import { getScheduledSnooze } from './snooze-scheduler.js';
 
 const log = createLogger('dormant-scheduler');
@@ -61,7 +60,7 @@ export async function sweep(client: Client): Promise<void> {
       if (snoozed) continue;
       const dormant = await isDormant(thread, report.data.lastActivityAt, dormantAfterMs);
       if (!dormant) continue;
-      const did = await beginDormantClose(thread, config.dormantCloseDays);
+      const did = await beginDormantClose(thread, config.dormantCloseDays, reportNoun(report.data.label));
       if (did) closed++;
     }
 
@@ -69,7 +68,6 @@ export async function sweep(client: Client): Promise<void> {
       if (report.isActive) continue;
       const thread = await client.channels.fetch(report.threadId).catch(() => null);
       if (!thread?.isThread()) continue;
-      if (await hasDormantCloseNotice(thread)) continue;
       const fixed = await reconcileClosedTags(thread, forum);
       if (fixed) reconciled++;
     }
@@ -103,12 +101,12 @@ async function isDormant(thread: ThreadChannel, storedActivity: number, threshol
   return true;
 }
 
-async function beginDormantClose(thread: ThreadChannel, dormantDays: number): Promise<boolean> {
+async function beginDormantClose(thread: ThreadChannel, dormantDays: number, noun: string): Promise<boolean> {
   const closeAt = nextCloseAt();
   const notice = new EmbedBuilder()
     .setColor(COLORS.amber)
     .setTitle('💤 Dormant Report')
-    .setDescription(`No activity for ${dormantDays} days — this report will close automatically. Reply here before it closes to keep it open.`)
+    .setDescription(`No activity for ${dormantDays} days — this ${noun} will close automatically. Reply here before it closes to keep it open.`)
     .addFields(closingNoticeField(closeAt))
     .setTimestamp();
   const noticeMsg = await thread.send({ embeds: [notice] }).catch(err => {
@@ -159,95 +157,6 @@ async function reconcileClosedTags(thread: ThreadChannel, forum: import('discord
   if (wasArchived) await thread.setArchived(true).catch(() => {});
   await StoredReport.syncFromThread(thread);
   return true;
-}
-
-const DORMANT_NOTICE_TITLE = '💤 Dormant Report';
-
-async function hasDormantCloseNotice(thread: ThreadChannel): Promise<boolean> {
-  const botId = thread.client.user?.id;
-  const messages = await thread.messages.fetch({ limit: 50 }).catch(() => null);
-  if (!messages) return false;
-  return messages.some(m => (!botId || m.author.id === botId) &&
-    m.embeds[0]?.title === DORMANT_NOTICE_TITLE);
-}
-
-/**
- * Recovery for threads closed by the dormant sweep before it was gated to
- * waiting-for-user reports. Identifies them by their dormant notice embed and
- * reopens each as WAITING FOR DEV. Exact prior status isn't recoverable, so
- * staff should spot-check afterwards.
- */
-export async function recoverDormantClosures(
-  client: import('discord.js').Client,
-  dryRun: boolean,
-): Promise<{ found: number; reopened: number; failed: number }> {
-  const config = loadConfig();
-  const guild = client.guilds.cache.get(config.guildId);
-  if (!guild) return { found: 0, reopened: 0, failed: 0 };
-  const forum = await getForum(guild, config.forumChannelId);
-  if (!forum) return { found: 0, reopened: 0, failed: 0 };
-
-  const result = { found: 0, reopened: 0, failed: 0 };
-  const reports = await StoredReport.listAll();
-  for (const report of reports) {
-    const thread = await client.channels.fetch(report.threadId).catch(() => null);
-    if (!thread?.isThread()) continue;
-    if (thread.parentId !== forum.id) continue;
-    const tagNameById = new Map(forum.availableTags.map(t => [t.id, t.name.toUpperCase()]));
-    const live = (thread.appliedTags as string[]).map(id => tagNameById.get(id) ?? '');
-    const closed = live.includes('CLOSED');
-    if (!closed || !(thread.archived || thread.locked)) continue;
-    if (!(await hasDormantCloseNotice(thread))) continue;
-    result.found++;
-    if (dryRun) continue;
-    try {
-      if (thread.archived) await thread.setArchived(false);
-      if (thread.locked) await thread.setLocked(false);
-      await swapForumTags(thread, forum, { remove: ['CLOSED'], add: ['OPEN', 'WAITING FOR DEV'] });
-      const desired = computeStatusTitle(thread.name, 'waiting-for-dev', report.data.ticketId);
-      if (thread.name !== desired) await thread.setName(desired).catch(err =>
-        log.warn({ err, threadId: thread.id }, 'Recovery rename failed (rename sublimit?); tags still restored'));
-      await StoredReport.syncFromThread(thread);
-      result.reopened++;
-    } catch (err) {
-      log.warn({ err, threadId: thread.id }, 'Dormant closure recovery failed');
-      result.failed++;
-    }
-  }
-  return result;
-}
-
-@Discord()
-@Guild(loadConfig().guildId)
-export class DormantRecoveryCommands {
-  @Slash({
-    description: 'Reopen threads auto-closed by the dormant sweep (before it was gated to waiting-for-user)',
-    name: 'recover-dormant-closes',
-    defaultMemberPermissions: PermissionFlagsBits.ManageThreads,
-  })
-  async recover(
-    @SlashOption({
-      name: 'dry_run',
-      description: 'Only list what would be reopened (default true)',
-      required: false,
-      type: ApplicationCommandOptionType.Boolean,
-    })
-    dryRunOpt: boolean | undefined,
-    interaction: import('discord.js').CommandInteraction,
-  ) {
-    if (!(interaction.member instanceof GuildMember) ||
-        !interaction.member.roles.cache.has(loadConfig().staffRole)) {
-      await interaction.reply({ content: 'Only staff can run recovery.', flags: MessageFlags.Ephemeral });
-      return;
-    }
-    const client = interaction.client;
-    const dryRun = dryRunOpt !== false;
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    const result = await recoverDormantClosures(client, dryRun);
-    await interaction.editReply(dryRun
-      ? `Dry run: found **${result.found}** dormant-closed thread(s) that would be reopened as WAITING FOR DEV.`
-      : `Recovery complete: found **${result.found}**, reopened **${result.reopened}**, failed **${result.failed}**. Threads are back to WAITING FOR DEV — spot-check statuses that were WAITING FOR USER before.`);
-  }
 }
 
 @Discord()
