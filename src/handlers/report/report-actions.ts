@@ -46,6 +46,7 @@ import {
 } from './title-sync.js';
 import { scheduleClose, getScheduledClose, nextCloseAt, closingNoticeField } from './close-scheduler.js';
 import { StoredReport } from './report-store.js';
+import { fixedButtonLabel, fixedModalTitle, labelForThread } from './report-copy.js';
 import {
   scheduleSnooze,
   getScheduledSnooze,
@@ -368,6 +369,7 @@ async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, para
     log.warn({ threadId: thread.id, ticketId: params.ticketId }, 'No submitter resolved; posting ungated Ready without Fixed button');
   }
   const readyAudience = params.submitterId ? params.audience : 'any';
+  const label = await labelForThread(thread.id, thread.name);
   const buttons = [
     new ButtonBuilder()
       .setCustomId(`ready_${params.mode}_${readyAudience}_${params.ticketId}_${params.submitterId}`)
@@ -379,7 +381,7 @@ async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, para
     buttons.push(
       new ButtonBuilder()
         .setCustomId(`fixed_${params.audience}_${params.ticketId}_${params.submitterId}`)
-        .setLabel('My Issue is Fixed')
+        .setLabel(fixedButtonLabel(label))
         .setStyle(ButtonStyle.Success)
         .setEmoji('🎉'),
     );
@@ -1128,7 +1130,7 @@ export class BotReportActions {
       const isStaff = interaction.member instanceof GuildMember && hasStaffRole(interaction.member);
       if (isStaff) {
         await interaction.reply({
-          content: 'Only the original reporter can mark their issue as fixed. If closing this was intentional, use **Staff Actions → Close** below.',
+          content: 'Only the original reporter can mark this as resolved. If closing this was intentional, use **Staff Actions → Close** below.',
           components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder().setCustomId(`staff_actions_${ticketId}`).setLabel('Staff Actions').setStyle(ButtonStyle.Primary).setEmoji('🛠️'),
           )],
@@ -1136,13 +1138,15 @@ export class BotReportActions {
         });
         return;
       }
-      await interaction.reply({ content: 'Only the original reporter can mark this issue as fixed.', flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: 'Only the original reporter can mark this as resolved.', flags: MessageFlags.Ephemeral });
       return;
     }
 
+    const threadName = interaction.channel?.isThread() ? interaction.channel.name : '';
+    const label = await labelForThread(interaction.channelId, threadName);
     const modal = new ModalBuilder()
       .setCustomId(`fixed_modal_${ticketId}_${interaction.message.id}`)
-      .setTitle('Confirm - Issue Resolved?');
+      .setTitle(fixedModalTitle(label));
     const noteInput = new TextInputBuilder({
       custom_id: 'note',
       style: TextInputStyle.Paragraph,
