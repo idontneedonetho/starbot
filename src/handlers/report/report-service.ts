@@ -10,6 +10,7 @@ import { createLogger } from '../../logger.js';
 import { getIndex } from '../../wiki/wiki.js';
 import { searchWiki, formatWikiResults } from '../../wiki/searcher.js';
 import { getForum, createRouteTrackerThread, addAdditionalRoutesToTracker, encodeConfirmCustomId, buildConfirmRows, TRACKER_FIELD_PREFIX } from './route-tracker.js';
+import { StoredReport } from './report-store.js';
 import { STATUS_EMOJI, isRateLimit } from './title-sync.js';
 import type { ExtractedRoute, RouteValidation } from '../../comma.js';
 
@@ -130,26 +131,65 @@ export async function submitReport(
     return;
   }
 
-  const generatedTitle = await params.title.catch(() => null);
+  // The cap throttles end users; staff acting on a user's behalf bypasses it.
+  const limit = config.maxActiveReports;
+  const onBehalfOf = params.reporterId !== interaction.user.id;
+  const gated = limit > 0 && !onBehalfOf;
 
-  const tagIds = params.tagNames.length > 0 ? resolveTagIds(forum, params.tagNames) : undefined;
+  // One closure so the gated path can hold the creation lock across check→create→record.
+  const createThread = async (): Promise<{ thread: ThreadChannel; ticketId: string } | null> => {
+    if (gated) {
+      const active = await StoredReport.activeForUser(params.reporterId);
+      if (active.length >= limit) {
+        const lines = active.map(r => `- [${r.data.threadName}](${r.url})`).join('\n');
+        await interaction.editReply({
+          content: `You can only have **${limit}** active report thread(s) at a time. Please wait until one of yours is resolved, or add to an existing thread instead:\n${lines}`,
+          components: [],
+        });
+        return null;
+      }
+    }
 
-  let thread;
-  try {
-    thread = await forum.threads.create({
-      // Ticket id omitted here: adding it would need a post-create rename, spending
-      // one of the 2-per-10-min title edits. title-sync folds it in on first status change.
-      name: formatThreadTitle(STATUS_EMOJI['new'], params.label, generatedTitle, null),
-      message: { content: `<@${params.reporterId}>`, embeds: [params.embed] },
-      appliedTags: tagIds,
+    const generatedTitle = await params.title.catch(() => null);
+    const tagIds = params.tagNames.length > 0 ? resolveTagIds(forum, params.tagNames) : undefined;
+
+    let thread;
+    try {
+      thread = await forum.threads.create({
+        // Ticket id omitted here: adding it would need a post-create rename, spending
+        // one of the 2-per-10-min title edits. title-sync folds it in on first status change.
+        name: formatThreadTitle(STATUS_EMOJI['new'], params.label, generatedTitle, null),
+        message: { content: `<@${params.reporterId}>`, embeds: [params.embed] },
+        appliedTags: tagIds,
+      });
+    } catch (err) {
+      log.error({ err }, 'Failed to create thread');
+      await interaction.editReply({ content: 'Failed to create thread. Contact an admin.' });
+      return null;
+    }
+
+    const ticketId = String(parseInt(thread.id.slice(-7), 10));
+
+    await StoredReport.record({
+      threadId: thread.id,
+      ticketId,
+      reporterId: params.reporterId,
+      label: params.label,
+      threadName: thread.name,
+      url: thread.url,
+      tagNames: params.tagNames,
+      createdTimestamp: thread.createdTimestamp ?? Date.now(),
+      lastActivityAt: Date.now(),
     });
-  } catch (err) {
-    log.error({ err }, 'Failed to create thread');
-    await interaction.editReply({ content: 'Failed to create thread. Contact an admin.' });
-    return;
-  }
 
-  const ticketId = String(parseInt(thread.id.slice(-7), 10));
+    return { thread, ticketId };
+  };
+
+  const created = await (gated
+    ? StoredReport.withCreationLock(params.reporterId, createThread)
+    : createThread());
+  if (!created) return;
+  const { thread, ticketId } = created;
 
   params.embed.setTitle(`${params.label} ${ticketId}`);
 
