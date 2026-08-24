@@ -8,6 +8,7 @@ import './handlers/identification/index.js';
 import './handlers/report/index.js';
 import './handlers/report/report-actions.js';
 import './handlers/report/backfill.js';
+import './handlers/report/freeze.js';
 import './handlers/share-route.js';
 
 const config = loadConfig();
