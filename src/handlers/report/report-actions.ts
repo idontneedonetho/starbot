@@ -388,7 +388,12 @@ async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, para
   }
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
 
-  const sent = await thread.send({ embeds: [embed], components: [row] });
+  const sent = await thread.send({
+    content: params.submitterId ? `<@${params.submitterId}>` : undefined,
+    embeds: [embed],
+    components: [row],
+    allowedMentions: params.submitterId ? { users: [params.submitterId] } : undefined,
+  });
   await StoredReport.syncFromThread(thread);
   if (params.requiredDate) {
     await readyReqStore.set(sent.id, {
