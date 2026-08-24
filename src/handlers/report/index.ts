@@ -48,6 +48,7 @@ import { titleGenerator } from './title-generator.js';
 import { konikViewerUrl } from '../../konik.js';
 import { getScheduledSnooze } from './snooze-scheduler.js';
 import { StoredReport } from './report-store.js';
+import { getFreeze } from './freeze-state.js';
 import {
   CATEGORY_ORDER,
   paginateReports,
@@ -86,6 +87,18 @@ const gateTokensInFlight = new Set<string>();
 
 
 
+// Store-backed, so it stays well inside the undeferred showModal window.
+async function ensureNotFrozen(interaction: ButtonInteraction): Promise<boolean> {
+  const freeze = await getFreeze();
+  if (!freeze) return true;
+  const expiry = freeze.expiresAt ? ` It thaws <t:${Math.floor(freeze.expiresAt / 1000)}:R>.` : '';
+  await interaction.reply({
+    content: `**${freeze.message}**${expiry}.`,
+    flags: MessageFlags.Ephemeral,
+  });
+  return false;
+}
+
 function reporterFromModalId(interaction: ModalSubmitInteraction): string {
   const match = interaction.customId.match(/_obo_(\d+)$/);
   return match ? match[1] : interaction.user.id;
@@ -111,18 +124,21 @@ async function ensureWithinActiveLimit(interaction: ButtonInteraction): Promise<
 export class BotReport {
   @ButtonComponent({ id: 'report_bug' })
   async bug(interaction: ButtonInteraction) {
+    if (!(await ensureNotFrozen(interaction))) return;
     if (!(await ensureWithinActiveLimit(interaction))) return;
     await showBugModal(interaction);
   }
 
   @ButtonComponent({ id: 'report_feedback' })
   async feedback(interaction: ButtonInteraction) {
+    if (!(await ensureNotFrozen(interaction))) return;
     if (!(await ensureWithinActiveLimit(interaction))) return;
     await showFeedbackModal(interaction, 'Feedback');
   }
 
   @ButtonComponent({ id: 'report_feature' })
   async feature(interaction: ButtonInteraction) {
+    if (!(await ensureNotFrozen(interaction))) return;
     if (!(await ensureWithinActiveLimit(interaction))) return;
     await showFeedbackModal(interaction, 'Feature Request');
   }
@@ -283,6 +299,7 @@ export class BotReportOnBehalf {
 
   @ButtonComponent({ id: /^obo_/ })
   async oboChoice(interaction: ButtonInteraction) {
+    if (!(await ensureNotFrozen(interaction))) return;
     const [, type, targetId] = interaction.customId.split('_');
     if (type === 'bug') {
       await showBugModal(interaction, targetId);

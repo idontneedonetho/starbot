@@ -11,6 +11,7 @@ import { getIndex } from '../../wiki/wiki.js';
 import { searchWiki, formatWikiResults } from '../../wiki/searcher.js';
 import { getForum, createRouteTrackerThread, addAdditionalRoutesToTracker, encodeConfirmCustomId, buildConfirmRows, TRACKER_FIELD_PREFIX } from './route-tracker.js';
 import { StoredReport } from './report-store.js';
+import { isFrozen } from './freeze-state.js';
 import { STATUS_EMOJI, isRateLimit } from './title-sync.js';
 import type { ExtractedRoute, RouteValidation } from '../../comma.js';
 
@@ -128,6 +129,12 @@ export async function submitReport(
   const forum = await getForum(guild, config.forumChannelId);
   if (!forum) {
     await interaction.editReply({ content: 'Forum channel not found. Contact an admin.' });
+    return;
+  }
+
+  // Freezes block everyone, staff on behalf of included.
+  if (await isFrozen()) {
+    await interaction.editReply({ content: 'Reports are currently frozen — new submissions are paused.', components: [] });
     return;
   }
 

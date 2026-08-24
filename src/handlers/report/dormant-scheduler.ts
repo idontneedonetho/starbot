@@ -10,6 +10,7 @@ import { getForum } from './route-tracker.js';
 import { swapForumTags } from './report-service.js';
 import { scheduleClose, cancelScheduledClose, getScheduledClose, nextCloseAt, closingNoticeField } from './close-scheduler.js';
 import { getScheduledSnooze } from './snooze-scheduler.js';
+import { isFrozen } from './freeze-state.js';
 
 const log = createLogger('dormant-scheduler');
 
@@ -30,6 +31,7 @@ export async function sweep(client: Client): Promise<void> {
   if (sweeping) return;
   sweeping = true;
   try {
+    if (await isFrozen()) return;
     const config = loadConfig();
     const guild = client.guilds.cache.get(config.guildId) ?? await client.guilds.fetch(config.guildId).catch(() => null);
     if (!guild) return;
