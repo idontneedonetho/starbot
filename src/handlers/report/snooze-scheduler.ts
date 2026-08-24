@@ -5,6 +5,7 @@ import { COLORS } from '../../util.js';
 import { isRateLimit, retryDelay, STATUS_EMOJI } from './title-sync.js';
 import { StoredReport } from './report-store.js';
 import { ScheduledTimerIndex } from './scheduled-timer-index.js';
+import { isFrozen, snoozeAdjustedWake } from './freeze-state.js';
 
 const log = createLogger('snooze-scheduler');
 
@@ -29,6 +30,7 @@ const WAKES_PREFIX = '⏰ Wakes ';
 
 interface ScheduledSnooze {
   wakeAt: number;
+  scheduledAt?: number;
   snoozeMessageId: string;
   reason?: string;
   snoozedBy: string;
@@ -84,7 +86,7 @@ class SnoozeScheduler extends ScheduledTimerIndex<ScheduledSnooze> {
     priorName: string | undefined,
   ): Promise<void> {
     await this.mutate(index => {
-      index[threadId] = { wakeAt, snoozeMessageId, reason, snoozedBy, priorTagIds, priorName };
+      index[threadId] = { wakeAt, scheduledAt: Date.now(), snoozeMessageId, reason, snoozedBy, priorTagIds, priorName };
     });
     this.armTimer(threadId, wakeAt);
   }
@@ -108,6 +110,13 @@ class SnoozeScheduler extends ScheduledTimerIndex<ScheduledSnooze> {
   }
 
   protected async fire(threadId: string): Promise<void> {
+    // A freeze freezes snoozes too: recheck hourly until thawed, when
+    // extendSnoozesAfterThaw rewrites wakeAt with the preserved time.
+    if (await isFrozen()) {
+      const pending = await this.get(threadId);
+      if (pending) this.armTimer(threadId, Date.now() + 60 * 60 * 1000);
+      return;
+    }
     const entry = await this.claim(threadId);
     if (!entry || !this.client) return;
     const ch = await this.client.channels.fetch(threadId).catch(() => null);
@@ -150,6 +159,32 @@ class SnoozeScheduler extends ScheduledTimerIndex<ScheduledSnooze> {
         return;
       }
     }
+  }
+
+  // Rewrites every pending wake to preserve its remaining snooze time across
+  // the freeze window, re-arms timers, and edits the notice embeds' expiry.
+  async extendAfterThaw(freeze: { startedAt: number; endedAt: number }): Promise<void> {
+    const index = await this.readIndex();
+    for (const [threadId, entry] of Object.entries(index)) {
+      const wakeAt = snoozeAdjustedWake(entry.wakeAt, entry.scheduledAt, freeze);
+      if (wakeAt === entry.wakeAt) continue;
+      await this.mutate(idx => {
+        if (idx[threadId]) idx[threadId] = { ...idx[threadId], wakeAt };
+      });
+      this.armTimer(threadId, wakeAt);
+      await this.editNoticeExpiry(threadId, entry.snoozeMessageId, wakeAt);
+    }
+  }
+
+  private async editNoticeExpiry(threadId: string, messageId: string, wakeAt: number): Promise<void> {
+    if (!messageId || !this.client) return;
+    const thread = await this.client.channels.fetch(threadId).catch(() => null);
+    if (!thread?.isThread()) return;
+    const msg = await thread.messages.fetch(messageId).catch(() => null);
+    const embed = msg?.embeds[0];
+    if (!msg || !embed) return;
+    const fields = (embed.fields ?? []).map(f => (f.value ?? '').startsWith(WAKES_PREFIX) ? wakesField(wakeAt) : f);
+    await msg.edit({ embeds: [EmbedBuilder.from(embed).setFields(fields)] }).catch(err => this.log.warn({ err }, 'Failed to update snooze notice expiry'));
   }
 
   private async bump(thread: ThreadChannel, snoozeMessageId: string): Promise<void> {
@@ -202,6 +237,10 @@ export async function cancelSnooze(threadId: string): Promise<void> {
 
 export async function reopenSnoozedThread(thread: ThreadChannel): Promise<ScheduledSnooze | null> {
   return scheduler.reopen(thread);
+}
+
+export function extendSnoozesAfterThaw(freeze: { startedAt: number; endedAt: number }): Promise<void> {
+  return scheduler.extendAfterThaw(freeze);
 }
 
 export function initSnoozeScheduler(c: Client): void {
