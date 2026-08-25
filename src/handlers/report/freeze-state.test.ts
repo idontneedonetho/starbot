@@ -1,17 +1,61 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+const backing = new Map<string, unknown>();
+
 vi.mock('../../store.js', () => ({
   createStore: () => ({
-    get: vi.fn(async () => undefined),
-    set: vi.fn(async () => true),
-    delete: vi.fn(async () => true),
+    get: vi.fn(async (key: string) => backing.get(key)),
+    set: vi.fn(async (key: string, value: unknown) => {
+      backing.set(key, value);
+      return true;
+    }),
+    delete: vi.fn(async (key: string) => backing.delete(key)),
   }),
 }));
 
-import { dormantBumpedAt, snoozeAdjustedWake } from './freeze-state.js';
+import { dormantBumpedAt, snoozeAdjustedWake, getFreeze, saveFreeze, patchFreeze, clearFreeze, type FreezeRecord } from './freeze-state.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const DORMANT_MS = 14 * DAY;
+
+describe('freeze record helpers', () => {
+  const record: FreezeRecord = {
+    startedAt: 1,
+    expiresAt: null,
+    message: 'msg',
+    initiatedBy: 'admin',
+    priorOverwrite: null,
+    overwriteCaptured: false,
+    lockedThreadIds: [],
+    bannerMessageId: null,
+    steps: { overwrite: false, buttons: false, locks: false, banner: false },
+  };
+
+  beforeEach(() => backing.clear());
+
+  it('round-trips a saved record', async () => {
+    await saveFreeze(record);
+    expect(await getFreeze()).toEqual(record);
+  });
+
+  it('patches fields without dropping the rest', async () => {
+    await saveFreeze(record);
+    const patched = await patchFreeze({ bannerMessageId: 'm1', steps: { ...record.steps, banner: true } });
+    expect(patched?.bannerMessageId).toBe('m1');
+    expect(patched?.steps.banner).toBe(true);
+    expect(patched?.message).toBe('msg');
+  });
+
+  it('patch is a no-op with no stored record', async () => {
+    expect(await patchFreeze({ message: 'x' })).toBeNull();
+  });
+
+  it('clears the record', async () => {
+    await saveFreeze(record);
+    await clearFreeze();
+    expect(await getFreeze()).toBeNull();
+  });
+});
 
 describe('dormantBumpedAt', () => {
   beforeEach(() => {
