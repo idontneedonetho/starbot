@@ -354,7 +354,7 @@ async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, para
     required = `\n\nThe route must be on commit ${formatGitCommit(params.requiredSha, `github.com/${loadConfig().mainRepo}`)} (${params.branch}${committed ? `, committed ${committed}` : ''}) or newer.`;
   } else if (params.mode === 'newernow' && params.requiredDate) {
     const committed = discordTimestamp(params.requiredDate);
-    required = `\n\nThe route must be on a commit newer than the latest one${committed ? ` as of ${committed}` : ''}.`;
+    required = `\n\nThe route must be on a commit newer than the latest one${committed ? ` as of ${committed}` : ''}. An update will be pushed to the testing branch \`Dom\` shortly — see the [branch switching guide](https://wiki.firestar.link/software/starpilot/#changing-branches) to switch to it.`;
   }
 
   const embed = new EmbedBuilder()
