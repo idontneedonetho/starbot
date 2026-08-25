@@ -344,9 +344,10 @@ async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, para
     .catch(err => log.warn({ err }, 'Failed to swap forum tags for WAITING FOR USER'));
   await setThreadStatusEmoji(thread, 'waiting-for-user');
 
+  const needsRoute = params.mode !== 'anytime';
   const action = params.mode === 'anytime'
     ? "Click **Ready** below when you've tested and have feedback to share (no @pings please)."
-    : "A **new route** is needed to reopen this report. Click **Ready** below to submit one once you've tested (no @pings please).";
+    : "A **new route** is needed to reopen this report. Click **Send Route** below to submit one once you've tested (no @pings please).";
 
   let required = '';
   if (params.mode === 'newer' && params.requiredSha) {
@@ -373,9 +374,9 @@ async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, para
   const buttons = [
     new ButtonBuilder()
       .setCustomId(`ready_${params.mode}_${readyAudience}_${params.ticketId}_${params.submitterId}`)
-      .setLabel('Ready')
+      .setLabel(needsRoute ? 'Send Route' : 'Ready')
       .setStyle(ButtonStyle.Success)
-      .setEmoji('✅'),
+      .setEmoji(needsRoute ? '🛣️' : '✅'),
   ];
   if (params.submitterId) {
     buttons.push(
