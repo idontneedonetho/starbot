@@ -16,6 +16,22 @@ import type { ExtractedRoute, RouteValidation } from '../../comma.js';
 
 const log = createLogger('report-service');
 
+let shareRouteCommandId: string | null = null;
+let shareRouteResolved = false;
+
+async function getShareRouteCommandId(guild: import('discord.js').Guild): Promise<string | null> {
+  if (!shareRouteResolved) {
+    try {
+      const cmds = await guild.commands.fetch();
+      shareRouteCommandId = cmds.find(c => c.name === 'share-route')?.id ?? null;
+      shareRouteResolved = true;
+    } catch (err) {
+      log.warn({ err }, 'Failed to fetch guild commands for share-route link');
+    }
+  }
+  return shareRouteCommandId;
+}
+
 export function resolveTagIds(forum: ForumChannel, names: string[]): string[] {
   return names
     .map(name => forum.availableTags.find(t => t.name === name)?.id)
@@ -251,6 +267,13 @@ export async function submitReport(
       log.error({ err }, 'Failed to pin starter message');
     });
   }
+
+  const shareRouteId = await getShareRouteCommandId(guild);
+  await thread.send(
+    `Please do not send raw route URLs or route IDs in this thread. To share a new route, use the **Additional Report** button${shareRouteId ? ` or </share-route:${shareRouteId}>` : ' or the `/share-route` command'} instead.`,
+  ).catch(err => {
+    log.error({ err }, 'Failed to send route-sharing notice');
+  });
 
   await interaction.editReply({
     content: `${params.label} **${ticketId}** submitted! [View thread](${thread.url})`,
