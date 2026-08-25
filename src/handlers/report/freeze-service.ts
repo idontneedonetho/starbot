@@ -1,12 +1,12 @@
 import type { ButtonComponent, Client, ForumChannel, Guild, Message } from 'discord.js';
-import { ActionRowBuilder, ButtonBuilder, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
 import { loadConfig } from '../../config.js';
 import { createLogger } from '../../logger.js';
 import { COLORS } from '../../util.js';
 import { StoredReport } from './report-store.js';
 import { getForum } from './route-tracker.js';
 import { extendSnoozesAfterThaw } from './snooze-scheduler.js';
-import { dormantBumpedAt, getFreeze, isFrozen, saveFreeze, patchFreeze, clearFreeze, type FreezeRecord } from './freeze-state.js';
+import { dormantBumpedAt, getFreeze, saveFreeze, patchFreeze, clearFreeze, type FreezeRecord } from './freeze-state.js';
 
 const log = createLogger('freeze');
 
@@ -68,12 +68,16 @@ export async function setReportButtonsDisabled(client: Client, disabled: boolean
 
 // ---- Forum permissions & thread locks -----------------------------------
 
-async function applySendMessagesDeny(forum: ForumChannel, guild: Guild): Promise<void> {
-  const prior = forum.permissionOverwrites.cache.get(guild.id);
-  if (prior) {
-    await patchFreeze({ priorOverwrite: { allow: prior.allow.bitfield.toString(), deny: prior.deny.bitfield.toString() } });
-  } else {
-    await patchFreeze({ priorOverwrite: null });
+async function applySendMessagesDeny(forum: ForumChannel, guild: Guild, record: FreezeRecord): Promise<void> {
+  // Capture exactly once, before any edit: a crash after the edit must not
+  // snapshot our own deny as the "prior" state.
+  if (!record.overwriteCaptured) {
+    const prior = forum.permissionOverwrites.cache.get(guild.id);
+    const captured = await patchFreeze({
+      priorOverwrite: prior ? { allow: prior.allow.bitfield.toString(), deny: prior.deny.bitfield.toString() } : null,
+      overwriteCaptured: true,
+    });
+    if (captured) record.overwriteCaptured = true;
   }
   await forum.permissionOverwrites.edit(guild.id, { SendMessages: false }, { type: 0 });
 }
@@ -119,23 +123,32 @@ async function lockActiveThreads(forum: ForumChannel, record: FreezeRecord): Pro
 async function unlockThreads(client: Client, record: FreezeRecord): Promise<void> {
   for (const threadId of record.lockedThreadIds) {
     const thread = await client.channels.fetch(threadId).catch(() => null);
-    if (!thread?.isThread() || thread.archived) continue;
-    await thread.setLocked(false).catch(err => log.warn({ err, threadId }, 'Failed to unlock thread on thaw'));
+    if (!thread?.isThread()) continue;
+    try {
+      // Discord rejects lock edits while archived - e.g. a thread closed mid-freeze.
+      const wasArchived = thread.archived;
+      if (wasArchived) await thread.setArchived(false);
+      await thread.setLocked(false);
+      if (wasArchived) await thread.setArchived(true);
+    } catch (err) {
+      log.warn({ err, threadId }, 'Failed to unlock thread on thaw');
+    }
   }
 }
 
-async function postBanner(client: Client, record: FreezeRecord): Promise<void> {
+async function postBanner(client: Client, record: FreezeRecord): Promise<boolean> {
   const config = loadConfig();
   const channel = await client.channels.fetch(config.reportButtonChannelId).catch(() => null);
   if (!channel?.isSendable()) {
     log.error('Cannot post freeze banner: button channel missing');
-    return;
+    return false;
   }
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId(THAW_BUTTON_ID).setLabel('Thaw Freeze').setStyle(4),
+    new ButtonBuilder().setCustomId(THAW_BUTTON_ID).setLabel('Thaw Freeze').setStyle(ButtonStyle.Danger),
   );
   const sent = await channel.send({ embeds: [freezeBannerEmbed(record)], components: [row] });
   await patchFreeze({ bannerMessageId: sent.id });
+  return true;
 }
 
 async function deleteBanner(client: Client, record: FreezeRecord): Promise<void> {
@@ -181,7 +194,7 @@ export async function resumeFreeze(client: Client): Promise<void> {
   if (!forum) return;
 
   if (!record.steps.overwrite) {
-    await applySendMessagesDeny(forum, guild);
+    await applySendMessagesDeny(forum, guild, record);
     record = (await patchFreeze({ steps: { ...record.steps, overwrite: true } }))!;
   }
   if (!record.steps.buttons) {
@@ -193,8 +206,9 @@ export async function resumeFreeze(client: Client): Promise<void> {
     record = (await patchFreeze({ steps: { ...record.steps, locks: true } }))!;
   }
   if (!record.steps.banner) {
-    await postBanner(client, record);
-    await patchFreeze({ steps: { ...record.steps, banner: true } });
+    const posted = await postBanner(client, record);
+    // Left unmarked on failure so the next resume retries the banner.
+    if (posted) await patchFreeze({ steps: { ...record.steps, banner: true } });
   }
 }
 
@@ -222,7 +236,7 @@ async function performThaw(client: Client): Promise<void> {
 
   const endedAt = Date.now();
   await bumpDormancyAfterThaw({ startedAt: record.startedAt, endedAt });
-  await extendSnoozesAfterThaw({ startedAt: record.startedAt, endedAt });
+  await extendSnoozesAfterThaw(client, { startedAt: record.startedAt, endedAt });
 
   await clearFreeze();
   log.info({ durationMs: endedAt - record.startedAt }, 'Reports thawed');
@@ -270,6 +284,3 @@ export function clearExpiryTimer(): void {
     expiryTimer = null;
   }
 }
-
-// Convenience re-export so gates can import everything from one module.
-export { isFrozen, getFreeze };

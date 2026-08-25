@@ -110,8 +110,7 @@ class SnoozeScheduler extends ScheduledTimerIndex<ScheduledSnooze> {
   }
 
   protected async fire(threadId: string): Promise<void> {
-    // A freeze freezes snoozes too: recheck hourly until thawed, when
-    // extendSnoozesAfterThaw rewrites wakeAt with the preserved time.
+    // Frozen: recheck hourly; thaw rewrites wakeAt with the preserved time.
     if (await isFrozen()) {
       const pending = await this.get(threadId);
       if (pending) this.armTimer(threadId, Date.now() + 60 * 60 * 1000);
@@ -163,7 +162,7 @@ class SnoozeScheduler extends ScheduledTimerIndex<ScheduledSnooze> {
 
   // Rewrites every pending wake to preserve its remaining snooze time across
   // the freeze window, re-arms timers, and edits the notice embeds' expiry.
-  async extendAfterThaw(freeze: { startedAt: number; endedAt: number }): Promise<void> {
+  async extendAfterThaw(client: Client, freeze: { startedAt: number; endedAt: number }): Promise<void> {
     const index = await this.readIndex();
     for (const [threadId, entry] of Object.entries(index)) {
       const wakeAt = snoozeAdjustedWake(entry.wakeAt, entry.scheduledAt, freeze);
@@ -172,13 +171,15 @@ class SnoozeScheduler extends ScheduledTimerIndex<ScheduledSnooze> {
         if (idx[threadId]) idx[threadId] = { ...idx[threadId], wakeAt };
       });
       this.armTimer(threadId, wakeAt);
-      await this.editNoticeExpiry(threadId, entry.snoozeMessageId, wakeAt);
+      await this.editNoticeExpiry(client, threadId, entry.snoozeMessageId, wakeAt);
     }
   }
 
-  private async editNoticeExpiry(threadId: string, messageId: string, wakeAt: number): Promise<void> {
-    if (!messageId || !this.client) return;
-    const thread = await this.client.channels.fetch(threadId).catch(() => null);
+  private async editNoticeExpiry(client: Client, threadId: string, messageId: string, wakeAt: number): Promise<void> {
+    if (!messageId) return;
+    // this.client is null when a boot-recovery thaw runs before scheduler init.
+    const resolved = this.client ?? client;
+    const thread = await resolved.channels.fetch(threadId).catch(() => null);
     if (!thread?.isThread()) return;
     const msg = await thread.messages.fetch(messageId).catch(() => null);
     const embed = msg?.embeds[0];
@@ -239,8 +240,8 @@ export async function reopenSnoozedThread(thread: ThreadChannel): Promise<Schedu
   return scheduler.reopen(thread);
 }
 
-export function extendSnoozesAfterThaw(freeze: { startedAt: number; endedAt: number }): Promise<void> {
-  return scheduler.extendAfterThaw(freeze);
+export function extendSnoozesAfterThaw(client: Client, freeze: { startedAt: number; endedAt: number }): Promise<void> {
+  return scheduler.extendAfterThaw(client, freeze);
 }
 
 export function initSnoozeScheduler(c: Client): void {

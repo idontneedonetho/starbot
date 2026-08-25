@@ -13,6 +13,8 @@ export interface FreezeRecord {
   message: string;
   initiatedBy: string;
   priorOverwrite: FreezeOverwrite | null;
+  /** Distinguishes "no prior overwrite" from "not yet captured". */
+  overwriteCaptured?: boolean;
   lockedThreadIds: string[];
   bannerMessageId: string | null;
   steps: { overwrite: boolean; buttons: boolean; locks: boolean; banner: boolean };
@@ -44,15 +46,13 @@ export async function clearFreeze(): Promise<void> {
   await deleteConfigKey(FREEZE_KEY);
 }
 
-// Freeze time never counts toward dormancy, but a thread also can't earn more
-// than one full dormancy window of credit from a single freeze.
+// Freeze time doesn't count toward dormancy, capped at one dormancy window.
 export function dormantBumpedAt(lastActivityAt: number, freeze: { startedAt: number; endedAt: number }, dormantMs: number): number {
   const bump = Math.min(freeze.endedAt - freeze.startedAt, dormantMs);
   return Math.min(Date.now(), lastActivityAt + bump);
 }
 
-// A freeze preserves the snooze's remaining time, capped at its original
-// duration so a freeze can't inflate a snooze beyond what staff asked for.
+// Preserves the snooze's remaining time, capped at its original duration.
 export function snoozeAdjustedWake(wakeAt: number, scheduledAt: number | undefined, freeze: { startedAt: number; endedAt: number }): number {
   const duration = scheduledAt !== undefined ? wakeAt - scheduledAt : Math.max(0, wakeAt - freeze.startedAt);
   const bump = Math.min(freeze.endedAt - freeze.startedAt, Math.max(0, duration));
