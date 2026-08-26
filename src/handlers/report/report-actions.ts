@@ -344,9 +344,10 @@ async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, para
     .catch(err => log.warn({ err }, 'Failed to swap forum tags for WAITING FOR USER'));
   await setThreadStatusEmoji(thread, 'waiting-for-user');
 
+  const needsRoute = params.mode !== 'anytime';
   const action = params.mode === 'anytime'
     ? "Click **Ready** below when you've tested and have feedback to share (no @pings please)."
-    : "A **new route** is needed to reopen this report. Click **Ready** below to submit one once you've tested (no @pings please).";
+    : "A **new route** is needed to reopen this report. Click **Send Route** below to submit one once you've tested (no @pings please).";
 
   let required = '';
   if (params.mode === 'newer' && params.requiredSha) {
@@ -354,7 +355,7 @@ async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, para
     required = `\n\nThe route must be on commit ${formatGitCommit(params.requiredSha, `github.com/${loadConfig().mainRepo}`)} (${params.branch}${committed ? `, committed ${committed}` : ''}) or newer.`;
   } else if (params.mode === 'newernow' && params.requiredDate) {
     const committed = discordTimestamp(params.requiredDate);
-    required = `\n\nThe route must be on a commit newer than the latest one${committed ? ` as of ${committed}` : ''}.`;
+    required = `\n\nThe route must be on a commit newer than the latest one${committed ? ` as of ${committed}` : ''}. An update will be pushed to the testing branch \`Dom\` shortly — see the [branch switching guide](https://wiki.firestar.link/software/starpilot/#changing-branches) to switch to it.`;
   }
 
   const embed = new EmbedBuilder()
@@ -373,9 +374,9 @@ async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, para
   const buttons = [
     new ButtonBuilder()
       .setCustomId(`ready_${params.mode}_${readyAudience}_${params.ticketId}_${params.submitterId}`)
-      .setLabel('Ready')
+      .setLabel(needsRoute ? 'Send Route' : 'Ready')
       .setStyle(ButtonStyle.Success)
-      .setEmoji('✅'),
+      .setEmoji(needsRoute ? '🛣️' : '✅'),
   ];
   if (params.submitterId) {
     buttons.push(
