@@ -185,7 +185,16 @@ class SnoozeScheduler extends ScheduledTimerIndex<ScheduledSnooze> {
     const embed = msg?.embeds[0];
     if (!msg || !embed) return;
     const fields = (embed.fields ?? []).map(f => (f.value ?? '').startsWith(WAKES_PREFIX) ? wakesField(wakeAt) : f);
-    await msg.edit({ embeds: [EmbedBuilder.from(embed).setFields(fields)] }).catch(err => this.log.warn({ err }, 'Failed to update snooze notice expiry'));
+    // Snoozed threads are archived; Discord rejects message edits in them.
+    const wasArchived = thread.archived;
+    try {
+      if (wasArchived) await thread.setArchived(false);
+      await msg.edit({ embeds: [EmbedBuilder.from(embed).setFields(fields)] });
+    } catch (err) {
+      this.log.warn({ err }, 'Failed to update snooze notice expiry');
+    } finally {
+      if (wasArchived) await thread.setArchived(true).catch(() => {});
+    }
   }
 
   private async bump(thread: ThreadChannel, snoozeMessageId: string): Promise<void> {

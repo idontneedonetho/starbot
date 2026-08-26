@@ -284,6 +284,12 @@ export class BotReportOnBehalf {
       await interaction.reply({ content: "You can't open a report on behalf of a bot.", flags: MessageFlags.Ephemeral });
       return;
     }
+    const freeze = await getFreeze();
+    if (freeze) {
+      const expiry = freeze.expiresAt ? ` It thaws <t:${Math.floor(freeze.expiresAt / 1000)}:R>.` : '';
+      await interaction.reply({ content: `**${freeze.message}**${expiry}.`, flags: MessageFlags.Ephemeral });
+      return;
+    }
 
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder().setCustomId(`obo_bug_${target.id}`).setLabel('Bug Report').setStyle(ButtonStyle.Primary).setEmoji('🐛'),

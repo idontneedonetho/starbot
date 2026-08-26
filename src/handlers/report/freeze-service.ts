@@ -122,17 +122,12 @@ async function lockActiveThreads(forum: ForumChannel, record: FreezeRecord): Pro
 
 async function unlockThreads(client: Client, record: FreezeRecord): Promise<void> {
   for (const threadId of record.lockedThreadIds) {
+    // A thread closed mid-freeze is locked by the close itself - leave it.
+    const report = await StoredReport.get(threadId);
+    if (report && !report.isActive) continue;
     const thread = await client.channels.fetch(threadId).catch(() => null);
-    if (!thread?.isThread()) continue;
-    try {
-      // Discord rejects lock edits while archived - e.g. a thread closed mid-freeze.
-      const wasArchived = thread.archived;
-      if (wasArchived) await thread.setArchived(false);
-      await thread.setLocked(false);
-      if (wasArchived) await thread.setArchived(true);
-    } catch (err) {
-      log.warn({ err, threadId }, 'Failed to unlock thread on thaw');
-    }
+    if (!thread?.isThread() || thread.archived) continue;
+    await thread.setLocked(false).catch(err => log.warn({ err, threadId }, 'Failed to unlock thread on thaw'));
   }
 }
 

@@ -45,7 +45,7 @@ export class FreezeCommands {
         new ActionRowBuilder<TextInputBuilder>().addComponents(
           new TextInputBuilder()
             .setCustomId('duration')
-            .setLabel('Duration (hours)')
+            .setLabel('Duration in hours (0 = no expiry)')
             .setStyle(TextInputStyle.Short)
             .setValue('24')
             .setRequired(false)
