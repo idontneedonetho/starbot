@@ -68,38 +68,24 @@ export async function setReportButtonsDisabled(client: Client, disabled: boolean
 
 // ---- Forum permissions & thread locks -----------------------------------
 
+// Discord's overwrite edit only touches the flags passed, so the freeze
+// owns exactly one bit. Everything else admins do mid-freeze survives.
 async function applySendMessagesDeny(forum: ForumChannel, guild: Guild, record: FreezeRecord): Promise<void> {
   // Capture exactly once, before any edit: a crash after the edit must not
   // snapshot our own deny as the "prior" state.
   if (!record.overwriteCaptured) {
     const prior = forum.permissionOverwrites.cache.get(guild.id);
-    const captured = await patchFreeze({
-      priorOverwrite: prior ? { allow: prior.allow.bitfield.toString(), deny: prior.deny.bitfield.toString() } : null,
-      overwriteCaptured: true,
-    });
+    const priorSendMessages = prior ? (prior.allow.has(PermissionFlagsBits.SendMessages) ? true : prior.deny.has(PermissionFlagsBits.SendMessages) ? false : null) : null;
+    const captured = await patchFreeze({ priorSendMessages, overwriteCaptured: true });
     if (captured) record.overwriteCaptured = true;
   }
   await forum.permissionOverwrites.edit(guild.id, { SendMessages: false }, { type: 0 });
 }
 
-// Exact-restore via per-flag booleans: true=allow, false=deny, null=neutral.
-function overwriteOptions(allow: bigint, deny: bigint): Record<string, boolean | null> {
-  const opts: Record<string, boolean | null> = {};
-  for (const [flag, bit] of Object.entries(PermissionFlagsBits)) {
-    if (typeof bit !== 'bigint') continue;
-    opts[flag] = (allow & bit) === bit ? true : (deny & bit) === bit ? false : null;
-  }
-  return opts;
-}
-
 async function restoreOverwrite(forum: ForumChannel, guild: Guild, record: FreezeRecord): Promise<void> {
-  if (!record.priorOverwrite) {
-    await forum.permissionOverwrites.delete(guild.id);
-    return;
-  }
   await forum.permissionOverwrites.edit(
     guild.id,
-    overwriteOptions(BigInt(record.priorOverwrite.allow), BigInt(record.priorOverwrite.deny)),
+    { SendMessages: record.priorSendMessages ?? null },
     { type: 0 },
   );
 }
@@ -165,7 +151,8 @@ export async function startFreeze(client: Client, params: { hours: number; messa
     expiresAt: params.hours > 0 ? now + params.hours * 60 * 60 * 1000 : null,
     message: params.message,
     initiatedBy: params.initiatedBy,
-    priorOverwrite: null,
+    priorSendMessages: null,
+    overwriteCaptured: false,
     lockedThreadIds: [],
     bannerMessageId: null,
     steps: { overwrite: false, buttons: false, locks: false, banner: false },

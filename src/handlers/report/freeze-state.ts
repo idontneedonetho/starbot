@@ -2,18 +2,14 @@ import { readConfigKey, writeConfigKey, deleteConfigKey } from '../../runtime-co
 
 const FREEZE_KEY = 'freeze';
 
-export interface FreezeOverwrite {
-  allow: string;
-  deny: string;
-}
-
 export interface FreezeRecord {
   startedAt: number;
   expiresAt: number | null;
   message: string;
   initiatedBy: string;
-  priorOverwrite: FreezeOverwrite | null;
-  /** Distinguishes "no prior overwrite" from "not yet captured". */
+  /** @everyone SendMessages before the freeze: true=allow, false=deny, null=neutral. */
+  priorSendMessages?: boolean | null;
+  /** Distinguishes "not captured yet" from a captured null (neutral). */
   overwriteCaptured?: boolean;
   lockedThreadIds: string[];
   bannerMessageId: string | null;

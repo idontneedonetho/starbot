@@ -24,7 +24,7 @@ describe('freeze record helpers', () => {
     expiresAt: null,
     message: 'msg',
     initiatedBy: 'admin',
-    priorOverwrite: null,
+    priorSendMessages: null,
     overwriteCaptured: false,
     lockedThreadIds: [],
     bannerMessageId: null,

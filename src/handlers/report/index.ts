@@ -93,7 +93,7 @@ async function ensureNotFrozen(interaction: ButtonInteraction): Promise<boolean>
   if (!freeze) return true;
   const expiry = freeze.expiresAt ? ` It thaws <t:${Math.floor(freeze.expiresAt / 1000)}:R>.` : '';
   await interaction.reply({
-    content: `**${freeze.message}**${expiry}.`,
+    content: `**${freeze.message}**${expiry}`,
     flags: MessageFlags.Ephemeral,
   });
   return false;
@@ -287,7 +287,7 @@ export class BotReportOnBehalf {
     const freeze = await getFreeze();
     if (freeze) {
       const expiry = freeze.expiresAt ? ` It thaws <t:${Math.floor(freeze.expiresAt / 1000)}:R>.` : '';
-      await interaction.reply({ content: `**${freeze.message}**${expiry}.`, flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: `**${freeze.message}**${expiry}`, flags: MessageFlags.Ephemeral });
       return;
     }
 
