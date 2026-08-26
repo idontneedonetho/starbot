@@ -49,7 +49,7 @@ export class FreezeCommands {
             .setStyle(TextInputStyle.Short)
             .setValue('24')
             .setRequired(false)
-            .setPlaceholder('Hours — 0 or empty means no expiration'),
+            .setPlaceholder('Hours - 0 or empty means no expiration'),
         ),
         new ActionRowBuilder<TextInputBuilder>().addComponents(
           new TextInputBuilder()
@@ -110,6 +110,6 @@ export class FreezeCommands {
     }
     await interaction.deferUpdate();
     await thawFreeze(interaction.client);
-    await interaction.editReply({ content: 'Reports thawed — new reports are welcome again.', components: [] });
+    await interaction.editReply({ content: 'Reports thawed - new reports are welcome again.', components: [] });
   }
 }

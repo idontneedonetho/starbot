@@ -150,7 +150,7 @@ export async function submitReport(
 
   // Freezes block everyone, staff on behalf of included.
   if (await isFrozen()) {
-    await interaction.editReply({ content: 'Reports are currently frozen — new submissions are paused.', components: [] });
+    await interaction.editReply({ content: 'Reports are currently frozen - new submissions are paused.', components: [] });
     return;
   }
 

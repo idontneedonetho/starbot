@@ -108,7 +108,7 @@ async function beginDormantClose(thread: ThreadChannel, dormantDays: number, nou
   const notice = new EmbedBuilder()
     .setColor(COLORS.amber)
     .setTitle('💤 Dormant Report')
-    .setDescription(`No activity for ${dormantDays} days — this ${noun} will close automatically. Reply here before it closes to keep it open.`)
+    .setDescription(`No activity for ${dormantDays} days - this ${noun} will close automatically. Reply here before it closes to keep it open.`)
     .addFields(closingNoticeField(closeAt))
     .setTimestamp();
   const noticeMsg = await thread.send({ embeds: [notice] }).catch(err => {

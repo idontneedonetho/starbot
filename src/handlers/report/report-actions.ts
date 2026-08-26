@@ -355,7 +355,7 @@ async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, para
     required = `\n\nThe route must be on commit ${formatGitCommit(params.requiredSha, `github.com/${loadConfig().mainRepo}`)} (${params.branch}${committed ? `, committed ${committed}` : ''}) or newer.`;
   } else if (params.mode === 'newernow' && params.requiredDate) {
     const committed = discordTimestamp(params.requiredDate);
-    required = `\n\nThe route must be on a commit newer than the latest one${committed ? ` as of ${committed}` : ''}. An update will be pushed to the testing branch \`Dom\` shortly — see the [branch switching guide](https://wiki.firestar.link/software/starpilot/#changing-branches) to switch to it.`;
+    required = `\n\nThe route must be on a commit newer than the latest one${committed ? ` as of ${committed}` : ''}. An update will be pushed to the testing branch \`Dom\` shortly - see the [branch switching guide](https://wiki.firestar.link/software/starpilot/#changing-branches) to switch to it.`;
   }
 
   const embed = new EmbedBuilder()
@@ -815,7 +815,7 @@ export async function submitAdditionalReport(params: {
   }
 
   await StoredReport.update(thread.id, { lastActivityAt: Date.now() });
-  await reply(`Route added to the tracker thread.${!primary.public ? ' The route is not yet public — please make it public so staff can view it.' : ''}${lifecycleNote}`);
+  await reply(`Route added to the tracker thread.${!primary.public ? ' The route is not yet public - please make it public so staff can view it.' : ''}${lifecycleNote}`);
 }
 
 @Discord()
@@ -1740,7 +1740,7 @@ export class BotReportActions {
     await scheduleSnooze(thread.id, wakeAt, snoozeMsg.id, reason || undefined, interaction.user.id, priorTagIds, priorName);
     await StoredReport.syncFromThread(thread);
 
-    await interaction.editReply({ content: `Report snoozed — it will reopen <t:${Math.floor(wakeAt / 1000)}:R>. Use **Reopen Now** on the notice to cancel early.` });
+    await interaction.editReply({ content: `Report snoozed - it will reopen <t:${Math.floor(wakeAt / 1000)}:R>. Use **Reopen Now** on the notice to cancel early.` });
   }
 
   @ButtonComponent({ id: 'reopen_now' })
@@ -1768,7 +1768,7 @@ export class BotReportActions {
       return;
     }
     await finalizeSnoozeMessage(thread, entry.snoozeMessageId, { title: '↩️ Snooze Cancelled', cancelledBy: interaction.user.id });
-    await interaction.editReply({ content: 'Snooze cancelled — report reopened.' });
+    await interaction.editReply({ content: 'Snooze cancelled - report reopened.' });
   }
 
   @ButtonComponent({ id: /^assign_/ })

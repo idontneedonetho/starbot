@@ -118,7 +118,7 @@ export class BackfillCommands {
     }
     const result = await backfillReports(guild, forum);
     await interaction.editReply({
-      content: 'Backfill complete: scanned **' + result.scanned + '** thread(s) — recorded **' +
+      content: 'Backfill complete: scanned **' + result.scanned + '** thread(s) - recorded **' +
         result.recorded + '**, updated **' + result.updated + '**, skipped **' + result.skipped + '**.',
     });
   }

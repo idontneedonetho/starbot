@@ -189,7 +189,7 @@ class SnoozeScheduler extends ScheduledTimerIndex<ScheduledSnooze> {
   }
 
   private async bump(thread: ThreadChannel, snoozeMessageId: string): Promise<void> {
-    const content = '⏰ Snooze is over — this report is back open.';
+    const content = '⏰ Snooze is over - this report is back open.';
     const ref = snoozeMessageId ? await thread.messages.fetch(snoozeMessageId).catch(() => null) : null;
     if (ref) {
       await ref.reply({ content, allowedMentions: { parse: [] } }).catch(err => this.log.warn({ err }, 'Failed to bump snooze message'));
