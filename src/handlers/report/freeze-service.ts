@@ -68,24 +68,26 @@ export async function setReportButtonsDisabled(client: Client, disabled: boolean
 
 // ---- Forum permissions & thread locks -----------------------------------
 
-// Discord's overwrite edit only touches the flags passed, so the freeze
-// owns exactly one bit. Everything else admins do mid-freeze survives.
 async function applySendMessagesDeny(forum: ForumChannel, guild: Guild, record: FreezeRecord): Promise<void> {
   // Capture exactly once, before any edit: a crash after the edit must not
   // snapshot our own deny as the "prior" state.
   if (!record.overwriteCaptured) {
     const prior = forum.permissionOverwrites.cache.get(guild.id);
-    const priorSendMessages = prior ? (prior.allow.has(PermissionFlagsBits.SendMessages) ? true : prior.deny.has(PermissionFlagsBits.SendMessages) ? false : null) : null;
-    const captured = await patchFreeze({ priorSendMessages, overwriteCaptured: true });
+    const bit = (flag: bigint) => (prior ? (prior.allow.has(flag) ? true : prior.deny.has(flag) ? false : null) : null);
+    const captured = await patchFreeze({
+      priorSendMessages: bit(PermissionFlagsBits.SendMessages),
+      priorSendMessagesInThreads: bit(PermissionFlagsBits.SendMessagesInThreads),
+      overwriteCaptured: true,
+    });
     if (captured) record.overwriteCaptured = true;
   }
-  await forum.permissionOverwrites.edit(guild.id, { SendMessages: false }, { type: 0 });
+  await forum.permissionOverwrites.edit(guild.id, { SendMessages: false, SendMessagesInThreads: false }, { type: 0 });
 }
 
 async function restoreOverwrite(forum: ForumChannel, guild: Guild, record: FreezeRecord): Promise<void> {
   await forum.permissionOverwrites.edit(
     guild.id,
-    { SendMessages: record.priorSendMessages ?? null },
+    { SendMessages: record.priorSendMessages ?? null, SendMessagesInThreads: record.priorSendMessagesInThreads ?? null },
     { type: 0 },
   );
 }
@@ -152,6 +154,7 @@ export async function startFreeze(client: Client, params: { hours: number; messa
     message: params.message,
     initiatedBy: params.initiatedBy,
     priorSendMessages: null,
+    priorSendMessagesInThreads: null,
     overwriteCaptured: false,
     lockedThreadIds: [],
     bannerMessageId: null,

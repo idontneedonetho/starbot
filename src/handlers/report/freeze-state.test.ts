@@ -25,6 +25,7 @@ describe('freeze record helpers', () => {
     message: 'msg',
     initiatedBy: 'admin',
     priorSendMessages: null,
+    priorSendMessagesInThreads: null,
     overwriteCaptured: false,
     lockedThreadIds: [],
     bannerMessageId: null,

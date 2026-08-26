@@ -7,8 +7,10 @@ export interface FreezeRecord {
   expiresAt: number | null;
   message: string;
   initiatedBy: string;
-  /** @everyone SendMessages before the freeze: true=allow, false=deny, null=neutral. */
+  /** @everyone SendMessages (create posts) before the freeze: true=allow, false=deny, null=neutral. */
   priorSendMessages?: boolean | null;
+  /** @everyone SendMessagesInThreads (send messages in posts) before the freeze: true=allow, false=deny, null=neutral. */
+  priorSendMessagesInThreads?: boolean | null;
   /** Distinguishes "not captured yet" from a captured null (neutral). */
   overwriteCaptured?: boolean;
   lockedThreadIds: string[];
