@@ -186,16 +186,19 @@ async function performThaw(client: Client): Promise<void> {
   if (!guild) return;
 
   clearExpiryTimer();
+  // Flag first so boot resumes an interrupted thaw; revert steps are idempotent.
+  await patchFreeze({ thawing: true });
   const forum = await getForum(guild, config.forumChannelId);
   if (forum) await restoreOverwrite(forum, guild, record).catch(err => log.warn({ err }, 'Failed to restore forum permissions on thaw'));
   await setReportButtonsDisabled(client, false);
   await deleteBanner(client, record);
 
   const endedAt = Date.now();
+  // Time adjustments are not idempotent, so they run after the record clear:
+  // a crash can skip them but never double-apply.
+  await clearFreeze();
   await bumpDormancyAfterThaw({ startedAt: record.startedAt, endedAt });
   await extendSnoozesAfterThaw(client, { startedAt: record.startedAt, endedAt });
-
-  await clearFreeze();
   log.info({ durationMs: endedAt - record.startedAt }, 'Reports thawed');
 }
 
@@ -215,6 +218,10 @@ async function bumpDormancyAfterThaw(freeze: { startedAt: number; endedAt: numbe
 export async function recoverFreeze(client: Client): Promise<void> {
   const record = await getFreeze();
   if (!record) return;
+  if (record.thawing) {
+    await thawFreeze(client);
+    return;
+  }
   if (record.expiresAt && record.expiresAt <= Date.now()) {
     await thawFreeze(client);
     return;

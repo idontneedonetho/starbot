@@ -13,6 +13,8 @@ export interface FreezeRecord {
   priorSendMessagesInThreads?: boolean | null;
   /** Distinguishes "not captured yet" from a captured null (neutral). */
   overwriteCaptured?: boolean;
+  /** Set before the first revert step; boot resumes an interrupted thaw. */
+  thawing?: boolean;
   bannerMessageId: string | null;
   steps: { overwrite: boolean; buttons: boolean; locks: boolean; banner: boolean };
 }
