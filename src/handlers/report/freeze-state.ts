@@ -13,7 +13,6 @@ export interface FreezeRecord {
   priorSendMessagesInThreads?: boolean | null;
   /** Distinguishes "not captured yet" from a captured null (neutral). */
   overwriteCaptured?: boolean;
-  lockedThreadIds: string[];
   bannerMessageId: string | null;
   steps: { overwrite: boolean; buttons: boolean; locks: boolean; banner: boolean };
 }

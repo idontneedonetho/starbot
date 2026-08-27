@@ -92,19 +92,6 @@ async function restoreOverwrite(forum: ForumChannel, guild: Guild, record: Freez
   );
 }
 
-// Legacy only: records from before thread-locking was dropped still carry ids.
-async function unlockThreads(client: Client, record: FreezeRecord): Promise<void> {
-  if (record.lockedThreadIds.length === 0) return;
-  for (const threadId of record.lockedThreadIds) {
-    // A thread closed mid-freeze is locked by the close itself - leave it.
-    const report = await StoredReport.get(threadId);
-    if (report && !report.isActive) continue;
-    const thread = await client.channels.fetch(threadId).catch(() => null);
-    if (!thread?.isThread() || thread.archived) continue;
-    await thread.setLocked(false).catch(err => log.warn({ err, threadId }, 'Failed to unlock thread on thaw'));
-  }
-}
-
 async function postBanner(client: Client, record: FreezeRecord): Promise<boolean> {
   const config = loadConfig();
   const channel = await client.channels.fetch(config.reportButtonChannelId).catch(() => null);
@@ -142,7 +129,6 @@ export async function startFreeze(client: Client, params: { hours: number; messa
     priorSendMessages: null,
     priorSendMessagesInThreads: null,
     overwriteCaptured: false,
-    lockedThreadIds: [],
     bannerMessageId: null,
     steps: { overwrite: false, buttons: false, locks: false, banner: false },
   };
@@ -200,7 +186,6 @@ async function performThaw(client: Client): Promise<void> {
   if (!guild) return;
 
   clearExpiryTimer();
-  await unlockThreads(client, record);
   const forum = await getForum(guild, config.forumChannelId);
   if (forum) await restoreOverwrite(forum, guild, record).catch(err => log.warn({ err }, 'Failed to restore forum permissions on thaw'));
   await setReportButtonsDisabled(client, false);

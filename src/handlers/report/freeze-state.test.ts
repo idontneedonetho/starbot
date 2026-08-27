@@ -27,7 +27,6 @@ describe('freeze record helpers', () => {
     priorSendMessages: null,
     priorSendMessagesInThreads: null,
     overwriteCaptured: false,
-    lockedThreadIds: [],
     bannerMessageId: null,
     steps: { overwrite: false, buttons: false, locks: false, banner: false },
   };
