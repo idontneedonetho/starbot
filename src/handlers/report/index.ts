@@ -565,6 +565,7 @@ async function handleRlogGateButton(interaction: ButtonInteraction, force: boole
 }
 
 async function handleConfirmRoute(interaction: ButtonInteraction) {
+  if (!(await ensureNotFrozen(interaction))) return;
   const parsed = parseConfirmCustomId(interaction.customId);
   if (!parsed) {
     await interaction.reply({ content: 'Invalid or expired confirmation button.', flags: MessageFlags.Ephemeral });

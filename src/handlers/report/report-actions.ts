@@ -46,6 +46,7 @@ import {
 } from './title-sync.js';
 import { scheduleClose, getScheduledClose, nextCloseAt, closingNoticeField } from './close-scheduler.js';
 import { StoredReport } from './report-store.js';
+import { getFreeze } from './freeze-state.js';
 import { fixedButtonLabel, fixedModalTitle, labelForThread } from './report-copy.js';
 import {
   scheduleSnooze,
@@ -818,10 +819,19 @@ export async function submitAdditionalReport(params: {
   await reply(`Route added to the tracker thread.${!primary.public ? ' The route is not yet public - please make it public so staff can view it.' : ''}${lifecycleNote}`);
 }
 
+async function rejectIfFrozen(interaction: ButtonInteraction | StringSelectMenuInteraction | ModalSubmitInteraction): Promise<boolean> {
+  const freeze = await getFreeze();
+  if (!freeze) return false;
+  if (interaction.member instanceof GuildMember && hasStaffRole(interaction.member)) return false;
+  const expiry = freeze.expiresAt ? ` It thaws <t:${Math.floor(freeze.expiresAt / 1000)}:R>.` : '';
+  await interaction.reply({ content: `**${freeze.message}**${expiry}`, flags: MessageFlags.Ephemeral });
+  return true;
+}
 @Discord()
 export class BotReportActions {
   @ButtonComponent({ id: /^additional_report_/ })
   async additionalReport(interaction: ButtonInteraction) {
+    if (await rejectIfFrozen(interaction)) return;
     await interaction.showModal(buildAdditionalReportModal(`additional_report_modal_${interaction.id}`));
   }
 
@@ -955,6 +965,7 @@ export class BotReportActions {
 
   @SelectMenuComponent({ id: /^wcommit_/ })
   async handleWaitCommitSelect(interaction: StringSelectMenuInteraction) {
+    if (await rejectIfFrozen(interaction)) return;
     const token = interaction.customId.split('_')[1];
     const pending = await waitCommitStore.get(token);
     if (!pending) {
@@ -1020,6 +1031,8 @@ export class BotReportActions {
   @ButtonComponent({ id: /^ready_/ })
   async handleReadyButton(interaction: ButtonInteraction) {
     const [, mode, audience, ticketId, submitterId] = interaction.customId.split('_');
+
+    if (await rejectIfFrozen(interaction)) return;
 
     if (interaction.channelId && await getScheduledClose(interaction.channelId)) {
       await interaction.reply({ content: CLOSING_LOCK_MSG, flags: MessageFlags.Ephemeral });
