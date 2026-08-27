@@ -92,23 +92,9 @@ async function restoreOverwrite(forum: ForumChannel, guild: Guild, record: Freez
   );
 }
 
-async function lockActiveThreads(forum: ForumChannel, record: FreezeRecord): Promise<void> {
-  const { threads } = await forum.threads.fetchActive();
-  const locked = new Set(record.lockedThreadIds);
-  for (const thread of threads.values()) {
-    if (thread.locked || locked.has(thread.id)) continue;
-    const ok = await thread.setLocked(true).then(() => true, err => {
-      log.warn({ err, threadId: thread.id }, 'Failed to lock thread during freeze');
-      return false;
-    });
-    if (ok) locked.add(thread.id);
-  }
-  if (locked.size !== record.lockedThreadIds.length) {
-    await patchFreeze({ lockedThreadIds: [...locked] });
-  }
-}
-
+// Legacy only: records from before thread-locking was dropped still carry ids.
 async function unlockThreads(client: Client, record: FreezeRecord): Promise<void> {
+  if (record.lockedThreadIds.length === 0) return;
   for (const threadId of record.lockedThreadIds) {
     // A thread closed mid-freeze is locked by the close itself - leave it.
     const report = await StoredReport.get(threadId);
@@ -187,8 +173,9 @@ export async function resumeFreeze(client: Client): Promise<void> {
     record = (await patchFreeze({ steps: { ...record.steps, buttons: true } }))!;
   }
   if (!record.steps.locks) {
-    await lockActiveThreads(forum, record);
-    record = (await patchFreeze({ steps: { ...record.steps, locks: true } }))!;
+    // Thread locking was dropped; the permission deny enforces the freeze.
+    await patchFreeze({ steps: { ...record.steps, locks: true } });
+    record = (await getFreeze())!;
   }
   if (!record.steps.banner) {
     const posted = await postBanner(client, record);
