@@ -44,10 +44,10 @@ import {
   maxRenameLength,
   MAX_TITLE_LEN,
 } from './title-sync.js';
-import { scheduleClose, getScheduledClose, nextCloseAt, closingNoticeField } from './close-scheduler.js';
+import { scheduleClose, getScheduledClose, nextCloseAt, closingNoticeField, cancelScheduledClose, stripClosingNoticeFrom } from './close-scheduler.js';
 import { StoredReport } from './report-store.js';
 import { getFreeze } from './freeze-state.js';
-import { fixedButtonLabel, fixedModalTitle, labelForThread } from './report-copy.js';
+import { fixedButtonLabel, fixedModalTitle, labelForThread, reportNoun } from './report-copy.js';
 import {
   scheduleSnooze,
   getScheduledSnooze,
@@ -1163,8 +1163,40 @@ export class BotReportActions {
 
     const threadName = interaction.channel?.isThread() ? interaction.channel.name : '';
     const label = await labelForThread(interaction.channelId, threadName);
+    const confirmRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setCustomId(`fixed_confirm_${ticketId}_${submitterId}_${interaction.message.id}`).setLabel(fixedButtonLabel(label)).setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId('fixed_confirm_cancel').setLabel('Nevermind').setStyle(ButtonStyle.Secondary),
+    );
+    await interaction.reply({
+      content: `Are you sure you want to mark this as resolved? This will **close this ${reportNoun(label)}** shortly.`,
+      components: [confirmRow],
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  @ButtonComponent({ id: /^fixed_confirm_/ })
+  async handleFixedConfirm(interaction: ButtonInteraction) {
+    const parts = interaction.customId.split('_');
+    if (parts[2] === 'cancel') {
+      await interaction.update({ content: 'Okay - left open.', components: [] });
+      return;
+    }
+    const [, , ticketId, submitterId, msgId] = parts;
+
+    if (interaction.user.id !== submitterId) {
+      await interaction.reply({ content: 'Only the original reporter can mark this as resolved.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (interaction.channelId && await getScheduledClose(interaction.channelId)) {
+      await interaction.update({ content: CLOSING_LOCK_MSG, components: [] });
+      return;
+    }
+
+    const threadName = interaction.channel?.isThread() ? interaction.channel.name : '';
+    const label = await labelForThread(interaction.channelId, threadName);
     const modal = new ModalBuilder()
-      .setCustomId(`fixed_modal_${ticketId}_${interaction.message.id}`)
+      .setCustomId(`fixed_modal_${ticketId}_${msgId}`)
       .setTitle(fixedModalTitle(label));
     const noteInput = new TextInputBuilder({
       custom_id: 'note',
@@ -1241,6 +1273,33 @@ export class BotReportActions {
       return;
     }
     await interaction.editReply({ content: 'Thanks! This report will close as resolved shortly - add any final notes before then.' });
+  }
+
+  @ButtonComponent({ id: /^cancel_close_/ })
+  async cancelClose(interaction: ButtonInteraction) {
+    if (!(interaction.member instanceof GuildMember) || !hasStaffRole(interaction.member)) {
+      await interaction.reply({ content: 'Only staff can cancel a scheduled close.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const thread = interaction.channel;
+    if (!thread?.isThread()) {
+      await interaction.reply({ content: 'This can only be used from a thread.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const claimed = await cancelScheduledClose(thread.id);
+    if (!claimed) {
+      await interaction.reply({ content: 'There is no pending close to cancel.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    await stripClosingNoticeFrom(thread, claimed.noticeMessageId);
+    await thread.messages.fetch(claimed.noticeMessageId).then(msg =>
+      msg.edit({ components: msg.components.slice(0, -1) })
+    ).catch(err => log.warn({ err }, 'Failed to remove Cancel Close button'));
+    await thread.send(`↩️ Scheduled close cancelled by <@${interaction.user.id}> - this report stays open.`);
+    await interaction.reply({ content: 'Close cancelled - the report stays open.', flags: MessageFlags.Ephemeral });
   }
 
   @ButtonComponent({ id: /^staff_actions_/ })

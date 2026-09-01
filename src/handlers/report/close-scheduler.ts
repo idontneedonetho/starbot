@@ -1,5 +1,6 @@
 import type { Client, ThreadChannel } from 'discord.js';
-import { EmbedBuilder } from 'discord.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
+import { createLogger } from '../../logger.js';
 import { tryStatusClose, withThreadLock, type ReportStatus } from './title-sync.js';
 import { ScheduledTimerIndex } from './scheduled-timer-index.js';
 
@@ -8,6 +9,14 @@ export const CLOSE_DELAY_MS = 5 * 60 * 1000;
 const MAX_NON_RATE_LIMIT_RETRIES = 5;
 
 const CLOSING_PREFIX = '⏳ Closing ';
+
+const log = createLogger('close-scheduler');
+
+export function cancelCloseRow(threadId: string): ActionRowBuilder<ButtonBuilder> {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(`cancel_close_${threadId}`).setLabel('Cancel Close').setStyle(ButtonStyle.Secondary).setEmoji('↩️'),
+  );
+}
 
 export interface ScheduledClose {
   status: ReportStatus;
@@ -48,7 +57,13 @@ class CloseScheduler extends ScheduledTimerIndex<ScheduledClose> {
       index[thread.id] = { status, closeAt, noticeMessageId, origin };
       scheduled = true;
     });
-    if (scheduled) this.armTimer(thread.id, closeAt);
+    if (scheduled) {
+      this.armTimer(thread.id, closeAt);
+      await thread.messages.fetch(noticeMessageId).then(msg => {
+        const rows = [...msg.components, cancelCloseRow(thread.id)] as typeof msg.components;
+        return msg.edit({ components: rows });
+      }).catch(err => log.warn({ err, threadId: thread.id }, 'Failed to attach Cancel Close button'));
+    }
     return scheduled;
   }
 
@@ -88,17 +103,24 @@ class CloseScheduler extends ScheduledTimerIndex<ScheduledClose> {
       return;
     }
     await this.mutate(index => { delete index[threadId]; });
+    await ch.messages.fetch(entry.noticeMessageId).then(msg =>
+      msg.edit({ components: msg.components.slice(0, -1) })
+    ).catch(err => this.log.warn({ err }, 'Failed to remove Cancel Close button'));
   }
 
   private async stripClosingNotice(thread: ThreadChannel, messageId: string, replaceWith?: number): Promise<void> {
-    if (!messageId) return;
-    const msg = await thread.messages.fetch(messageId).catch(() => null);
-    const embed = msg?.embeds[0];
-    if (!msg || !embed) return;
-    const fields = (embed.fields ?? []).filter(f => !f.value.startsWith(CLOSING_PREFIX));
-    if (replaceWith !== undefined) fields.push(closingNoticeField(replaceWith));
-    await msg.edit({ embeds: [EmbedBuilder.from(embed).setFields(fields)] }).catch(err => this.log.warn({ err }, 'Failed to edit closing notice'));
+    await stripClosingNoticeFrom(thread, messageId, replaceWith);
   }
+}
+
+export async function stripClosingNoticeFrom(thread: ThreadChannel, messageId: string, replaceWith?: number): Promise<void> {
+  if (!messageId) return;
+  const msg = await thread.messages.fetch(messageId).catch(() => null);
+  const embed = msg?.embeds[0];
+  if (!msg || !embed) return;
+  const fields = (embed.fields ?? []).filter(f => !f.value.startsWith(CLOSING_PREFIX));
+  if (replaceWith !== undefined) fields.push(closingNoticeField(replaceWith));
+  await msg.edit({ embeds: [EmbedBuilder.from(embed).setFields(fields)] }).catch(err => log.warn({ err }, 'Failed to edit closing notice'));
 }
 
 const scheduler = new CloseScheduler();
