@@ -30,7 +30,7 @@ import { normalizeRouteInput, parseNormalizedRoute, parseRouteComponents, valida
 import { randomUUID } from 'node:crypto';
 import { fetchCommitChoices, type CommitChoice } from '../../github.js';
 import { getForum, addAdditionalRoutesToTracker, createRouteTrackerThread, routeNumberLabel, TRACKER_FIELD_PREFIX } from './route-tracker.js';
-import { resolveTagIds, buildActionRow, buildDonateRow, swapForumTags } from './report-service.js';
+import { resolveTagIds, buildActionRow, buildDonateRow, swapForumTags, ensureForumTag } from './report-service.js';
 import {
   setThreadStatusEmoji,
   setThreadStatusAndClose,
@@ -42,10 +42,12 @@ import {
   splitReportTitle,
   composeReportTitle,
   maxRenameLength,
+  truncateTitle,
   MAX_TITLE_LEN,
 } from './title-sync.js';
 import { scheduleClose, getScheduledClose, nextCloseAt, closingNoticeField, cancelScheduledClose, stripClosingNoticeFrom } from './close-scheduler.js';
 import { StoredReport } from './report-store.js';
+import { PRIORITY_EMOJIS, PRIORITY_LEVELS, PRIORITY_TAG_NAMES, priorityFromTags, priorityFromTitle, setPriorityInTitle, type PriorityLevel } from './priority.js';
 import { getFreeze } from './freeze-state.js';
 import { fixedButtonLabel, fixedModalTitle, labelForThread, reportNoun } from './report-copy.js';
 import {
@@ -91,18 +93,6 @@ async function getOrCreateAssigneeTag(forum: import('discord.js').ForumChannel, 
     log.warn({ err, tagName }, 'Failed to create assignee tag');
     return null;
   }
-}
-
-async function ensureForumTag(forum: ForumChannel, name: string): Promise<ForumChannel> {
-  if (forum.availableTags.some(t => t.name === name)) return forum;
-  const updated = await forum.setAvailableTags([
-    ...forum.availableTags.map(t => ({ name: t.name, id: t.id, moderated: t.moderated, emoji: t.emoji ?? undefined })),
-    { name },
-  ]).catch(err => {
-    log.warn({ err, name }, 'Failed to create forum tag');
-    return null;
-  });
-  return updated ?? forum;
 }
 
 function hasStaffRole(member: GuildMember): boolean {
@@ -161,6 +151,7 @@ function buildStaffActionsReply(ticketId: string, renameOnly = false) {
         { label: 'Assign', value: 'assign', emoji: '👤', description: 'Assign a staff member to this report' },
         { label: 'Request User Testing', value: 'waituser', emoji: '🧪', description: 'Ask the user to test and report back' },
         { label: 'Merge', value: 'merge', emoji: '🔀', description: 'Merge this report into another thread' },
+        { label: 'Set Priority', value: 'priority', emoji: '🚦', description: 'Reclassify or remove the priority (0 = highest, 5 = lowest)' },
         RENAME_OPTION,
         { label: 'Snooze', value: 'snooze', emoji: '😴', description: 'Temporarily close and auto-reopen later' },
         { label: 'Close', value: 'close', emoji: '🔐', description: 'Close this report' },
@@ -531,6 +522,29 @@ function buildSnoozeModal(ticketId: string): ModalBuilder {
     max_length: 1024,
   });
   modal.addLabelComponents(new LabelBuilder().setLabel('Reason (optional)').setTextInputComponent(reasonInput));
+
+  return modal;
+}
+
+function buildPriorityModal(ticketId: string, current: PriorityLevel | null): ModalBuilder {
+  const modal = new ModalBuilder()
+    .setCustomId(`priority_modal_${ticketId}`)
+    .setTitle('Set Priority');
+
+  const select = new StringSelectMenuBuilder()
+    .setCustomId('priority')
+    .setMinValues(1)
+    .addOptions(
+      { label: 'No Priority', value: 'none', description: 'Remove the priority icon and tag', ...(current == null ? { default: true } : {}) },
+      ...[...PRIORITY_LEVELS].reverse().map(p => ({
+        label: `Priority ${p}`,
+        value: String(p),
+        emoji: PRIORITY_EMOJIS[p],
+        description: p === 0 ? 'Highest priority' : p === 5 ? 'Lowest priority' : `Priority ${p}`,
+        ...(current === p ? { default: true } : {}),
+      })),
+    );
+  modal.addLabelComponents(new LabelBuilder().setLabel('Priority').setStringSelectMenuComponent(select));
 
   return modal;
 }
@@ -1321,7 +1335,7 @@ export class BotReportActions {
     }
 
     const [action] = interaction.values;
-    if (!['assign', 'close', 'merge', 'waituser', 'snooze', 'rename'].includes(action)) {
+    if (!['assign', 'close', 'merge', 'waituser', 'snooze', 'rename', 'priority'].includes(action)) {
       await interaction.reply({ content: 'Invalid action.', flags: MessageFlags.Ephemeral });
       return;
     }
@@ -1370,6 +1384,19 @@ export class BotReportActions {
     if (action === 'snooze') {
       const ticketId = interaction.customId.replace('staff_select_', '');
       await interaction.showModal(buildSnoozeModal(ticketId));
+      return;
+    }
+
+    if (action === 'priority') {
+      const ticketId = interaction.customId.replace('staff_select_', '');
+      // Tags are the reliable copy (titles are rate-limited); fall back to the title.
+      // A failed forum fetch degrades to title-only rather than killing the interaction.
+      const forum = await getForum(guild, loadConfig().forumChannelId).catch(() => null);
+      const current = forum
+        ? priorityFromTags((thread.appliedTags as string[]).map(id => forum.availableTags.find(t => t.id === id)?.name ?? ''))
+            ?? priorityFromTitle(thread.name)
+        : priorityFromTitle(thread.name);
+      await interaction.showModal(buildPriorityModal(ticketId, current));
       return;
     }
 
@@ -1530,6 +1557,104 @@ export class BotReportActions {
     if (tracker) await renameTrackerThread(guild, tracker.threadId, outcome.name);
 
     await respond(`Renamed to **${outcome.name}**`);
+  }
+
+  @ModalComponent({ id: /^priority_modal_/ })
+  async handlePrioritySubmit(interaction: ModalSubmitInteraction) {
+    if (!(interaction.member instanceof GuildMember) || !hasStaffRole(interaction.member)) {
+      await interaction.reply({ content: 'Only staff can set report priority.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const thread = interaction.channel;
+    if (!thread?.isThread()) {
+      await interaction.reply({ content: 'This can only be used from a thread.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const guild = interaction.guild;
+    if (!guild) {
+      await interaction.reply({ content: 'Could not resolve guild.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (await getScheduledClose(thread.id)) {
+      await interaction.reply({ content: 'This report is closing soon - staff actions are locked until then.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const pendingSnooze = await getScheduledSnooze(thread.id);
+    if (pendingSnooze) {
+      await interaction.reply({ content: snoozeLockMsg(pendingSnooze), flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (thread.archived) {
+      await interaction.reply({ content: 'This report is closed - priority can only be changed while it is open.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const values = interaction.fields.getStringSelectValues('priority');
+    if (values.length === 0) {
+      await interaction.reply({ content: 'No priority selected.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const parsed = values[0] === 'none' ? null : Number(values[0]);
+    if (parsed != null && !(PRIORITY_LEVELS as number[]).includes(parsed)) {
+      await interaction.reply({ content: 'Invalid priority.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const priority = parsed as PriorityLevel | null;
+    const ticketId = interaction.customId.replace('priority_modal_', '');
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    // Tags first (no rename sublimit); the title is a projection that may lag.
+    let tagOk = true;
+    const forum = await getForum(guild, loadConfig().forumChannelId);
+    if (forum) {
+      const effForum = priority != null ? await ensureForumTag(forum, `Priority ${priority}`) : forum;
+      await swapForumTags(thread, effForum, { remove: [...PRIORITY_TAG_NAMES], add: priority != null ? [`Priority ${priority}`] : [] })
+        .catch(err => {
+          tagOk = false;
+          log.warn({ err, threadId: thread.id }, 'Failed to swap priority forum tags');
+        });
+    } else {
+      tagOk = false;
+    }
+
+    let outcome: 'renamed' | 'rate-limited' | 'failed' = 'renamed';
+    let rateLimitErr: unknown;
+    try {
+      await withThreadLock(thread.id, async () => {
+        const desired = truncateTitle(setPriorityInTitle(thread.name, priority), MAX_TITLE_LEN);
+        if (thread.name !== desired) await thread.setName(desired);
+      });
+    } catch (err) {
+      if (isRateLimit(err)) {
+        outcome = 'rate-limited';
+        rateLimitErr = err;
+      } else {
+        outcome = 'failed';
+        log.warn({ err, threadId: thread.id }, 'Failed to rename report thread for priority');
+      }
+    }
+
+    await StoredReport.syncFromThread(thread);
+
+    const label = priority == null ? 'No Priority' : `Priority ${priority}`;
+    const tagNote = tagOk
+      ? `Priority tag set to **${label}**.`
+      : `Failed to apply the priority tag - try again.`;
+    if (outcome === 'rate-limited') {
+      const retryAt = Math.floor((Date.now() + retryDelay(rateLimitErr)) / 1000);
+      await interaction.editReply({ content: `${tagNote} The title icon was blocked by Discord's rename limit (2 per 10 min) - run **Set Priority** again <t:${retryAt}:R> to finish it.` });
+      return;
+    }
+    if (outcome === 'failed') {
+      await interaction.editReply({ content: `${tagNote} The title could not be updated.` });
+      return;
+    }
+    log.info({ userId: interaction.user.id, threadId: thread.id, ticketId, priority }, 'Report priority set');
+    await interaction.editReply({ content: `${tagNote} Title icon updated.` });
   }
 
   @ButtonComponent({ id: /^split_/ })

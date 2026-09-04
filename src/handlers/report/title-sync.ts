@@ -1,6 +1,7 @@
 import type { Client, ThreadChannel } from 'discord.js';
 import { createStore } from '../../store.js';
 import { createLogger } from '../../logger.js';
+import { stripPriorityEmoji } from './priority.js';
 
 const log = createLogger('title-sync');
 
@@ -70,6 +71,15 @@ export function stripLeadingEmoji(name: string): string {
 
 export const MAX_TITLE_LEN = 100;
 
+/** Surrogate-safe truncation with a trailing ellipsis (thread titles cap at 100 chars). */
+export function truncateTitle(name: string, max: number): string {
+  if (name.length <= max) return name;
+  let cut = name.slice(0, max - 1);
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  return cut + '…';
+}
+
 const REPORT_LABELS = ['Bug Report', 'Feedback', 'Feature Request'];
 const FIRST_LABEL_SPLIT_RE = new RegExp(`^(.*?(?:${REPORT_LABELS.join('|')}) - )(.*)$`);
 const TRAILING_TICKET_ID_RE = /\s*\((\d+)\)\s*$/;
@@ -90,7 +100,10 @@ export function splitReportTitle(currentName: string, ticketId: string): ReportT
 
   const stripped = stripLeadingEmoji(body);
   const emoji = body.slice(0, body.length - stripped.length);
-  return { prefix: emoji + (stripped.startsWith(' ') ? ' ' : ''), title: stripped.trimStart(), suffix };
+  // Keep any priority emoji in the prefix so renames never treat it as title text.
+  const noPriority = stripPriorityEmoji(stripped);
+  const priorityPart = stripped.slice(0, stripped.length - noPriority.length);
+  return { prefix: emoji + priorityPart + (noPriority.startsWith(' ') ? ' ' : ''), title: noPriority.trimStart(), suffix };
 }
 
 export function maxRenameLength(parts: ReportTitleParts): number {
@@ -98,9 +111,7 @@ export function maxRenameLength(parts: ReportTitleParts): number {
 }
 
 export function composeReportTitle(parts: ReportTitleParts, newTitle: string): string {
-  const trimmed = newTitle.trim();
-  const budget = maxRenameLength(parts);
-  const title = trimmed.length > budget ? trimmed.slice(0, budget - 1).trimEnd() + '…' : trimmed;
+  const title = truncateTitle(newTitle.trim(), maxRenameLength(parts));
   return `${parts.prefix}${title}${parts.suffix}`;
 }
 
@@ -115,10 +126,7 @@ export function computeStatusTitle(currentName: string, status: ReportStatus, ti
   // Creation omits the (id) suffix to save a rename; add it on the first status change.
   if (!/\(\d+\)\s*$/.test(title)) {
     const suffix = ` (${ticketId})`;
-    if (title.length + suffix.length > MAX_TITLE_LEN) {
-      title = title.slice(0, MAX_TITLE_LEN - suffix.length - 1).trimEnd() + '…';
-    }
-    title += suffix;
+    title = `${truncateTitle(title, MAX_TITLE_LEN - suffix.length)}${suffix}`;
   }
   return title;
 }
