@@ -26,7 +26,6 @@ import {
 } from './sync.js';
 
 const log = createLogger('vikunja-webhook');
-const WEBHOOK_PORT = 8787;
 const MAX_BODY_BYTES = 1024 * 1024;
 const RETRY_MS = 60_000;
 
@@ -459,7 +458,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
 }
 
 export function startVikunjaWebhookServer(client: Client): void {
-  if (server || !getVikunjaIntegration()) return;
+  const integration = getVikunjaIntegration();
+  if (server || !integration) return;
+  const port = integration.config.webhookPort;
   const created = createServer((request, response) => {
     void handleRequest(request, response, client).catch(err => {
       log.warn({ err }, 'Vikunja webhook request failed');
@@ -470,13 +471,13 @@ export function startVikunjaWebhookServer(client: Client): void {
     });
   });
   created.on('error', err => {
-    log.warn({ err, port: WEBHOOK_PORT }, 'Vikunja webhook server failed');
+    log.warn({ err, port }, 'Vikunja webhook server failed');
     if (server === created) server = null;
   });
   created.on('close', () => {
     if (server === created) server = null;
   });
-  created.listen(WEBHOOK_PORT, '0.0.0.0');
+  created.listen(port, '0.0.0.0');
   server = created;
-  log.info({ port: WEBHOOK_PORT }, 'Vikunja webhook server listening');
+  log.info({ port }, 'Vikunja webhook server listening');
 }

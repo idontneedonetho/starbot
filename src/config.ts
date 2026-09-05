@@ -6,6 +6,7 @@ export interface VikunjaConfig {
   projectId: number;
   apiToken: string;
   webhookSecret: string;
+  webhookPort: number;
   /** Vikunja user id -> Discord user id. */
   userMap: Record<string, string>;
 }
@@ -53,6 +54,15 @@ function loadVikunjaConfig(): VikunjaConfig | undefined {
     throw new Error('VIKUNJA_PROJECT_ID must be a positive integer');
   }
 
+  let webhookPort = 8787;
+  const rawPort = process.env.VIKUNJA_WEBHOOK_PORT?.trim();
+  if (rawPort) {
+    webhookPort = Number(rawPort);
+    if (!Number.isInteger(webhookPort) || webhookPort < 1 || webhookPort > 65535) {
+      throw new Error('VIKUNJA_WEBHOOK_PORT must be an integer between 1 and 65535');
+    }
+  }
+
   let userMap: Record<string, string> = {};
   const rawUserMap = process.env.VIKUNJA_USER_MAP?.trim();
   if (rawUserMap) {
@@ -75,6 +85,7 @@ function loadVikunjaConfig(): VikunjaConfig | undefined {
     projectId,
     apiToken: values.apiToken!.trim(),
     webhookSecret: values.webhookSecret!.trim(),
+    webhookPort,
     userMap,
   };
 }

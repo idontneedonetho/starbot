@@ -89,8 +89,26 @@ describe('Vikunja configuration', () => {
       projectId: 2,
       apiToken: 'token',
       webhookSecret: 'secret',
+      webhookPort: 8787,
       userMap: { '5': '123456789012345678' },
     });
+  });
+
+  it('accepts a custom webhook port and rejects out-of-range values', () => {
+    process.env.VIKUNJA_URL = 'http://vikunja:3456';
+    process.env.VIKUNJA_PROJECT_ID = '2';
+    process.env.VIKUNJA_API_TOKEN = 'token';
+    process.env.VIKUNJA_WEBHOOK_SECRET = 'secret';
+    process.env.VIKUNJA_WEBHOOK_PORT = '9000';
+    expect(loadConfig().vikunja?.webhookPort).toBe(9000);
+
+    process.env.VIKUNJA_WEBHOOK_PORT = '70000';
+    expect(() => loadConfig()).toThrow(/VIKUNJA_WEBHOOK_PORT must be an integer between 1 and 65535/);
+  });
+
+  it('ignores the webhook port when the core Vikunja config is absent', () => {
+    process.env.VIKUNJA_WEBHOOK_PORT = '9000';
+    expect(loadConfig().vikunja).toBeUndefined();
   });
 
   it('rejects a partial Vikunja configuration', () => {
