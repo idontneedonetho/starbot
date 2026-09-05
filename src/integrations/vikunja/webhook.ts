@@ -14,6 +14,7 @@ import { getScheduledSnooze } from '../../handlers/report/snooze-scheduler.js';
 import { createLogger } from '../../logger.js';
 import { createStore } from '../../store.js';
 import { stripRouteIds } from '../../comma.js';
+import { VikunjaNotFoundError } from './client.js';
 import {
   extractDiscordAssignee,
   getVikunjaIntegration,
@@ -56,7 +57,11 @@ export interface VikunjaWebhook {
 
 interface PendingWebhook {
   payload: VikunjaWebhook;
+  attempts?: number;
 }
+
+/** Attempts before a persistently failing event is dropped from the inbox. */
+export const MAX_WEBHOOK_ATTEMPTS = 30;
 
 const inbox = createStore<Record<string, PendingWebhook>>('vikunja-webhooks');
 const PENDING_KEY = 'pending';
@@ -64,7 +69,6 @@ let inboxChain: Promise<unknown> = Promise.resolve();
 let drainPromise: Promise<void> | null = null;
 let drainRequested = false;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
-const warnedSignatures = new Set<string>();
 let server: Server | null = null;
 
 export function verifyVikunjaSignature(body: Buffer, signature: string, secret: string): boolean {
@@ -120,6 +124,16 @@ function enqueue(signature: string, payload: VikunjaWebhook): Promise<void> {
 
 function removePending(signature: string): Promise<void> {
   return mutateInbox(pending => { delete pending[signature]; });
+}
+
+/** Persists one more failed attempt and returns the new count (0 if the entry vanished). */
+function recordAttempt(signature: string): Promise<number> {
+  return mutateInbox(pending => {
+    const entry = pending[signature];
+    if (!entry) return 0;
+    entry.attempts = (entry.attempts ?? 0) + 1;
+    return entry.attempts;
+  });
 }
 
 function taskIdOf(payload: VikunjaWebhook): number | null {
@@ -188,7 +202,15 @@ async function processComment(client: Client, payload: VikunjaWebhook, taskId: n
   }
   // Webhook comments are stored HTML. Fetching this one resource in markdown avoids
   // introducing an HTML-to-Discord converter and keeps the bridge dependency-free.
-  const comment = await integration.api.getComment(taskId, commentId!);
+  const comment = await integration.api.getComment(taskId, commentId!).catch((err: unknown) => {
+    // A comment deleted before delivery can never succeed; dropping beats retrying forever.
+    if (err instanceof VikunjaNotFoundError) return null;
+    throw err;
+  });
+  if (!comment) {
+    log.info({ taskId, commentId }, 'Vikunja comment vanished before delivery; dropping event');
+    return;
+  }
   const safeText = stripRouteIds(comment.comment);
   const body = safeText || 'Web comment contained route details; use the existing Discord route-sharing workflow for route IDs.';
   const author = comment.author ?? payload.data.comment?.author ?? payload.data.doer;
@@ -324,17 +346,21 @@ export async function drainVikunjaWebhooks(client: Client): Promise<void> {
       drainRequested = false;
       const pending = (await inbox.get(PENDING_KEY)) ?? {};
       for (const [signature, entry] of Object.entries(pending)) {
+        const attempts = await recordAttempt(signature);
+        if (attempts === 0) continue;
+        if (attempts > MAX_WEBHOOK_ATTEMPTS) {
+          log.error({ signature, eventName: entry.payload.event_name, taskId: taskIdOf(entry.payload), attempts },
+            'Vikunja webhook event dropped after repeated failures');
+          await removePending(signature);
+          continue;
+        }
         try {
           await processVikunjaWebhook(client, entry.payload);
           await removePending(signature);
-          warnedSignatures.delete(signature);
         } catch (err) {
           failed = true;
-          if (warnedSignatures.has(signature)) log.debug({ err, signature }, 'Vikunja webhook processing will retry');
-          else {
-            warnedSignatures.add(signature);
-            log.warn({ err, signature }, 'Vikunja webhook processing failed; will retry');
-          }
+          if (attempts === 1) log.warn({ err, signature }, 'Vikunja webhook processing failed; will retry');
+          else log.debug({ err, signature, attempts }, 'Vikunja webhook processing will retry');
         }
       }
     } while (drainRequested);

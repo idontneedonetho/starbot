@@ -19,8 +19,14 @@ const mocks = vi.hoisted(() => ({
   recordHumanReportActivity: vi.fn(),
 }));
 
+const state = vi.hoisted(() => ({ inbox: new Map<string, unknown>() }));
+
 vi.mock('../../store.js', () => ({
-  createStore: () => ({ get: async () => undefined, set: async () => {}, delete: async () => true }),
+  createStore: () => ({
+    get: async (key: string) => state.inbox.get(key),
+    set: async (key: string, value: unknown) => { state.inbox.set(key, value); },
+    delete: async (key: string) => { state.inbox.delete(key); return true; },
+  }),
 }));
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {} }),
@@ -44,7 +50,13 @@ vi.mock('./sync.js', () => ({
   taskTitleForThread: mocks.taskTitleForThread,
   threadIdForTask: mocks.threadIdForTask,
 }));
-import { parseVerifiedWebhook, processVikunjaWebhook, verifyVikunjaSignature } from './webhook.js';
+import {
+  MAX_WEBHOOK_ATTEMPTS,
+  drainVikunjaWebhooks,
+  parseVerifiedWebhook,
+  processVikunjaWebhook,
+  verifyVikunjaSignature,
+} from './webhook.js';
 
 function integration(userMap: Record<string, string> = {}) {
   return {
@@ -66,6 +78,7 @@ function thread() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  state.inbox.clear();
   mocks.getIntegration.mockReturnValue(integration());
   mocks.threadIdForTask.mockResolvedValue('discord-thread');
   mocks.syncReport.mockResolvedValue(true);
@@ -193,5 +206,39 @@ describe('Vikunja webhook signatures', () => {
 
     expect(mocks.removeLink).toHaveBeenCalledWith('discord-thread', 7);
     expect(mocks.recreateDeletedTask).not.toHaveBeenCalled();
+  });
+});
+
+describe('Vikunja webhook inbox drain', () => {
+  const payload = { event_name: 'task.updated', data: { task: { id: 7 }, doer: { id: 5 } } };
+
+  function client() {
+    return { channels: { fetch: vi.fn().mockResolvedValue(thread()) } };
+  }
+
+  it('dead-letters events that exceeded the attempt cap', async () => {
+    mocks.syncReport.mockRejectedValue(new Error('Vikunja unreachable'));
+    state.inbox.set('pending', { sig: { payload, attempts: MAX_WEBHOOK_ATTEMPTS } });
+
+    await drainVikunjaWebhooks(client() as never);
+
+    expect(state.inbox.get('pending')).toEqual({});
+  });
+
+  it('keeps an entry that is still under the attempt cap', async () => {
+    mocks.syncReport.mockRejectedValue(new Error('Vikunja unreachable'));
+    state.inbox.set('pending', { sig: { payload, attempts: MAX_WEBHOOK_ATTEMPTS - 1 } });
+
+    await drainVikunjaWebhooks(client() as never);
+
+    expect(state.inbox.get('pending')).toEqual({ sig: { payload, attempts: MAX_WEBHOOK_ATTEMPTS } });
+  });
+
+  it('removes entries once they process successfully', async () => {
+    state.inbox.set('pending', { sig: { payload, attempts: 3 } });
+
+    await drainVikunjaWebhooks(client() as never);
+
+    expect(state.inbox.get('pending')).toEqual({});
   });
 });
