@@ -50,6 +50,24 @@ export interface InitializedVikunja {
 
 let integration: InitializedVikunja | null = null;
 let initializing: Promise<boolean> | null = null;
+let createLock = Promise.resolve();
+
+async function withCreateLock<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = createLock;
+
+  let release!: () => void;
+  createLock = new Promise<void>(resolve => {
+    release = resolve;
+  });
+
+  await previous;
+
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
+}
 
 export function getVikunjaIntegration(): InitializedVikunja | null {
   return integration;
@@ -299,12 +317,12 @@ function taskPatch(task: VikunjaTask, desired: DesiredTask): VikunjaTaskPatch | 
 async function createLinkedTask(thread: ThreadChannel, desired: DesiredTask): Promise<number> {
   const current = integration;
   if (!current) throw new Error('Vikunja is not initialized');
-  const task = await current.api.createTask(current.config.projectId, {
+  const task = await withCreateLock(() => current.api.createTask(current.config.projectId, {
     title: desired.title,
     description: desired.description,
     done: desired.done,
     ...(desired.dueDate ? { due_date: desired.dueDate } : {}),
-  });
+  }));
   // Link immediately before secondary label/assignee writes.
   await saveLink(thread.id, task.id);
   return task.id;
