@@ -1,6 +1,15 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+export interface VikunjaConfig {
+  url: string;
+  projectId: number;
+  apiToken: string;
+  webhookSecret: string;
+  /** Vikunja user id -> Discord user id. */
+  userMap: Record<string, string>;
+}
+
 export interface BotConfig {
   token: string;
   guildId: string;
@@ -22,6 +31,52 @@ export interface BotConfig {
   openaiModel?: string;
   maxActiveReports: number;
   dormantCloseDays: number;
+  vikunja?: VikunjaConfig;
+}
+
+function loadVikunjaConfig(): VikunjaConfig | undefined {
+  const values = {
+    url: process.env.VIKUNJA_URL,
+    projectId: process.env.VIKUNJA_PROJECT_ID,
+    apiToken: process.env.VIKUNJA_API_TOKEN,
+    webhookSecret: process.env.VIKUNJA_WEBHOOK_SECRET,
+  };
+  const coreNames = ['VIKUNJA_URL', 'VIKUNJA_PROJECT_ID', 'VIKUNJA_API_TOKEN', 'VIKUNJA_WEBHOOK_SECRET'];
+  const present = Object.values(values).filter(value => value?.trim());
+  if (present.length === 0) return undefined;
+  if (present.length !== coreNames.length || Object.values(values).some(value => !value?.trim())) {
+    throw new Error(`Vikunja configuration requires all of ${coreNames.join(', ')}`);
+  }
+
+  const projectId = Number(values.projectId);
+  if (!Number.isInteger(projectId) || projectId <= 0) {
+    throw new Error('VIKUNJA_PROJECT_ID must be a positive integer');
+  }
+
+  let userMap: Record<string, string> = {};
+  const rawUserMap = process.env.VIKUNJA_USER_MAP?.trim();
+  if (rawUserMap) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawUserMap);
+    } catch {
+      throw new Error('VIKUNJA_USER_MAP must be valid JSON');
+    }
+    if (parsed == null || Array.isArray(parsed) || typeof parsed !== 'object'
+      || Object.entries(parsed).some(([vikunjaId, discordId]) =>
+        !/^\d+$/.test(vikunjaId) || typeof discordId !== 'string' || !/^\d+$/.test(discordId))) {
+      throw new Error('VIKUNJA_USER_MAP must be a JSON object mapping numeric Vikunja ids to Discord ids');
+    }
+    userMap = parsed as Record<string, string>;
+  }
+
+  return {
+    url: values.url!.trim().replace(/\/+$/, ''),
+    projectId,
+    apiToken: values.apiToken!.trim(),
+    webhookSecret: values.webhookSecret!.trim(),
+    userMap,
+  };
 }
 
 export function loadConfig(): BotConfig {
@@ -71,6 +126,7 @@ export function loadConfig(): BotConfig {
   const maxActiveReportsRaw = parseInt(process.env.MAX_ACTIVE_REPORTS ?? '', 10);
   const maxActiveReports = Number.isNaN(maxActiveReportsRaw) ? 2 : Math.max(0, maxActiveReportsRaw);
   const dormantCloseDays = Math.max(1, parseInt(process.env.DORMANT_CLOSE_DAYS ?? '', 10) || 14);
+  const vikunja = loadVikunjaConfig();
 
   return {
     token,
@@ -93,5 +149,6 @@ export function loadConfig(): BotConfig {
     openaiModel,
     maxActiveReports,
     dormantCloseDays,
+    ...(vikunja ? { vikunja } : {}),
   };
 }

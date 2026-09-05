@@ -124,13 +124,15 @@ async function beginDormantClose(thread: ThreadChannel, dormantDays: number, nou
   return true;
 }
 
-// Only dormant-origin closes are cancelled; staff/user closes stay authoritative.
-async function cancelDormantCloseOnActivity(thread: ThreadChannel): Promise<void> {
+/** Records real human ticket activity, regardless of whether Discord or the web initiated it. */
+export async function recordHumanReportActivity(thread: ThreadChannel): Promise<void> {
+  await StoredReport.update(thread.id, { lastActivityAt: Date.now() });
+
+  // Only dormant-origin closes are cancelled; staff/user closes stay authoritative.
   const entry = await getScheduledClose(thread.id);
   if (!entry || entry.origin !== 'dormant') return;
   const claimed = await cancelScheduledClose(thread.id);
   if (!claimed) return;
-  await StoredReport.update(thread.id, { lastActivityAt: Date.now() });
   if (!claimed.noticeMessageId) return;
   const msg = await thread.messages.fetch(claimed.noticeMessageId).catch(() => null);
   const embed = msg?.embeds[0];
@@ -170,7 +172,7 @@ export class DormantCloseCancelHandler {
     if (!channel.isThread()) return;
     if (!channel.parentId) return;
     if (channel.parentId !== loadConfig().forumChannelId) return;
-    await cancelDormantCloseOnActivity(channel).catch(err =>
+    await recordHumanReportActivity(channel).catch(err =>
       log.warn({ err, threadId: channel.id }, 'Dormant-close cancel failed'));
   }
 }

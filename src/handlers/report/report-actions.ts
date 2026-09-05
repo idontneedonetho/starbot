@@ -61,6 +61,7 @@ import {
   DEFAULT_SNOOZE,
   SNOOZE_EMOJI,
 } from './snooze-scheduler.js';
+import { queueVikunjaEmbedComment, queueVikunjaRelation, queueVikunjaSync } from '../../integrations/vikunja/sync.js';
 
 const log = createLogger('report-actions');
 
@@ -95,7 +96,7 @@ async function getOrCreateAssigneeTag(forum: import('discord.js').ForumChannel, 
   }
 }
 
-function hasStaffRole(member: GuildMember): boolean {
+export function hasStaffRole(member: GuildMember): boolean {
   return member.roles.cache.has(loadConfig().staffRole);
 }
 
@@ -104,39 +105,48 @@ function hasScholarRole(member: GuildMember): boolean {
   return scholarRole != null && member.roles.cache.has(scholarRole);
 }
 
-function canRenameThread(member: GuildMember): boolean {
+export function canRenameThread(member: GuildMember): boolean {
   return hasStaffRole(member) || hasScholarRole(member);
 }
 
-async function applyAssignment(
+export async function setReportAssignee(
   thread: ThreadChannel,
   guild: import('discord.js').Guild,
-  userId: string,
-  username: string,
+  assignee: { userId: string; username: string } | null,
 ): Promise<void> {
-  await thread.members.add(userId).catch(err => log.warn({ err }, 'Failed to add member to thread'));
+  if (assignee) {
+    await thread.members.add(assignee.userId).catch(err => log.warn({ err }, 'Failed to add member to thread'));
+  }
 
   const starter = await thread.fetchStarterMessage();
   const embed = starter?.embeds[0];
   if (starter && embed) {
     const updated = EmbedBuilder.from(embed);
     const idx = embed.fields?.findIndex(f => f.name === '👤 Assigned to') ?? -1;
-    const field = { name: '👤 Assigned to', value: `<@${userId}>` };
-    if (idx >= 0) updated.spliceFields(idx, 1, field);
-    else updated.addFields(field);
+    if (assignee) {
+      const field = { name: '👤 Assigned to', value: `<@${assignee.userId}>` };
+      if (idx >= 0) updated.spliceFields(idx, 1, field);
+      else updated.addFields(field);
+    } else if (idx >= 0) {
+      updated.spliceFields(idx, 1);
+    }
     await starter.edit({ embeds: [updated] }).catch(() => {});
   }
 
   const forum = await getForum(guild, loadConfig().forumChannelId);
   if (forum) {
-    const assigneeTagId = await getOrCreateAssigneeTag(forum, userId, username);
-    const addTagIds = [...resolveTagIds(forum, ['ASSIGNED']), ...(assigneeTagId ? [assigneeTagId] : [])];
-
     const assigneeTagIds = new Set(forum.availableTags.filter(t => t.name.startsWith('Assignee ')).map(t => t.id));
+    const assignedTagIds = new Set(resolveTagIds(forum, ['ASSIGNED']));
     const existing = (thread.appliedTags as string[]).filter(
-      id => !assigneeTagIds.has(id) && !addTagIds.includes(id),
+      id => !assigneeTagIds.has(id) && !assignedTagIds.has(id),
     );
-    await thread.setAppliedTags([...existing, ...addTagIds]).catch(() => {});
+    if (assignee) {
+      const assigneeTagId = await getOrCreateAssigneeTag(forum, assignee.userId, assignee.username);
+      const addTagIds = [...assignedTagIds, ...(assigneeTagId ? [assigneeTagId] : [])];
+      await thread.setAppliedTags([...existing, ...addTagIds]).catch(() => {});
+    } else {
+      await thread.setAppliedTags(existing).catch(() => {});
+    }
   }
 }
 
@@ -608,6 +618,34 @@ async function renameTrackerThread(
     .catch(err => log.warn({ err, trackerThreadId }, 'Failed to retitle route tracker embed'));
 }
 
+export type RenameReportOutcome = { noop: true } | { noop: false; name: string };
+
+/** Canonical report rename mutation shared by the Discord modal and Vikunja web edits. */
+export async function renameReportThread(
+  thread: ThreadChannel,
+  guild: import('discord.js').Guild,
+  ticketId: string,
+  newHumanTitle: string,
+): Promise<RenameReportOutcome> {
+  const title = newHumanTitle.trim();
+  if (!title) throw new Error('Report title cannot be empty');
+
+  // Compute under the existing title lock so status changes cannot be clobbered.
+  const outcome = await withThreadLock(thread.id, async () => {
+    const desired = composeReportTitle(splitReportTitle(thread.name, ticketId), title);
+    if (thread.name === desired) return { noop: true as const };
+    await thread.setName(desired);
+    return { noop: false as const, name: desired };
+  });
+  if (outcome.noop) return outcome;
+
+  await StoredReport.update(thread.id, { threadName: outcome.name });
+  const starter = await thread.fetchStarterMessage().catch(() => null);
+  const tracker = trackerRefFromStarter(starter);
+  if (tracker) await renameTrackerThread(guild, tracker.threadId, outcome.name);
+  return outcome;
+}
+
 function ticketIdFromStarter(starter: Message | null): string | null {
   if (!starter) return null;
   const staffButton = starter.components
@@ -808,6 +846,9 @@ export async function submitAdditionalReport(params: {
       ),
     ],
   });
+  // The modal supplied this content, but Starbot authored the message. Mirror this
+  // one known domain message explicitly instead of broadening the bot-message filter.
+  queueVikunjaEmbedComment(thread, msg);
 
   await addAdditionalRoutesToTracker(
     guild, tracker.threadId, [parsed, ...numberedDetailRoutes.filter(r => r.valid)],
@@ -1467,7 +1508,7 @@ export class BotReportActions {
     }
 
     if (fromMessage) await interaction.deleteReply().catch(() => {});
-    await applyAssignment(thread, guild, target.id, target.username);
+    await setReportAssignee(thread, guild, { userId: target.id, username: target.username });
     await respond(`Assigned <@${target.id}> to this report.`);
   }
 
@@ -1521,18 +1562,9 @@ export class BotReportActions {
         ? interaction.followUp({ content, flags: MessageFlags.Ephemeral })
         : interaction.editReply({ content });
 
-    // Compute `desired` inside the lock so a concurrent status-emoji change can't
-    // be clobbered: if the status worker renames the thread between computing the
-    // title and acquiring the lock, we'd write back a stale prefix. Recomputing
-    // from thread.name under the lock preserves whatever emoji is current.
-    let outcome: { noop: true } | { noop: false; name: string };
+    let outcome: RenameReportOutcome;
     try {
-      outcome = await withThreadLock(thread.id, async () => {
-        const desired = composeReportTitle(splitReportTitle(thread.name, ticketId), newTitle);
-        if (thread.name === desired) return { noop: true as const };
-        await thread.setName(desired);
-        return { noop: false as const, name: desired };
-      });
+      outcome = await renameReportThread(thread, guild, ticketId, newTitle);
     } catch (err) {
       if (isRateLimit(err)) {
         const retryAt = Math.floor((Date.now() + retryDelay(err)) / 1000);
@@ -1550,12 +1582,6 @@ export class BotReportActions {
     }
 
     log.info({ userId: interaction.user.id, threadId: thread.id, ticketId, name: outcome.name }, 'Report thread renamed');
-    await StoredReport.update(thread.id, { threadName: outcome.name });
-
-    const starter = await thread.fetchStarterMessage().catch(() => null);
-    const tracker = trackerRefFromStarter(starter);
-    if (tracker) await renameTrackerThread(guild, tracker.threadId, outcome.name);
-
     await respond(`Renamed to **${outcome.name}**`);
   }
 
@@ -1734,7 +1760,6 @@ export class BotReportActions {
     const splitTicketId = String(parseInt(newThread.id.slice(-7), 10));
 
     // Creation hook: a split is a new report owned by the original submitter.
-    // A split is a new report owned by the original submitter.
     const splitSubmitter = await resolveSubmitterId(thread, guild);
     if (splitSubmitter) {
       const splitTagNameById = new Map(forum.availableTags.map(t => [t.id, t.name]));
@@ -1757,6 +1782,8 @@ export class BotReportActions {
       await splitStarter.edit({ components: [actionRow] }).catch(err => log.warn({ err }, 'Failed to add action buttons'));
       await splitStarter.pin().catch(err => log.warn({ err }, 'Failed to pin split starter'));
     }
+    queueVikunjaSync(newThread);
+    queueVikunjaRelation(newThread, thread);
 
     const updatedEmbed = EmbedBuilder.from(opEmbed);
     const origPostIdx = opEmbed.fields?.findIndex(
@@ -1854,6 +1881,7 @@ export class BotReportActions {
     await interaction.reply({ content: `Report merged into ${targetChannel}.`, flags: MessageFlags.Ephemeral });
 
     if (guild) {
+      queueVikunjaRelation(source, targetChannel);
       const mergeDeferred = await setThreadStatusAndClose(source, 'closed');
       if (mergeDeferred) {
         await interaction.followUp({
@@ -1936,6 +1964,8 @@ export class BotReportActions {
 
     await scheduleSnooze(thread.id, wakeAt, snoozeMsg.id, reason || undefined, interaction.user.id, priorTagIds, priorName);
     await StoredReport.syncFromThread(thread);
+    // The wake timestamp lives in Starbot's scheduler, not the thread update itself.
+    queueVikunjaSync(thread);
 
     await interaction.editReply({ content: `Report snoozed - it will reopen <t:${Math.floor(wakeAt / 1000)}:R>. Use **Reopen Now** on the notice to cancel early.` });
   }

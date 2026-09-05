@@ -15,6 +15,7 @@ import { isFrozen } from './freeze-state.js';
 import { STATUS_EMOJI, isRateLimit } from './title-sync.js';
 import { PRIORITY_EMOJIS, DEFAULT_BUG_PRIORITY } from './priority.js';
 import type { ExtractedRoute, RouteValidation } from '../../comma.js';
+import { queueVikunjaSync } from '../../integrations/vikunja/sync.js';
 
 const log = createLogger('report-service');
 
@@ -292,6 +293,8 @@ export async function submitReport(
     await starter.pin().catch(err => {
       log.error({ err }, 'Failed to pin starter message');
     });
+    // Vikunja is an optional projection; report submission is already complete.
+    queueVikunjaSync(thread);
   }
 
   const shareRouteId = await getShareRouteCommandId(guild);
