@@ -13,6 +13,7 @@ import {
   formatDiscordComment,
   labelChanges,
   reverseUserMap,
+  resolveReportType,
   stateLabelForCategory,
   taskTitleForThread,
 } from './sync.js';
@@ -23,6 +24,24 @@ describe('Vikunja projection helpers', () => {
     expect(stateLabelForCategory('Needs your Attention')).toBe('Waiting for User');
     expect(stateLabelForCategory('Snoozed')).toBe('Snoozed');
     expect(stateLabelForCategory('Closed')).toBe('Closed');
+  });
+
+  it('uses canonical stored report labels directly', () => {
+    expect(resolveReportType({ label: 'Bug Report', tagNames: [] })).toBe('Bug Report');
+    expect(resolveReportType({ label: 'Feedback', tagNames: [] })).toBe('Feedback');
+    expect(resolveReportType({ label: 'Feature Request', tagNames: [] })).toBe('Feature Request');
+    expect(resolveReportType({ label: 'Split', tagNames: [] })).toBe('Split');
+  });
+
+  it('resolves an unambiguous legacy Report type from its stored tags', () => {
+    expect(resolveReportType({ label: 'Report', tagNames: ['OPEN', 'Bug Report'] })).toBe('Bug Report');
+    expect(resolveReportType({ label: 'Report', tagNames: ['OPEN', 'BUG'] })).toBe('Bug Report');
+    expect(resolveReportType({ label: 'Report', tagNames: ['FEEDBACK'] })).toBe('Feedback');
+    expect(resolveReportType({ label: 'Report', tagNames: ['FEATURE REQUEST'] })).toBe('Feature Request');
+    expect(resolveReportType({ label: 'Report', tagNames: ['SPLIT'] })).toBe('Split');
+    expect(resolveReportType({ label: 'Report', tagNames: ['OPEN'] })).toBeNull();
+    expect(resolveReportType({ label: 'Report', tagNames: ['constructor'] })).toBeNull();
+    expect(resolveReportType({ label: 'Report', tagNames: ['Feedback', 'Feature Request'] })).toBeNull();
   });
 
   it('keeps the ticket id integration-owned while reusing Starbot title parsing', () => {

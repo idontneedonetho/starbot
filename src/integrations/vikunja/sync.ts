@@ -22,6 +22,12 @@ export const VIKUNJA_TYPE_LABELS = ['Bug Report', 'Feedback', 'Feature Request',
 export const VIKUNJA_STATE_LABELS = ['Waiting for Developer', 'Waiting for User', 'Snoozed', 'Closed'] as const;
 export const VIKUNJA_OWNED_LABELS = [...VIKUNJA_TYPE_LABELS, ...VIKUNJA_STATE_LABELS] as const;
 
+const typeLabelByStoredTagName = new Map<string, (typeof VIKUNJA_TYPE_LABELS)[number]>([
+  ['BUG', 'Bug Report'],
+  ['FEEDBACK', 'Feedback'],
+  ['FEATURE REQUEST', 'Feature Request'],
+  ['SPLIT', 'Split'],
+]);
 const ownedLabelNames = new Set<string>(VIKUNJA_OWNED_LABELS);
 const stateLabelByCategory: Record<ReportCategory, (typeof VIKUNJA_STATE_LABELS)[number]> = {
   'Waiting for Dev': 'Waiting for Developer',
@@ -229,8 +235,20 @@ function isTypeLabel(label: string): label is (typeof VIKUNJA_TYPE_LABELS)[numbe
   return (VIKUNJA_TYPE_LABELS as readonly string[]).includes(label);
 }
 
+export function resolveReportType(
+  report: Pick<StoredReport['data'], 'label' | 'tagNames'>,
+): (typeof VIKUNJA_TYPE_LABELS)[number] | null {
+  if (isTypeLabel(report.label)) return report.label;
+  if (report.label !== 'Report') return null;
+  const matches = report.tagNames
+    .map(tagName => isTypeLabel(tagName) ? tagName : typeLabelByStoredTagName.get(tagName))
+    .filter((typeLabel): typeLabel is (typeof VIKUNJA_TYPE_LABELS)[number] => typeLabel != null);
+  return matches.length === 1 ? matches[0] : null;
+}
+
 async function desiredTaskFor(thread: ThreadChannel, report: StoredReport, starter: Awaited<ReturnType<ThreadChannel['fetchStarterMessage']>>): Promise<DesiredTask | null> {
-  if (!isTypeLabel(report.data.label)) {
+  const typeLabel = resolveReportType(report.data);
+  if (!typeLabel) {
     log.warn({ threadId: thread.id, label: report.data.label }, 'Vikunja sync skipped report with an unknown type label');
     return null;
   }
@@ -246,16 +264,16 @@ async function desiredTaskFor(thread: ThreadChannel, report: StoredReport, start
   const starterMarkdown = renderDiscordEmbed(starter?.embeds[0]);
   const description = [
     `**Ticket:** #${report.data.ticketId}`,
-    `**Type:** ${report.data.label}`,
+    `**Type:** ${typeLabel}`,
     ...(reporter ? [`**Reporter:** ${reporter}`] : []),
     `[Open in Discord](${thread.url})`,
     ...(starterMarkdown ? ['---', starterMarkdown] : []),
   ].join('\n\n');
 
   return {
-    title: taskTitleForThread(thread.name, report.data.ticketId, report.data.label),
+    title: taskTitleForThread(thread.name, report.data.ticketId, typeLabel),
     description,
-    typeLabel: report.data.label,
+    typeLabel,
     stateLabel,
     done: report.category === 'Closed',
     dueDate: snooze ? new Date(snooze.wakeAt).toISOString() : null,
@@ -442,11 +460,23 @@ export async function syncAllReports(client: Client): Promise<void> {
   const reports = await StoredReport.listAll();
   const recentHorizon = Date.now() - 48 * 60 * 60 * 1000;
   const toSync = reports.filter(r => r.isActive || r.data.lastActivityAt > recentHorizon);
+  let processed = 0;
+  let succeeded = 0;
+  let skipped = 0;
+  let failed = 0;
   for (let i = 0; i < toSync.length; i += 5) {
     const chunk = toSync.slice(i, i + 5);
     await Promise.all(chunk.map(async report => {
+      processed++;
+      const typeKnown = resolveReportType(report.data) != null;
       const channel = await client.channels.fetch(report.threadId).catch(() => null);
-      if (channel?.isThread()) await syncReport(channel);
+      if (!channel?.isThread()) {
+        skipped++;
+        return;
+      }
+      if (await syncReport(channel)) succeeded++;
+      else if (typeKnown) failed++;
+      else skipped++;
     }));
   }
   for (const report of toSync) {
@@ -454,6 +484,7 @@ export async function syncAllReports(client: Client): Promise<void> {
     await recoverSplitRelation(client, report.threadId).catch(err =>
       log.warn({ err, threadId: report.threadId }, 'Vikunja split relation recovery failed'));
   }
+  log.info({ processed, succeeded, skipped, failed }, 'Vikunja reconciliation complete');
 }
 
 /** Recreates a human-deleted task while keeping its reverse link for durable retry. */
