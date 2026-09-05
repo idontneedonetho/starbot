@@ -1191,7 +1191,7 @@ export class BotReportActions {
     await interaction.editReply({ content: 'Thanks! The report is back to **WAITING FOR DEV**.' });
   }
 
-  @ButtonComponent({ id: /^fixed_(?!confirm_)/ })
+  @ButtonComponent({ id: /^fixed_(?:any|sub)_/ })
   async handleFixedButton(interaction: ButtonInteraction) {
     const [, , ticketId, submitterId] = interaction.customId.split('_');
 
