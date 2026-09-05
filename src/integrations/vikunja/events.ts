@@ -26,16 +26,33 @@ const DOMAIN_MESSAGE_TITLES = new Set([
 export class VikunjaEvents {
   @Once({ event: Events.ClientReady })
   async ready([client]: ArgsOf<Events.ClientReady>) {
-    const config = loadConfig();
-    if (!config.vikunja) return;
-    if (!(await initializeVikunja(config.vikunja))) return;
+    const vikunjaConfig = loadConfig().vikunja;
+    if (!vikunjaConfig) return;
 
     const discordClient = client as Client;
-    startVikunjaWebhookServer(discordClient);
-    void drainVikunjaWebhooks(discordClient)
-      .catch(err => log.warn({ err }, 'Vikunja webhook inbox recovery failed'));
-    void syncAllReports(discordClient)
-      .catch(err => log.warn({ err }, 'Vikunja startup reconciliation failed'));
+    const activate = () => {
+      startVikunjaWebhookServer(discordClient);
+      void drainVikunjaWebhooks(discordClient)
+        .catch(err => log.warn({ err }, 'Vikunja webhook inbox recovery failed'));
+      void syncAllReports(discordClient)
+        .catch(err => log.warn({ err }, 'Vikunja startup reconciliation failed'));
+    };
+
+    if (await initializeVikunja(vikunjaConfig)) {
+      activate();
+      return;
+    }
+    // A Vikunja outage at boot must not disable the projection for the whole
+    // process; poll until the connection succeeds.
+    const retry = setInterval(() => {
+      void initializeVikunja(vikunjaConfig).then(ok => {
+        if (!ok) return;
+        clearInterval(retry);
+        log.info('Vikunja recovered; activating synchronization');
+        activate();
+      }).catch(err => log.warn({ err }, 'Vikunja initialization retry failed'));
+    }, 60_000);
+    retry.unref();
   }
 
   @On({ event: Events.ThreadUpdate })
