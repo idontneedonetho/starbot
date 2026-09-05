@@ -158,7 +158,10 @@ export function splitDiscordMessage(content: string, limit = 2_000): string[] {
     const newline = rest.lastIndexOf('\n', limit);
     const space = rest.lastIndexOf(' ', limit);
     const cut = Math.max(newline, space);
-    const end = cut > limit / 2 ? cut : limit;
+    let end = cut > limit / 2 ? cut : limit;
+    // Never cut between a surrogate pair.
+    const last = rest.charCodeAt(end - 1);
+    if (last >= 0xd800 && last <= 0xdbff) end -= 1;
     chunks.push(rest.slice(0, end).trim());
     rest = rest.slice(end).trim();
   }

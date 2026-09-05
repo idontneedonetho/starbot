@@ -55,6 +55,7 @@ import {
   drainVikunjaWebhooks,
   parseVerifiedWebhook,
   processVikunjaWebhook,
+  splitDiscordMessage,
   verifyVikunjaSignature,
 } from './webhook.js';
 
@@ -240,5 +241,20 @@ describe('Vikunja webhook inbox drain', () => {
     await drainVikunjaWebhooks(client() as never);
 
     expect(state.inbox.get('pending')).toEqual({});
+  });
+});
+
+describe('splitDiscordMessage', () => {
+  it('never cuts a surrogate pair in half', () => {
+    const content = `x${'😀'.repeat(1500)}y${'😀'.repeat(1500)}`;
+    const chunks = splitDiscordMessage(content, 2000);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(2000);
+      const first = chunk.charCodeAt(0);
+      const last = chunk.charCodeAt(chunk.length - 1);
+      expect(first >= 0xdc00 && first <= 0xdfff).toBe(false);
+      expect(last >= 0xd800 && last <= 0xdbff).toBe(false);
+    }
   });
 });
