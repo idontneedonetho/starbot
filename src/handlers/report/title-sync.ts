@@ -5,10 +5,11 @@ import { stripPriorityEmoji } from './priority.js';
 
 const log = createLogger('title-sync');
 
-export type ReportStatus = 'new' | 'waiting-for-dev' | 'waiting-for-user' | 'resolved' | 'closed' | 'snoozed';
+export type ReportStatus = 'new' | 'fix-incoming' | 'waiting-for-dev' | 'waiting-for-user' | 'resolved' | 'closed' | 'snoozed';
 
 export const STATUS_EMOJI: Record<ReportStatus, string> = {
   'new': '🟠',
+  'fix-incoming': '⚪',
   'waiting-for-dev': '🔴',
   'waiting-for-user': '🟣',
   'resolved': '🟢',

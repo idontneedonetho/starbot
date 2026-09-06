@@ -6,6 +6,7 @@ import { COLORS } from '../../util.js';
 import { StoredReport } from './report-store.js';
 import { getForum } from './route-tracker.js';
 import { extendSnoozesAfterThaw } from './snooze-scheduler.js';
+import { firePendingCommitWaits } from './uat-wait.js';
 import { dormantBumpedAt, getFreeze, saveFreeze, patchFreeze, clearFreeze, type FreezeRecord } from './freeze-state.js';
 
 const log = createLogger('freeze');
@@ -204,6 +205,9 @@ async function performThaw(client: Client): Promise<void> {
   await clearFreeze();
   await bumpDormancyAfterThaw({ startedAt: record.startedAt, endedAt });
   await extendSnoozesAfterThaw(client, { startedAt: record.startedAt, endedAt });
+  // A commit that landed during the freeze deferred its WaitUser activation.
+  await firePendingCommitWaits().catch(err =>
+    log.warn({ err }, 'Some deferred commit waits failed to fire on thaw; they retry at boot'));
   log.info({ durationMs: endedAt - record.startedAt }, 'Reports thawed');
 }
 

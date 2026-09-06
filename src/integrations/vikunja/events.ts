@@ -3,6 +3,7 @@ import type { Client } from 'discord.js';
 import { ArgsOf, Discord, Once, On } from 'discordx';
 import { loadConfig } from '../../config.js';
 import { StoredReport } from '../../handlers/report/report-store.js';
+import { FIX_INCOMING_TITLE } from '../../handlers/report/report-actions.js';
 import { createLogger } from '../../logger.js';
 import {
   initializeVikunja,
@@ -17,6 +18,7 @@ import { drainVikunjaWebhooks, startVikunjaWebhookServer } from './webhook.js';
 const log = createLogger('vikunja-events');
 const DOMAIN_MESSAGE_TITLES = new Set([
   '🧪 Waiting for User',
+  FIX_INCOMING_TITLE,
   '💬 Feedback',
   '✅ Resolved by User',
   '😴 Snoozed',

@@ -46,6 +46,8 @@ import {
   MAX_TITLE_LEN,
 } from './title-sync.js';
 import { scheduleClose, getScheduledClose, nextCloseAt, closingNoticeField, cancelScheduledClose, stripClosingNoticeFrom } from './close-scheduler.js';
+import { watchCommit, cancelCommitWatch, setCommitWaitFinalizer } from './uat-wait.js';
+import { waitBranchConfigured, getLastSeenSha } from './commit-watcher.js';
 import { StoredReport } from './report-store.js';
 import { PRIORITY_EMOJIS, PRIORITY_LEVELS, PRIORITY_TAG_NAMES, priorityFromTags, priorityFromTitle, setPriorityInTitle, type PriorityLevel } from './priority.js';
 import { getFreeze } from './freeze-state.js';
@@ -177,6 +179,8 @@ async function closeThread(thread: ThreadChannel, guild: import('discord.js').Gu
   if (!forum) return;
   // A wake timer must never reopen a thread that's being permanently closed.
   await cancelSnooze(thread.id);
+  // Neither may a commit watch; all close paths funnel through here.
+  await cancelCommitWatch(thread.id);
   await swapForumTags(thread, forum, { remove: ['OPEN', 'WAITING FOR DEV', 'WAITING FOR USER'], add: ['CLOSED'] });
   // No .catch: a rate-limit must propagate so title-sync can retry. Lock before
   // archive - archiving first blocks the lock edit.
@@ -189,6 +193,22 @@ async function closeThread(thread: ThreadChannel, guild: import('discord.js').Gu
 // title-sync's deferred worker and restart recovery finalize closes; give it a
 // way to do so without an import cycle.
 setReportCloseHandler(thread => closeThread(thread, thread.guild));
+
+// The commit watcher activates waits by running the "newer than a specific
+// commit" WaitUser flow with the landed commit; injected to avoid an import cycle.
+setCommitWaitFinalizer(async (thread, forum, entry, commit) => {
+  await finalizeWaitUser(thread, forum, {
+    mode: 'newer',
+    audience: entry.audience,
+    message: entry.staffMessage,
+    submitterId: entry.submitterId,
+    ticketId: entry.ticketId,
+    requiredSha: commit.sha,
+    requiredShort: commit.short,
+    branch: commit.branch,
+    requiredDate: commit.date,
+  });
+});
 
 async function updateThreadButtons(thread: ThreadChannel): Promise<string | null> {
   const starter = await thread.fetchStarterMessage();
@@ -307,6 +327,15 @@ interface WaitUserParams {
 }
 
 const WAITING_FOR_USER_TITLE = '🧪 Waiting for User';
+export const FIX_INCOMING_TITLE = '🔧 Fix In Progress';
+
+function isStaleWaitEmbed(m: Message, botId?: string): boolean {
+  if (botId && m.author.id !== botId) return false;
+  const title = m.embeds[0]?.title;
+  // components present = WaitUser prompt still actionable (completed ones strip
+  // components); fix-incoming embeds never have components
+  return (m.components.length > 0 && title === WAITING_FOR_USER_TITLE) || title === FIX_INCOMING_TITLE;
+}
 
 function isOpenReadyPrompt(m: Message, botId?: string): boolean {
   return (!botId || m.author.id === botId) &&
@@ -329,16 +358,29 @@ async function clearOpenWaitUserPrompts(thread: ThreadChannel): Promise<void> {
   });
   if (!messages) return;
 
-  const stale = messages.filter(m => isOpenReadyPrompt(m, botId));
+  const stale = messages.filter(m => isStaleWaitEmbed(m, botId));
 
   for (const msg of stale.values()) {
     await readyReqStore.delete(msg.id);
     await msg.delete().catch(err =>
       log.warn({ err, msgId: msg.id }, 'Failed to delete prior Waiting for User prompt (may already be gone)'));
   }
+  // A superseding staff action (re-run, close, snooze, …) cancels any pending
+  // commit watch; the newernow path re-registers its own right after.
+  await cancelCommitWatch(thread.id);
 }
 
-async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, params: WaitUserParams): Promise<void> {
+export type WaitUserResult = { applied: 'fix-incoming' } | { applied: 'waiting-for-user'; requiredDate?: string };
+
+async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, params: WaitUserParams): Promise<WaitUserResult> {
+  if (params.mode === 'newernow' && waitBranchConfigured()) {
+    await finalizeFixIncoming(thread, forum, params);
+    return { applied: 'fix-incoming' };
+  }
+
+  // Legacy newernow (no watch branch): the gate date is "now".
+  const requiredDate = params.requiredDate ?? (params.mode === 'newernow' ? new Date().toISOString() : undefined);
+
   await clearOpenWaitUserPrompts(thread);
 
   // Best-effort (no deferred retry like closeThread): swallow even rate-limits.
@@ -355,8 +397,8 @@ async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, para
   if (params.mode === 'newer' && params.requiredSha) {
     const committed = params.requiredDate ? discordTimestamp(params.requiredDate) : null;
     required = `\n\nThe route must be on commit ${formatGitCommit(params.requiredSha, `github.com/${loadConfig().mainRepo}`)} (${params.branch}${committed ? `, committed ${committed}` : ''}) or newer.`;
-  } else if (params.mode === 'newernow' && params.requiredDate) {
-    const committed = discordTimestamp(params.requiredDate);
+  } else if (params.mode === 'newernow' && requiredDate) {
+    const committed = discordTimestamp(requiredDate);
     required = `\n\nThe route must be on a commit newer than the latest one${committed ? ` as of ${committed}` : ''}. An update will be pushed to the testing branch \`Dom\` shortly - see the [branch switching guide](https://wiki.firestar.link/software/starpilot/#changing-branches) to switch to it.`;
   }
 
@@ -398,12 +440,49 @@ async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, para
     allowedMentions: params.submitterId ? { users: [params.submitterId] } : undefined,
   });
   await StoredReport.syncFromThread(thread);
-  if (params.requiredDate) {
+  if (requiredDate) {
     await readyReqStore.set(sent.id, {
       requiredShort: params.requiredSha ? (params.requiredShort ?? params.requiredSha.slice(0, 7)) : undefined,
-      requiredDate: params.requiredDate,
+      requiredDate,
     });
   }
+  return { applied: 'waiting-for-user', requiredDate };
+}
+
+// "From commit newer than now" with the commit watcher configured: the report
+// stays WAITING FOR DEV (⚪ fix-incoming) and the user is never pinged - the
+// thread is promoted to the commit-pinned WaitUser flow when a commit lands.
+async function finalizeFixIncoming(thread: ThreadChannel, forum: ForumChannel, params: WaitUserParams): Promise<void> {
+  await clearOpenWaitUserPrompts(thread);
+
+  await swapForumTags(thread, forum, { remove: ['WAITING FOR USER'], add: ['WAITING FOR DEV'] })
+    .catch(err => log.warn({ err }, 'Failed to swap forum tags for fix-incoming'));
+  await setThreadStatusEmoji(thread, 'fix-incoming');
+
+  const { uatWaitRepo, uatWaitBranch, mainRepo } = loadConfig();
+  if (!uatWaitBranch) return; // unreachable: guarded by waitBranchConfigured() in finalizeWaitUser
+  const repo = uatWaitRepo ?? mainRepo;
+  const label = await labelForThread(thread.id, thread.name);
+
+  const description =
+    `${params.message ? params.message + '\n\n' : ''}` +
+    `The developers are working on your ${reportNoun(label)}. The fix will land in the next batch of commits pushed to the \`${uatWaitBranch}\` branch of \`${repo}\`.` +
+    `\n\nThis thread will update automatically once it's ready. You'll then update your local install - see [Using Galaxy (recommended)](https://wiki.firestar.link/software/starpilot/#using-galaxy-recommended).` +
+    `\n(no @pings please)`;
+
+  const sent = await thread.send({
+    embeds: [new EmbedBuilder().setColor(COLORS.amber).setTitle(FIX_INCOMING_TITLE).setDescription(description).setTimestamp()],
+  });
+  await StoredReport.syncFromThread(thread);
+  await watchCommit(thread.id, {
+    msgId: sent.id,
+    ticketId: params.ticketId,
+    baselineSha: await getLastSeenSha(),
+    thresholdDate: new Date().toISOString(),
+    submitterId: params.submitterId,
+    audience: params.audience,
+    staffMessage: params.message,
+  });
 }
 
 async function completeReadyMessage(thread: ThreadChannel, msgId: string, note: string): Promise<void> {
@@ -453,7 +532,7 @@ function buildWaitUserModal(ticketId: string): ModalBuilder {
     .addOptions(
       { label: 'Anytime', value: 'anytime', description: 'The user can respond right away', default: true },
       { label: 'With a new route', value: 'route', description: 'Responding requires submitting a new route' },
-      { label: 'From commit newer than now', value: 'newernow', description: 'New route must be on a commit newer than the latest one now' },
+      { label: 'From commit newer than now', value: 'newernow', description: 'Wait for the next commit on the watch branch, then ask the user to test' },
       { label: 'Newer than a specific commit', value: 'newer', description: 'New route must be on a chosen commit or newer' },
     );
   modal.addLabelComponents(new LabelBuilder().setLabel('When may the user reopen?').setStringSelectMenuComponent(modeSelect));
@@ -976,13 +1055,12 @@ export class BotReportActions {
     }
 
     if (mode === 'newernow') {
-      const requiredDate = new Date().toISOString();
-      await finalizeWaitUser(thread, forum, { mode, audience, message, submitterId, ticketId, requiredDate });
-      const committed = discordTimestamp(requiredDate);
-      await interaction.editReply({
-        content: `Report marked **WAITING FOR USER** - required a build newer than the latest commit${committed ? ` as of ${committed}` : ''}.`,
-        components: [],
-      });
+      // finalizeWaitUser owns the fork: fix-incoming when the watcher is configured
+      const result = await finalizeWaitUser(thread, forum, { mode, audience, message, submitterId, ticketId });
+      const content = result.applied === 'fix-incoming'
+        ? `Report marked **fix incoming** (⚪) - watching \`${loadConfig().uatWaitRepo ?? loadConfig().mainRepo}#${loadConfig().uatWaitBranch}\` for the next commit; the user will be prompted then.`
+        : `Report marked **WAITING FOR USER** - required a build newer than the latest commit${result.requiredDate ? ` as of ${discordTimestamp(result.requiredDate)}` : ''}.`;
+      await interaction.editReply({ content, components: [] });
       return;
     }
 
@@ -1963,6 +2041,8 @@ export class BotReportActions {
     if (!thread.archived) await thread.setArchived(true).catch(err => log.warn({ err }, 'Failed to archive snoozed thread'));
 
     await scheduleSnooze(thread.id, wakeAt, snoozeMsg.id, reason || undefined, interaction.user.id, priorTagIds, priorName);
+    // Snoozing replaces any pending commit watch
+    await cancelCommitWatch(thread.id);
     await StoredReport.syncFromThread(thread);
     // The wake timestamp lives in Starbot's scheduler, not the thread update itself.
     queueVikunjaSync(thread);
