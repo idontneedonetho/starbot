@@ -27,6 +27,10 @@ export interface BotConfig {
   wikiRepo: string;
   wikiCacheDir: string;
   mainRepo: string;
+  githubToken?: string;
+  uatWaitRepo?: string;
+  uatWaitBranch?: string;
+  uatPollMinutes: number;
   openaiEndpoint?: string;
   openaiApiKey?: string;
   openaiModel?: string;
@@ -130,6 +134,12 @@ export function loadConfig(): BotConfig {
 
   const mainRepo = process.env.MAIN_REPO || 'firestar5683/openpilot';
 
+  const githubToken = process.env.GITHUB_TOKEN;
+
+  const uatWaitRepo = process.env.REPORTS_UAT_WAIT_REPO;
+  const uatWaitBranch = process.env.REPORTS_UAT_WAIT_BRANCH;
+  const uatPollMinutes = Math.max(1, parseInt(process.env.REPORTS_UAT_POLL_MINUTES ?? '', 10) || 5);
+
   const openaiEndpoint = process.env.OPENAI_ENDPOINT;
   const openaiApiKey = process.env.OPENAI_API_KEY;
   const openaiModel = process.env.OPENAI_MODEL;
@@ -155,6 +165,10 @@ export function loadConfig(): BotConfig {
     wikiRepo,
     wikiCacheDir,
     mainRepo,
+    githubToken,
+    uatWaitRepo,
+    uatWaitBranch,
+    uatPollMinutes,
     openaiEndpoint,
     openaiApiKey,
     openaiModel,
