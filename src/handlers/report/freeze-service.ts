@@ -1,5 +1,5 @@
-import type { ButtonComponent, Client, ForumChannel, Guild, Message } from 'discord.js';
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
+import type { ButtonComponent, Client, Guild, Message } from 'discord.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, ForumChannel, PermissionFlagsBits } from 'discord.js';
 import { loadConfig } from '../../config.js';
 import { createLogger } from '../../logger.js';
 import { COLORS } from '../../util.js';
@@ -70,9 +70,14 @@ export async function setReportButtonsDisabled(client: Client, disabled: boolean
 
 async function applySendMessagesDeny(forum: ForumChannel, guild: Guild, record: FreezeRecord): Promise<void> {
   // Capture exactly once, before any edit: a crash after the edit must not
-  // snapshot our own deny as the "prior" state.
+  // snapshot our own deny as the "prior" state. getForum returns the cached
+  // channel whose overwrites can predate earlier edits, so read prior state
+  // from a freshly fetched channel; a failed fetch aborts (record already
+  // persisted, boot recovery retries) rather than capturing stale bits.
   if (!record.overwriteCaptured) {
-    const prior = forum.permissionOverwrites.cache.get(guild.id);
+    const fresh = await guild.channels.fetch(forum.id);
+    if (!(fresh instanceof ForumChannel)) return;
+    const prior = fresh.permissionOverwrites.cache.get(guild.id);
     const bit = (flag: bigint) => (prior ? (prior.allow.has(flag) ? true : prior.deny.has(flag) ? false : null) : null);
     const captured = await patchFreeze({
       priorSendMessages: bit(PermissionFlagsBits.SendMessages),
