@@ -11,3 +11,4 @@ data/store.sqlite-wal
 *.tsbuildinfo
 *.log
 test_*.ts
+.npm-cache
