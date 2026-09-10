@@ -41,12 +41,13 @@ import {
   retryDelay,
   splitReportTitle,
   composeReportTitle,
+  computeStatusTitle,
   maxRenameLength,
   truncateTitle,
   MAX_TITLE_LEN,
 } from './title-sync.js';
 import { scheduleClose, getScheduledClose, nextCloseAt, closingNoticeField, cancelScheduledClose, stripClosingNoticeFrom } from './close-scheduler.js';
-import { watchCommit, cancelCommitWatch, setCommitWaitFinalizer } from './uat-wait.js';
+import { watchCommit, cancelCommitWatch, hasCommitWatch, setCommitWaitFinalizer } from './uat-wait.js';
 import { waitBranchConfigured, getLastSeenSha } from './commit-watcher.js';
 import { StoredReport } from './report-store.js';
 import { PRIORITY_EMOJIS, PRIORITY_LEVELS, PRIORITY_TAG_NAMES, priorityFromTags, priorityFromTitle, setPriorityInTitle, type PriorityLevel } from './priority.js';
@@ -181,7 +182,7 @@ async function closeThread(thread: ThreadChannel, guild: import('discord.js').Gu
   await cancelSnooze(thread.id);
   // Neither may a commit watch; all close paths funnel through here.
   await cancelCommitWatch(thread.id);
-  await swapForumTags(thread, forum, { remove: ['OPEN', 'WAITING FOR DEV', 'WAITING FOR USER'], add: ['CLOSED'] });
+  await swapForumTags(thread, forum, { remove: ['OPEN', 'WAITING FOR DEV', 'WAITING FOR USER', IN_PROGRESS_TAG], add: ['CLOSED'] });
   // No .catch: a rate-limit must propagate so title-sync can retry. Lock before
   // archive - archiving first blocks the lock edit.
   if (!thread.locked) await thread.setLocked(true);
@@ -328,6 +329,7 @@ interface WaitUserParams {
 
 const WAITING_FOR_USER_TITLE = '🧪 Waiting for User';
 export const FIX_INCOMING_TITLE = '🔧 Fix In Progress';
+const IN_PROGRESS_TAG = 'IN PROGRESS';
 
 function isStaleWaitEmbed(m: Message, botId?: string): boolean {
   if (botId && m.author.id !== botId) return false;
@@ -384,7 +386,7 @@ async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, para
   await clearOpenWaitUserPrompts(thread);
 
   // Best-effort (no deferred retry like closeThread): swallow even rate-limits.
-  await swapForumTags(thread, forum, { remove: ['WAITING FOR DEV'], add: ['WAITING FOR USER'] })
+  await swapForumTags(thread, forum, { remove: ['WAITING FOR DEV', IN_PROGRESS_TAG], add: ['WAITING FOR USER'] })
     .catch(err => log.warn({ err }, 'Failed to swap forum tags for WAITING FOR USER'));
   await setThreadStatusEmoji(thread, 'waiting-for-user');
 
@@ -450,12 +452,14 @@ async function finalizeWaitUser(thread: ThreadChannel, forum: ForumChannel, para
 }
 
 // "From commit newer than now" with the commit watcher configured: the report
-// stays WAITING FOR DEV (⚪ fix-incoming) and the user is never pinged - the
-// thread is promoted to the commit-pinned WaitUser flow when a commit lands.
+// stays dev-side (⚪ fix-incoming, IN PROGRESS tag) and the user is never
+// pinged - the thread is promoted to the commit-pinned WaitUser flow when a
+// commit lands.
 async function finalizeFixIncoming(thread: ThreadChannel, forum: ForumChannel, params: WaitUserParams): Promise<void> {
   await clearOpenWaitUserPrompts(thread);
 
-  await swapForumTags(thread, forum, { remove: ['WAITING FOR USER'], add: ['WAITING FOR DEV'] })
+  const tagged = await ensureForumTag(forum, IN_PROGRESS_TAG);
+  await swapForumTags(thread, tagged, { remove: ['WAITING FOR USER', 'WAITING FOR DEV'], add: [IN_PROGRESS_TAG] })
     .catch(err => log.warn({ err }, 'Failed to swap forum tags for fix-incoming'));
   await setThreadStatusEmoji(thread, 'fix-incoming');
 
@@ -2004,9 +2008,15 @@ export class BotReportActions {
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-    // Capture pre-snooze state so the wake can restore it verbatim.
-    const priorName = thread.name;
-    const priorTagIds = thread.appliedTags as string[];
+    // Capture pre-snooze state so the wake can restore it verbatim. A snoozed
+    // ⚪ thread loses its commit watch, so it must wake as WAITING FOR DEV,
+    // not as a hollow IN PROGRESS.
+    const hadCommitWatch = await hasCommitWatch(thread.id);
+    let priorName = thread.name;
+    let priorTagIds = thread.appliedTags as string[];
+    if (hadCommitWatch) {
+      priorName = computeStatusTitle(thread.name, 'waiting-for-dev', String(parseInt(thread.id.slice(-7), 10)));
+    }
 
     // Flag the snoozed state in the forum list via the title emoji.
     const base = stripLeadingEmoji(thread.name).replace(/^ /, '');
@@ -2033,7 +2043,10 @@ export class BotReportActions {
     const fetched = await getForum(guild, loadConfig().forumChannelId);
     if (fetched) {
       const forum = await ensureForumTag(fetched, 'SNOOZED');
-      await swapForumTags(thread, forum, { remove: ['OPEN', 'WAITING FOR DEV', 'WAITING FOR USER'], add: ['SNOOZED'] })
+      if (hadCommitWatch) {
+        priorTagIds = priorTagIds.filter(id => forum.availableTags.find(t => t.id === id)?.name !== IN_PROGRESS_TAG);
+      }
+      await swapForumTags(thread, forum, { remove: ['OPEN', 'WAITING FOR DEV', 'WAITING FOR USER', IN_PROGRESS_TAG], add: ['SNOOZED'] })
         .catch(err => log.warn({ err }, 'Failed to swap forum tags for snooze'));
     }
     // Post the notice before archiving: a locked/archived thread can't receive it.

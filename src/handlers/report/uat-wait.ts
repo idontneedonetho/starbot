@@ -53,6 +53,10 @@ export function cancelCommitWatch(threadId: string): Promise<void> {
   return mutate(index => { delete index[threadId]; });
 }
 
+export async function hasCommitWatch(threadId: string): Promise<boolean> {
+  return !!((await readCommitWaits())[threadId]);
+}
+
 export function shouldFireWait(entry: CommitWaitEntry, commit: CommitTip): boolean {
   if (entry.baselineSha !== undefined) return commit.sha !== entry.baselineSha;
   return commit.date > entry.thresholdDate;
