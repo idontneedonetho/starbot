@@ -8,7 +8,7 @@ import { StoredReport } from './report-store.js';
 import { reportNoun } from './report-copy.js';
 import { getForum } from './route-tracker.js';
 import { swapForumTags } from './report-service.js';
-import { scheduleClose, cancelScheduledClose, getScheduledClose, nextCloseAt, closingNoticeField } from './close-scheduler.js';
+import { scheduleClose, cancelScheduledClose, getScheduledClose, nextCloseAt, closingNoticeField, cancelCloseRow, withoutCancelCloseRow } from './close-scheduler.js';
 import { getScheduledSnooze } from './snooze-scheduler.js';
 import { isFrozen } from './freeze-state.js';
 
@@ -111,7 +111,7 @@ async function beginDormantClose(thread: ThreadChannel, dormantDays: number, nou
     .setDescription(`No activity for ${dormantDays} days - this ${noun} will close automatically. Reply here before it closes to keep it open.`)
     .addFields(closingNoticeField(closeAt))
     .setTimestamp();
-  const noticeMsg = await thread.send({ embeds: [notice] }).catch(err => {
+  const noticeMsg = await thread.send({ embeds: [notice], components: [cancelCloseRow(thread.id)] }).catch(err => {
     log.warn({ err, threadId: thread.id }, 'Failed to post dormant-close notice');
     return null;
   });
@@ -138,8 +138,10 @@ export async function recordHumanReportActivity(thread: ThreadChannel): Promise<
   const embed = msg?.embeds[0];
   if (!msg || !embed) return;
   const fields = (embed.fields ?? []).filter(f => !f.value.startsWith('⏳ Closing '));
+  const withoutButton = withoutCancelCloseRow(msg.components);
   await msg.edit({
     embeds: [EmbedBuilder.from(embed).setColor(COLORS.green).setTitle('🔓 Close Cancelled').setFields(fields)],
+    ...(withoutButton ? { components: withoutButton } : {}),
   }).catch(err => log.warn({ err, threadId: thread.id }, 'Failed to finalize cancelled dormant-close notice'));
   log.info({ threadId: thread.id }, 'Dormant close cancelled by new activity');
 }

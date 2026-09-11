@@ -46,7 +46,7 @@ import {
   truncateTitle,
   MAX_TITLE_LEN,
 } from './title-sync.js';
-import { scheduleClose, getScheduledClose, nextCloseAt, closingNoticeField, cancelScheduledClose, stripClosingNoticeFrom } from './close-scheduler.js';
+import { scheduleClose, getScheduledClose, nextCloseAt, closingNoticeField, cancelCloseRow, cancelScheduledClose, stripClosingNoticeFrom } from './close-scheduler.js';
 import { watchCommit, cancelCommitWatch, hasCommitWatch, setCommitWaitFinalizer } from './uat-wait.js';
 import { waitBranchConfigured, getLastSeenSha } from './commit-watcher.js';
 import { StoredReport } from './report-store.js';
@@ -798,7 +798,7 @@ async function beginScheduledClose(thread: ThreadChannel, closedByUserId: string
     .setDescription(`Closed by <@${closedByUserId}>.`)
     .addFields(closingNoticeField(closeAt))
     .setTimestamp();
-  const noticeMsg = await thread.send({ embeds: [noticeEmbed] }).catch(err => { log.warn({ err }, 'Failed to post closing notice'); return null; });
+  const noticeMsg = await thread.send({ embeds: [noticeEmbed], components: [cancelCloseRow(thread.id)] }).catch(err => { log.warn({ err }, 'Failed to post closing notice'); return null; });
 
   const scheduled = await scheduleClose(thread, 'closed', closeAt, noticeMsg?.id ?? '');
   if (!scheduled) {
@@ -1380,7 +1380,7 @@ export class BotReportActions {
     if (note) resolvedEmbed.setDescription(note);
     resolvedEmbed.addFields(closingNoticeField(closeAt));
     const donateRow = buildDonateRow(loadConfig(), guild.id);
-    const noticeMsg = await thread.send({ content: `<@${interaction.user.id}> marked this issue as fixed.`, embeds: [resolvedEmbed], components: donateRow ? [donateRow] : [] }).catch(err => { log.warn({ err }, 'Failed to post resolved embed'); return null; });
+    const noticeMsg = await thread.send({ content: `<@${interaction.user.id}> marked this issue as fixed.`, embeds: [resolvedEmbed], components: [...(donateRow ? [donateRow] : []), cancelCloseRow(thread.id)] }).catch(err => { log.warn({ err }, 'Failed to post resolved embed'); return null; });
 
     const waitMsg = await thread.messages.fetch(msgId).catch(() => null);
     if (waitMsg) {
@@ -1432,9 +1432,6 @@ export class BotReportActions {
     }
 
     await stripClosingNoticeFrom(thread, claimed.noticeMessageId);
-    await thread.messages.fetch(claimed.noticeMessageId).then(msg =>
-      msg.edit({ components: msg.components.slice(0, -1) })
-    ).catch(err => log.warn({ err }, 'Failed to remove Cancel Close button'));
     await thread.send(`↩️ Scheduled close cancelled by <@${interaction.user.id}> - this report stays open.`);
     await interaction.reply({ content: 'Close cancelled - the report stays open.', flags: MessageFlags.Ephemeral });
   }

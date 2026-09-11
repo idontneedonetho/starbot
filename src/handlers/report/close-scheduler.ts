@@ -1,5 +1,5 @@
-import type { Client, ThreadChannel } from 'discord.js';
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
+import type { Client, Message, ThreadChannel } from 'discord.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType, EmbedBuilder } from 'discord.js';
 import { createLogger } from '../../logger.js';
 import { tryStatusClose, withThreadLock, type ReportStatus } from './title-sync.js';
 import { ScheduledTimerIndex } from './scheduled-timer-index.js';
@@ -16,6 +16,14 @@ export function cancelCloseRow(threadId: string): ActionRowBuilder<ButtonBuilder
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId(`cancel_close_${threadId}`).setLabel('Cancel Close').setStyle(ButtonStyle.Secondary).setEmoji('↩️'),
   );
+}
+
+/** Returns components without the Cancel Close row, or undefined when there is nothing to strip. */
+export function withoutCancelCloseRow(components: Message['components']): Message['components'] | undefined {
+  const remaining = components.filter(row =>
+    !(row.type === ComponentType.ActionRow && row.components.some(btn => btn.customId?.startsWith('cancel_close_')))
+  );
+  return remaining.length !== components.length ? remaining : undefined;
 }
 
 export interface ScheduledClose {
@@ -57,13 +65,7 @@ class CloseScheduler extends ScheduledTimerIndex<ScheduledClose> {
       index[thread.id] = { status, closeAt, noticeMessageId, origin };
       scheduled = true;
     });
-    if (scheduled) {
-      this.armTimer(thread.id, closeAt);
-      await thread.messages.fetch(noticeMessageId).then(msg => {
-        const rows = [...msg.components, cancelCloseRow(thread.id)] as typeof msg.components;
-        return msg.edit({ components: rows });
-      }).catch(err => log.warn({ err, threadId: thread.id }, 'Failed to attach Cancel Close button'));
-    }
+    if (scheduled) this.armTimer(thread.id, closeAt);
     return scheduled;
   }
 
@@ -103,9 +105,6 @@ class CloseScheduler extends ScheduledTimerIndex<ScheduledClose> {
       return;
     }
     await this.mutate(index => { delete index[threadId]; });
-    await ch.messages.fetch(entry.noticeMessageId).then(msg =>
-      msg.edit({ components: msg.components.slice(0, -1) })
-    ).catch(err => this.log.warn({ err }, 'Failed to remove Cancel Close button'));
   }
 
   private async stripClosingNotice(thread: ThreadChannel, messageId: string, replaceWith?: number): Promise<void> {
@@ -120,7 +119,9 @@ export async function stripClosingNoticeFrom(thread: ThreadChannel, messageId: s
   if (!msg || !embed) return;
   const fields = (embed.fields ?? []).filter(f => !f.value.startsWith(CLOSING_PREFIX));
   if (replaceWith !== undefined) fields.push(closingNoticeField(replaceWith));
-  await msg.edit({ embeds: [EmbedBuilder.from(embed).setFields(fields)] }).catch(err => log.warn({ err }, 'Failed to edit closing notice'));
+  const edit: { embeds: [EmbedBuilder]; components?: Message['components'] } = { embeds: [EmbedBuilder.from(embed).setFields(fields)] };
+  if (replaceWith === undefined) edit.components = withoutCancelCloseRow(msg.components) ?? msg.components;
+  await msg.edit(edit).catch(err => log.warn({ err }, 'Failed to edit closing notice'));
 }
 
 const scheduler = new CloseScheduler();
