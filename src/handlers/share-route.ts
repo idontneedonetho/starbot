@@ -145,7 +145,7 @@ async function createSharedRouteThread(
       const key = `${r.dongleId}/${r.routeName}`;
       if (!postedMeta.has(key)) {
         postedMeta.add(key);
-        await postRouteMetadata(thread, r.dongleId, r.routeName);
+        await postRouteMetadata(thread, r.dongleId, r.routeName, r.provider);
       }
     }
   }
@@ -230,8 +230,9 @@ async function processShareRoute(
     dongleId: p.components.dongleId,
     routeName: p.components.routeName,
     iteration: p.components.iteration,
+    provider: p.components.provider,
     originalText: p.input,
-    isUrl: /^https:\/\/connect\.comma\.ai\//i.test(p.input),
+    isUrl: /^https?:\/\//i.test(p.input),
     routeNumber: parsed.length > 1 ? i + 1 : undefined,
     ...validations[i],
   }));
