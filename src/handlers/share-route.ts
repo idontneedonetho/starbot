@@ -37,6 +37,7 @@ interface PendingShareRoute {
 
 const PENDING_SHARE_TTL_MS = 15 * 60 * 1000;
 const pendingStore = createStore<PendingShareRoute>('pending-share-routes', { ttl: PENDING_SHARE_TTL_MS });
+const inFlightTokens = new Set<string>();
 
 function extractChannelAndDisplayName(
   interaction: CommandInteraction | ButtonInteraction,
@@ -163,6 +164,7 @@ async function processShareRoute(
   interaction: CommandInteraction | ButtonInteraction,
   routeIdInput: string,
   force: boolean,
+  pendingToken?: string,
 ): Promise<void> {
   const config = loadConfig();
   const guild = interaction.guild;
@@ -241,7 +243,7 @@ async function processShareRoute(
     const issues = computeRouteLogIssues(routes);
 
     if (issues.length > 0) {
-      const token = interaction.id;
+      const token = pendingToken ?? interaction.id;
       await pendingStore.set(token, { routeIdInput, userId: interaction.user.id });
 
       const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -281,6 +283,8 @@ async function processShareRoute(
     await interaction.editReply({ content: 'Forum channel not found. Contact an admin.' });
     return;
   }
+
+  if (pendingToken) await pendingStore.delete(pendingToken);
 
   const ticketId = String(parseInt(result.threadId.slice(-7), 10));
 
@@ -348,6 +352,36 @@ async function runShareRouteAsAdditionalReport(
   });
 }
 
+async function handlePendingShareButton(interaction: ButtonInteraction, force: boolean): Promise<void> {
+  const token = interaction.customId.split('_')[1];
+  const pending = await pendingStore.get(token);
+  if (!pending) {
+    await interaction.reply({
+      content: 'This request has expired. Please run `/share-route` again.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+  if (interaction.user.id !== pending.userId) {
+    await interaction.reply({
+      content: 'Only the original sharer can use this.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+  if (inFlightTokens.has(token)) {
+    await interaction.deferUpdate();
+    return;
+  }
+  inFlightTokens.add(token);
+  try {
+    await interaction.deferUpdate();
+    await processShareRoute(interaction, pending.routeIdInput, force, token);
+  } finally {
+    inFlightTokens.delete(token);
+  }
+}
+
 const guildId = loadConfig().guildId;
 
 @Discord()
@@ -379,45 +413,11 @@ export class BotShareRoute {
 
   @ButtonComponent({ id: /^srchk_/ })
   async shareCheck(interaction: ButtonInteraction) {
-    const token = interaction.customId.split('_')[1];
-    const pending = await pendingStore.get(token);
-    if (!pending) {
-      await interaction.reply({
-        content: 'This request has expired. Please run `/share-route` again.',
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-    if (interaction.user.id !== pending.userId) {
-      await interaction.reply({
-        content: 'Only the original sharer can use this.',
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-    await interaction.deferUpdate();
-    await processShareRoute(interaction, pending.routeIdInput, false);
+    await handlePendingShareButton(interaction, false);
   }
 
   @ButtonComponent({ id: /^srfrc_/ })
   async shareForce(interaction: ButtonInteraction) {
-    const token = interaction.customId.split('_')[1];
-    const pending = await pendingStore.get(token);
-    if (!pending) {
-      await interaction.reply({
-        content: 'This request has expired. Please run `/share-route` again.',
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-    if (interaction.user.id !== pending.userId) {
-      await interaction.reply({
-        content: 'Only the original sharer can use this.',
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-    await interaction.deferUpdate();
-    await processShareRoute(interaction, pending.routeIdInput, true);
+    await handlePendingShareButton(interaction, true);
   }
 }
