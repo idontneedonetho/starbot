@@ -172,19 +172,17 @@ export async function postRouteMetadata(channel: ThreadChannel, dongleId: string
   if (provider === 'konik') return postKonikRouteMetadata(channel, dongleId, routeName);
   const meta = await fetchRouteMetadata(dongleId, routeName);
   if (!meta) return;
-  const embed = new EmbedBuilder()
-    .setColor(COLORS.amber)
-    .setTitle('Route Metadata')
-    .addFields(
-      { name: 'Route ID', value: `${dongleId}/${routeName}`, inline: true },
-      { name: 'Start Time', value: `<t:${Math.floor(meta.start_time_utc_millis / 1000)}:f>`, inline: true },
-      { name: 'End Time', value: `<t:${Math.floor(meta.end_time_utc_millis / 1000)}:f>`, inline: true },
-      { name: 'Git Remote', value: meta.git_remote, inline: true },
-      { name: 'Git Branch', value: formatGitBranch(meta.git_branch, meta.git_remote), inline: true },
-      { name: 'Git Commit', value: formatGitCommit(meta.git_commit, meta.git_remote), inline: true },
-      { name: 'Git Commit Date', value: meta.git_commit_date, inline: true },
-      { name: 'Git Dirty', value: String(meta.git_dirty), inline: true },
-    );
+  const fields: { name: string; value: string; inline: boolean }[] = [
+    { name: 'Route ID', value: `${dongleId}/${routeName}`, inline: true },
+    { name: 'Start Time', value: `<t:${Math.floor(meta.start_time_utc_millis / 1000)}:f>`, inline: true },
+    { name: 'End Time', value: `<t:${Math.floor(meta.end_time_utc_millis / 1000)}:f>`, inline: true },
+  ];
+  if (meta.git_remote) fields.push({ name: 'Git Remote', value: meta.git_remote, inline: true });
+  if (meta.git_branch) fields.push({ name: 'Git Branch', value: formatGitBranch(meta.git_branch, meta.git_remote), inline: true });
+  if (meta.git_commit) fields.push({ name: 'Git Commit', value: formatGitCommit(meta.git_commit, meta.git_remote), inline: true });
+  if (meta.git_commit_date) fields.push({ name: 'Git Commit Date', value: meta.git_commit_date, inline: true });
+  if (meta.git_dirty != null) fields.push({ name: 'Git Dirty', value: String(meta.git_dirty), inline: true });
+  const embed = new EmbedBuilder().setColor(COLORS.amber).setTitle('Route Metadata').addFields(...fields);
   await channel.send({ embeds: [embed] }).catch(err => log.warn({ err }, 'Failed to post route metadata'));
 }
 

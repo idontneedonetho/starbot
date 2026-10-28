@@ -33,19 +33,19 @@ export function isStaleBuild(routeDate: string, requiredDate: string | undefined
   return Number.isFinite(routeTime) && Number.isFinite(reqTime) && routeTime < reqTime;
 }
 
-export function githubRemoteParts(remote: string): { owner: string; repo: string } | null {
-  const match = remote.match(/^github\.com\/([^/]+)\/([^/]+)/);
+export function githubRemoteParts(remote: string | null | undefined): { owner: string; repo: string } | null {
+  const match = remote?.match(/^github\.com\/([^/]+)\/([^/]+)/);
   if (!match) return null;
   return { owner: match[1], repo: match[2] };
 }
 
-export function formatGitBranch(branch: string, remote: string): string {
+export function formatGitBranch(branch: string, remote: string | null | undefined): string {
   const gh = githubRemoteParts(remote);
   if (gh) return `[${branch}](https://github.com/${gh.owner}/${gh.repo}/tree/${branch})`;
   return branch;
 }
 
-export function formatGitCommit(commit: string, remote: string): string {
+export function formatGitCommit(commit: string, remote: string | null | undefined): string {
   const gh = githubRemoteParts(remote);
   const short = commit.slice(0, 7);
   if (gh) return `[${short}](https://github.com/${gh.owner}/${gh.repo}/commit/${commit})`;

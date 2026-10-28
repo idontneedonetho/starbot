@@ -255,8 +255,8 @@ export interface RouteSegmentMetadata {
   maxqlog: number;
   start_time_utc_millis: number;
   end_time_utc_millis: number;
-  git_remote: string;
-  git_branch: string;
+  git_remote: string | null;
+  git_branch: string | null;
   git_commit: string;
   git_commit_date: string;
   git_dirty: boolean;

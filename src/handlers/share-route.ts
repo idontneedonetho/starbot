@@ -146,7 +146,7 @@ async function createSharedRouteThread(
       const key = `${r.dongleId}/${r.routeName}`;
       if (!postedMeta.has(key)) {
         postedMeta.add(key);
-        await postRouteMetadata(thread, r.dongleId, r.routeName, r.provider);
+        await postRouteMetadata(thread, r.dongleId, r.routeName, r.provider).catch(err => log.warn({ err }, 'Failed to post route metadata'));
       }
     }
   }
