@@ -158,7 +158,7 @@ export class BotEvents {
     if (message.reference?.messageId) {
       try {
         const referenced = await message.channel.messages.fetch(message.reference.messageId);
-        if (referenced.author.id === message.client.user!.id && referenced.content.startsWith('Clip shared by')) {
+        if (referenced.author.id === message.client.user!.id && /^Clip shared by|^📤 .* has shared routes? in the/.test(referenced.content)) {
           return;
         }
       } catch { /* referenced message may not be accessible */ }
