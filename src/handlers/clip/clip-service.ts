@@ -26,6 +26,7 @@ export interface ClipJobInput {
   uiAltVariant?: string;
   fileSize?: number;
   includeAudio?: boolean;
+  radarMarkers?: boolean;
   anonymizationProfile?: string;
   passengerRedactionStyle?: string;
 }
@@ -89,12 +90,17 @@ export const PRS_SLASH_CHOICES: { name: string; value: string }[] = Object.entri
   ([value, name]) => ({ name, value }),
 );
 
-export const UI_ALT_VARIANT_LABELS: Record<string, string> = {
-  'device': 'Device',
-  'stacked_forward_over_wide': 'Stacked Forward / Wide',
-  'stacked_wide_over_forward': 'Stacked Wide / Forward',
-  'stacked_device_over_driver': 'Stacked Device / Driver',
-};
+export const UI_ALT_VARIANT_OPTIONS = [
+  { value: 'device', label: 'Device', description: 'Standard device view' },
+  { value: 'device_radar', label: 'Device + Radar', description: 'Device view plus a top-down radar card' },
+  { value: 'stacked_forward_over_wide', label: 'Stacked Forward / Wide', description: 'Forward on top, wide below' },
+  { value: 'stacked_wide_over_forward', label: 'Stacked Wide / Forward', description: 'Wide on top, forward below' },
+  { value: 'stacked_device_over_driver', label: 'Stacked Device / Driver', description: 'Device view on top, driver camera below' },
+] as const;
+
+export const UI_ALT_VARIANT_LABELS: Record<string, string> = Object.fromEntries(
+  UI_ALT_VARIANT_OPTIONS.map(o => [o.value, o.label]),
+);
 
 export const UI_ALT_VARIANTS = Object.keys(UI_ALT_VARIANT_LABELS);
 

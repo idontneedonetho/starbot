@@ -35,7 +35,7 @@ import {
   PASSENGER_REDACTION_LABELS,
   PRS_SLASH_CHOICES,
   UI_ALT_SLASH_CHOICES,
-  UI_ALT_VARIANT_LABELS,
+  UI_ALT_VARIANT_OPTIONS,
   RENDER_TYPE_MAP,
   RENDER_TYPES_WITH_ANONYMIZATION,
   PASSENGER_REDACTION_STYLES,
@@ -68,6 +68,13 @@ const FILE_SIZE_OPTION = {
 const INCLUDE_AUDIO_OPTION = {
   name: 'include-audio',
   description: 'Include audio from qcamera (fails if unavailable)',
+  required: false,
+  type: ApplicationCommandOptionType.Boolean,
+} as const;
+
+const RADAR_MARKERS_OPTION = {
+  name: 'radar-markers',
+  description: "Draw the car's radar tracks over the road video",
   required: false,
   type: ApplicationCommandOptionType.Boolean,
 } as const;
@@ -173,6 +180,20 @@ export class ClipCommands {
         .setStringSelectMenuComponent(audioSelect),
     );
 
+    const radarSelect = new StringSelectMenuBuilder()
+      .setCustomId('clip_radar_markers')
+      .setPlaceholder('No')
+      .addOptions(
+        { label: 'No', value: 'false', default: true },
+        { label: 'Yes', value: 'true' },
+      );
+    modal.addLabelComponents(
+      new LabelBuilder()
+        .setLabel('Radar Markers')
+        .setDescription('UI Alt only: draw radar tracks over the road video')
+        .setStringSelectMenuComponent(radarSelect),
+    );
+
     await interaction.showModal(modal);
   }
 
@@ -210,6 +231,8 @@ export class ClipCommands {
     fileSize: number | undefined,
     @SlashOption(INCLUDE_AUDIO_OPTION)
     includeAudio: boolean | undefined,
+    @SlashOption(RADAR_MARKERS_OPTION)
+    radarMarkers: boolean | undefined,
     interaction: CommandInteraction,
   ) {
     await handleClipRequest(interaction, {
@@ -218,6 +241,7 @@ export class ClipCommands {
       uiAltVariant: variant,
       fileSize,
       includeAudio: includeAudio || undefined,
+      radarMarkers: radarMarkers || undefined,
     });
   }
 
@@ -413,6 +437,8 @@ export class ClipCommands {
     const fsRaw = interaction.fields.getTextInputValue('clip_file_size').trim();
     const audioValues = interaction.fields.getStringSelectValues('clip_audio');
     const includeAudio = audioValues.length > 0 ? audioValues[0] === 'true' : false;
+    const radarValues = interaction.fields.getStringSelectValues('clip_radar_markers');
+    const radarMarkers = radarValues.length > 0 ? radarValues[0] === 'true' : false;
 
     if (!(VALID_RENDER_TYPES as readonly string[]).includes(rtRaw)) {
       const embed = new EmbedBuilder()
@@ -467,17 +493,13 @@ export class ClipCommands {
     }
 
     if (rtRaw === 'ui-alt') {
+      input.radarMarkers = radarMarkers || undefined;
       setPendingForm(interaction.user.id, input);
       const select = new StringSelectMenuBuilder()
         .setCustomId('clip_followup_variant')
         .setPlaceholder('Select a variant\u2026')
         .setMinValues(1)
-        .addOptions(
-          { label: UI_ALT_VARIANT_LABELS['device'], value: 'device', description: 'Standard device view' },
-          { label: UI_ALT_VARIANT_LABELS['stacked_forward_over_wide'], value: 'stacked_forward_over_wide', description: 'Forward on top, wide below' },
-          { label: UI_ALT_VARIANT_LABELS['stacked_wide_over_forward'], value: 'stacked_wide_over_forward', description: 'Wide on top, forward below' },
-          { label: UI_ALT_VARIANT_LABELS['stacked_device_over_driver'], value: 'stacked_device_over_driver', description: 'Device view on top, driver camera below' },
-        );
+        .addOptions(...UI_ALT_VARIANT_OPTIONS.map(o => ({ ...o })));
       const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select);
       const embed = new EmbedBuilder()
         .setColor(COLORS.blurple)

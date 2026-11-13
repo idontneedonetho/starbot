@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseRouteUrl } from './clip-service.js';
+import { parseRouteUrl, UI_ALT_SLASH_CHOICES, UI_ALT_VARIANTS } from './clip-service.js';
 
 describe('parseRouteUrl', () => {
   it('accepts a connect.comma.ai relative-seconds clip URL', () => {
@@ -23,5 +23,18 @@ describe('parseRouteUrl', () => {
 
   it('rejects a non-positive or reversed time range', () => {
     expect(parseRouteUrl('https://stable.konik.ai/a818613ca4cdcfa5/00000067--cde15f929d/100/0')).toBeNull();
+  });
+});
+
+describe('ui-alt variants', () => {
+  it("offer every composition op-replay-clipper's ui-alt accepts", () => {
+    expect(UI_ALT_VARIANTS).toEqual([
+      'device',
+      'device_radar',
+      'stacked_forward_over_wide',
+      'stacked_wide_over_forward',
+      'stacked_device_over_driver',
+    ]);
+    expect(UI_ALT_SLASH_CHOICES).toContainEqual({ name: 'Device + Radar', value: 'device_radar' });
   });
 });
